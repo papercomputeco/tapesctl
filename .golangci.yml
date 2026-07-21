@@ -1,0 +1,93 @@
+# yaml-language-server: $schema=https://golangci-lint.run/jsonschema/golangci.jsonschema.json
+
+version: "2"
+
+linters:
+  enable:
+    - bodyclose
+    - contextcheck
+    - durationcheck
+    - errcheck
+    - errchkjson
+    - errorlint
+    - exhaustive
+    - fatcontext
+    - govet
+    - ineffassign
+    - makezero
+    - musttag
+    - nilerr
+    - nilnesserr
+    - noctx
+    - unused
+    - copyloopvar
+    - dupword
+    - goconst
+    - gocritic
+    - gosec
+    - misspell
+    - nakedret
+    - prealloc
+    - predeclared
+    - reassign
+    - revive
+    - unconvert
+    - unparam
+    - wastedassign
+    - whitespace
+    - exptostd
+    - intrange
+    - modernize
+    - usestdlibvars
+    - usetesting
+    - perfsprint
+    - errname
+    - nolintlint
+    - recvcheck
+    - nosprintfhostport
+
+  exclusions:
+    presets:
+      - comments
+      - std-error-handling
+      - common-false-positives
+      - legacy
+    generated: lax
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - dupl
+          - goconst
+          - gocritic
+          - revive
+          - unparam
+
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - goimports
+    - gofumpt
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/papercomputeco/tapesctl)
+    goimports:
+      local-prefixes:
+        - github.com/papercomputeco/tapesctl
+  exclusions:
+    generated: lax
+    paths:
+      - .dagger/internal
+      - .dagger/dagger.gen.go
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+run:
+  timeout: 5m

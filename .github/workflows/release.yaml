@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+env:
+  DAGGER_VERSION: "0.20.8"
+
+jobs:
+  release:
+    runs-on: depot-ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Dagger
+        uses: dagger/dagger-for-github@v8.2.0
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+
+      - name: Build and upload release artifacts
+        run: |
+          dagger call \
+            release-latest \
+              --version="${{ github.event.release.tag_name }}" \
+              --endpoint=env://BUCKET_ENDPOINT \
+              --bucket=env://BUCKET_NAME \
+              --access-key-id=env://BUCKET_ACCESS_KEY_ID \
+              --secret-access-key=env://BUCKET_SECRET_ACCESS_KEY \
+            export \
+              --path=./build
+        env:
+          BUCKET_ENDPOINT: ${{ secrets.BUCKET_ENDPOINT }}
+          BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
+          BUCKET_ACCESS_KEY_ID: ${{ secrets.BUCKET_ACCESS_KEY_ID }}
+          BUCKET_SECRET_ACCESS_KEY: ${{ secrets.BUCKET_SECRET_ACCESS_KEY }}
+          DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
+
+      - name: Upload install script
+        run: |
+          dagger call \
+            upload-install-sh \
+              --endpoint=env://BUCKET_ENDPOINT \
+              --bucket=env://BUCKET_NAME \
+              --access-key-id=env://BUCKET_ACCESS_KEY_ID \
+              --secret-access-key=env://BUCKET_SECRET_ACCESS_KEY
+        env:
+          BUCKET_ENDPOINT: ${{ secrets.BUCKET_ENDPOINT }}
+          BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
+          BUCKET_ACCESS_KEY_ID: ${{ secrets.BUCKET_ACCESS_KEY_ID }}
+          BUCKET_SECRET_ACCESS_KEY: ${{ secrets.BUCKET_SECRET_ACCESS_KEY }}
+          DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
+
+      - name: Upload artifacts to GitHub release
+        run: |
+          mkdir -p dist
+          for file in $(find build -type f); do
+            rel_path="${file#build/}"
+            os=$(dirname "$rel_path" | cut -d'/' -f1)
+            arch=$(dirname "$rel_path" | cut -d'/' -f2)
+            filename=$(basename "$file")
+
+            if [[ "$filename" == *.sha256 ]]; then
+              base="${filename%.sha256}"
+              binary_name="${base}-${os}-${arch}"
+              new_name="${binary_name}.sha256"
+              checksum=$(cut -d' ' -f1 "$file")
+              printf '%s  %s\n' "$checksum" "$binary_name" > "dist/$new_name"
+            else
+              new_name="${filename}-${os}-${arch}"
+              cp "$file" "dist/$new_name"
+            fi
+          done
+
+          gh release upload "${{ github.event.release.tag_name }}" dist/*
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

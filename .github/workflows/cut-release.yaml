@@ -1,0 +1,46 @@
+name: Cut Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  DAGGER_VERSION: "0.20.8"
+
+jobs:
+  create-release:
+    name: Cut New GitHub Release
+    runs-on: depot-ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create GitHub App token
+        uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.PAPER_COMPUTE_CO_BOT_APP_ID }}
+          private-key: ${{ secrets.PAPER_COMPUTE_CO_BOT_PRIVATE_KEY }}
+
+      - name: Install Dagger
+        uses: dagger/dagger-for-github@v8.2.0
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+
+      - name: Create release via ghrelease
+        run: |
+          dagger call -m github.com/papercomputeco/daggerverse/ghrelease \
+              --token=env://GH_TOKEN \
+            with-repo \
+              --repo="${{ github.repository }}" \
+            with-source \
+              --source=. \
+            create
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
