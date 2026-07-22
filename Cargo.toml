@@ -1,0 +1,68 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tapesctl",
+    "crates/tapes-harness",
+]
+
+# Intentionally unlicensed while the repo is closed source — no LICENSE file and
+# no `license` field. A license will be chosen before open-sourcing. `publish`
+# is off so an unlicensed crate can't be pushed to crates.io by accident.
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+authors = ["Paper Compute"]
+repository = "https://github.com/papercomputeco/tapesctl"
+
+# Third-party deps are pinned here as a catalog; per-crate Cargo.toml files
+# inherit a pin via `dep.workspace = true` and may add `features = [...]`
+# locally. Entries a crate does not yet reference are still catalogued so the
+# proxy/attribution work lands with the versions already agreed — mirrors the
+# convention in `platform/paper`.
+[workspace.dependencies]
+# --- local crates ---
+tapes-harness = { path = "crates/tapes-harness" }
+
+# --- CLI ---
+clap = { version = "4", features = ["derive", "env"] }
+anstream = "1"
+anstyle = "1"
+
+# --- async runtime ---
+tokio = { version = "1", features = ["full"] }
+futures-util = "0.3"
+bytes = "1"
+
+# --- HTTP (JIT proxy + API client; wired in during Track 1) ---
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "http2", "json"] }
+http = "1"
+url = { version = "2", features = ["serde"] }
+
+# --- config / serde ---
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# --- errors ---
+snafu = "0.8"
+
+# --- logging ---
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# --- misc ---
+dirs = "5"
+time = { version = "0.3", features = ["formatting", "serde", "macros"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# --- test ---
+tempfile = "3"
+test-case = "3"
+wiremock = "0.6"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

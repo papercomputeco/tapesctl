@@ -1,0 +1,8 @@
+# Cargo build configuration for the tapesctl Rust workspace.
+#
+# Intentionally minimal. tapesctl ships cross-platform static binaries, so keep
+# host-specific linker flags, RUSTFLAGS, or target settings out of here — they
+# would block the release cross-compile path (mirrors `platform/paper`).
+
+[build]
+# Use the default target dir; CI caches it via Swatinem/rust-cache.

@@ -1,40 +1,72 @@
 {
-  description = "tapesctl development environment";
+  description = "tapesctl — the Tapes client CLI (Rust)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    rust-overlay.url = "github:oxalica/rust-overlay";
+    rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
     dagger.url = "github:dagger/nix";
     dagger.inputs.nixpkgs.follows = "nixpkgs";
-    paper-skills.url = "github:papercomputeco/skills";
-    paper-skills.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, flake-utils, dagger, paper-skills }:
+  outputs = { self, nixpkgs, flake-utils, rust-overlay, dagger }:
+    {
+      overlays.default = final: prev:
+        let
+          # Build with the same toolchain the devShell and CI pin via
+          # rust-toolchain.toml, not whatever Rust nixpkgs-unstable ships.
+          rust = (import rust-overlay final prev).rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+          rustPlatform = final.makeRustPlatform {
+            cargo = rust;
+            rustc = rust;
+          };
+        in
+        {
+          tapesctl = rustPlatform.buildRustPackage {
+            pname = "tapesctl";
+            version = self.shortRev or "dev";
+            src = final.lib.cleanSource self;
+
+            cargoLock.lockFile = ./Cargo.lock;
+            cargoBuildFlags = [ "-p" "tapesctl" ];
+
+            # Workspace tests are exercised in CI (`make test`); keep the package
+            # build focused on producing the CLI.
+            doCheck = false;
+          };
+        };
+    }
+    //
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = import nixpkgs { inherit system; };
-        skills = paper-skills.lib;
+        overlays = [ (import rust-overlay) ];
+        pkgs = import nixpkgs { inherit system; overlays = overlays ++ [ self.overlays.default ]; };
+        # Pin the toolchain to rust-toolchain.toml so `nix develop` and bare
+        # `cargo` stay in lockstep.
+        rust = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
       in
       {
+        packages = {
+          default = pkgs.tapesctl;
+          tapesctl = pkgs.tapesctl;
+        };
+
         devShells.default = pkgs.mkShell {
           buildInputs = [
-            pkgs.go_1_25
-            pkgs.gotools
+            rust
             pkgs.gnumake
-            dagger.packages.${system}.dagger
+            pkgs.pkg-config
             pkgs.git
+            # Dagger drives the CI/release pipeline (`.dagger/`): lint, test, and
+            # the cargo-zigbuild cross-compile of all four release targets.
+            dagger.packages.${system}.dagger
           ];
 
-          shellHook =
-            (skills.mkSkillsHook {
-              skills = [ "dagger-check" ];
-            })
-            +
-          ''
-            echo "tapesctl development environment"
+          shellHook = ''
+            echo "tapesctl development environment (Rust)"
             echo ""
-            echo "Go version: $(go version)"
+            echo "Rust version: $(rustc --version)"
             echo ""
             echo "Available make targets:"
             make help

@@ -1,15 +1,8 @@
 {
   "name": "tapesctl",
-  "engineVersion": "v0.21.7",
+  "engineVersion": "v0.20.8",
   "sdk": {
     "source": "go"
   },
-  "dependencies": [
-    {
-      "name": "golangcilint",
-      "source": "github.com/papercomputeco/daggerverse/golangcilint@main",
-      "pin": "8646f8127d0bb464437e12f0a5d83d72edc211d8"
-    }
-  ],
   "source": ".dagger"
 }

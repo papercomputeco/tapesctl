@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  DAGGER_VERSION: "0.21.7"
+  DAGGER_VERSION: "0.20.8"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   check:
-    name: Check
+    name: Lint & Test
     runs-on: depot-ubuntu-24.04
 
     steps:
@@ -29,8 +29,13 @@ jobs:
         with:
           version: ${{ env.DAGGER_VERSION }}
 
-      - name: Run checks
-        run: make check
+      - name: Lint (cargo fmt --check + clippy)
+        run: dagger call lint
+        env:
+          DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
+
+      - name: Test (cargo test --workspace)
+        run: dagger call test
         env:
           DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
 
@@ -42,7 +47,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build binaries via Dagger
+      - name: Cross-compile all targets via Dagger
         uses: dagger/dagger-for-github@v8.2.0
         env:
           DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}

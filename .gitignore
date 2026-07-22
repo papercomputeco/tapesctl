@@ -1,7 +1,7 @@
 /.direnv/
+/target/
 /build/
 /tmp/
-/tapesctl
 .DS_Store
 
 # JetBrains IDEs

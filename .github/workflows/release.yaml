@@ -5,7 +5,7 @@ on:
     types: [published]
 
 env:
-  DAGGER_VERSION: "0.21.7"
+  DAGGER_VERSION: "0.20.8"
 
 jobs:
   release:
