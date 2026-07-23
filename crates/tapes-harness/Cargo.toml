@@ -1,0 +1,18 @@
+[package]
+name = "tapes-harness"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Shared, open-source client-side harness knowledge for Tapes capture."
+
+[lib]
+name = "tapes_harness"
+path = "src/lib.rs"
+
+[dependencies]
+
+[lints]
+workspace = true

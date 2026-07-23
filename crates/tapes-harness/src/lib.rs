@@ -1,0 +1,32 @@
+//! `tapes-harness` — shared, open-source client-side harness knowledge for
+//! Tapes capture.
+//!
+//! This crate is the single home for everything a capture client needs to know
+//! about a coding-agent harness on the client side. It is consumed by both
+//! `tapesctl` (open) and paperd (closed), so ingest parity between
+//! `tapesctl start` and `paper start` is **structural, not policed** — the same
+//! code runs in both.
+//!
+//! Per the "Tapes and Cassettes" RFC, exactly three places hold harness
+//! knowledge; this crate is one of them (the deriver and the envelope
+//! spec/fixtures are the other two). It owns four responsibilities:
+//!
+//! - [`launch`] — per-harness env/config injection to run a harness under a
+//!   capture proxy.
+//! - [`attribution`] — session-file reads, fork-parent recovery, peer-PID
+//!   lookup, and the codex session watcher.
+//! - [`transcript`] — discovering and packaging harness transcripts for the
+//!   `POST /v1/ingest/transcript` lane.
+//! - [`envelope`] — the `X-Tapes-*` header contract that carries attribution
+//!   from any capture transport into ingest.
+//!
+//! Everything here is a documented seed today. The substance arrives during
+//! Track 1 by **extracting** paperd's `proxy::session::*`, `headers.rs`, the
+//! transcript uploader's discovery/packaging half, and the launch recipes from
+//! `start.rs` — paperd then becomes a consumer of this crate. See the RFC for
+//! the extraction plan and measured LOC.
+
+pub mod attribution;
+pub mod envelope;
+pub mod launch;
+pub mod transcript;

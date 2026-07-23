@@ -2,47 +2,46 @@ package main
 
 import (
 	"context"
-	"fmt"
 
 	"dagger/tapesctl/internal/dagger"
 )
 
+// buildTarget maps a Rust target triple to the `<os>/<arch>/` bucket layout the
+// install script and release workflows expect. The layout is unchanged from the
+// Go pipeline so `install.sh` (which fetches
+// `.../tapesctl/<version>/<os>/<arch>/tapesctl`) keeps working.
 type buildTarget struct {
-	goos   string
-	goarch string
+	triple string
+	os     string
+	arch   string
 }
 
-// Build compiles tapesctl for all supported platforms.
-func (t *Tapesctl) Build(
-	_ context.Context,
+var releaseTargets = []buildTarget{
+	{"x86_64-unknown-linux-musl", "linux", "amd64"},
+	{"aarch64-unknown-linux-musl", "linux", "arm64"},
+	{"x86_64-apple-darwin", "darwin", "amd64"},
+	{"aarch64-apple-darwin", "darwin", "arm64"},
+}
 
-	// Linker flags for go build.
-	// +optional
-	// +default="-s -w"
-	ldflags string,
-) *dagger.Directory {
-	targets := []buildTarget{
-		{"linux", "amd64"},
-		{"linux", "arm64"},
-		{"darwin", "amd64"},
-		{"darwin", "arm64"},
-	}
-
-	golang := t.goContainer()
+// Build cross-compiles the tapesctl binary for all supported platforms using
+// cargo-zigbuild. Linux targets are static musl builds (curl-and-run, like the
+// old CGO_ENABLED=0 Go binaries); macOS targets link against zig's bundled
+// libSystem stubs — no Apple SDK required.
+func (t *Tapesctl) Build(_ context.Context) *dagger.Directory {
+	base := t.rustContainer()
 	outputs := dag.Directory()
 
-	for _, target := range targets {
-		path := fmt.Sprintf("%s/%s/", target.goos, target.goarch)
-
-		build := golang.
-			WithEnvVariable("GOOS", target.goos).
-			WithEnvVariable("GOARCH", target.goarch).
+	for _, target := range releaseTargets {
+		dir := target.os + "/" + target.arch + "/"
+		build := base.
 			WithExec([]string{
-				"go", "build", "-ldflags", ldflags,
-				"-o", path + "tapesctl", "./cli/tapesctl",
-			})
-
-		outputs = outputs.WithDirectory(path, build.Directory(path))
+				"cargo", "zigbuild", "--release", "--locked",
+				"-p", "tapesctl", "--target", target.triple,
+			}).
+			WithExec([]string{"sh", "-c",
+				"mkdir -p /out/" + dir +
+					" && cp -a target/" + target.triple + "/release/tapesctl /out/" + dir + "tapesctl"})
+		outputs = outputs.WithDirectory(dir, build.Directory("/out/"+dir))
 	}
 
 	return outputs
@@ -50,7 +49,7 @@ func (t *Tapesctl) Build(
 
 // BuildRelease compiles release binaries and adds SHA256 checksums.
 func (t *Tapesctl) BuildRelease(ctx context.Context) *dagger.Directory {
-	return t.checksum(t.Build(ctx, "-s -w"))
+	return t.checksum(t.Build(ctx))
 }
 
 // checksum generates a SHA256 sidecar for every artifact.

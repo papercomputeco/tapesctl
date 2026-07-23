@@ -20,47 +20,6 @@
         "type": "github"
       }
     },
-    "flake-parts": {
-      "inputs": {
-        "nixpkgs-lib": [
-          "paper-skills",
-          "flake-skills",
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1769996383,
-        "narHash": "sha256-AnYjnFWgS49RlqX7LrC4uA+sCCDBj0Ry/WOJ5XWAsa0=",
-        "owner": "hercules-ci",
-        "repo": "flake-parts",
-        "rev": "57928607ea566b5db3ad13af0e57e921e6b12381",
-        "type": "github"
-      },
-      "original": {
-        "owner": "hercules-ci",
-        "repo": "flake-parts",
-        "type": "github"
-      }
-    },
-    "flake-skills": {
-      "inputs": {
-        "flake-parts": "flake-parts",
-        "nixpkgs": "nixpkgs_2"
-      },
-      "locked": {
-        "lastModified": 1772144141,
-        "narHash": "sha256-YZblb9N58JbAwsv8Uc75LBvw2JKs8Pb9qC4Eu42i5Kw=",
-        "owner": "papercomputeco",
-        "repo": "flake-skills",
-        "rev": "4085b2b7289e7789c549a2bd4f86a83517ddc662",
-        "type": "github"
-      },
-      "original": {
-        "owner": "papercomputeco",
-        "repo": "flake-skills",
-        "type": "github"
-      }
-    },
     "flake-utils": {
       "inputs": {
         "systems": "systems"
@@ -95,49 +54,32 @@
         "type": "github"
       }
     },
-    "nixpkgs_2": {
-      "locked": {
-        "lastModified": 1771848320,
-        "narHash": "sha256-0MAd+0mun3K/Ns8JATeHT1sX28faLII5hVLq0L3BdZU=",
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-        "type": "github"
-      },
-      "original": {
-        "owner": "NixOS",
-        "ref": "nixos-unstable",
-        "repo": "nixpkgs",
-        "type": "github"
-      }
-    },
-    "paper-skills": {
-      "inputs": {
-        "flake-skills": "flake-skills",
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1778709446,
-        "narHash": "sha256-+lklcvG7W2ewXZ9f21iIizKE05JypLL4AxDqoZsU9e4=",
-        "owner": "papercomputeco",
-        "repo": "skills",
-        "rev": "cd500129ea236910328d96cdad4776479157a71f",
-        "type": "github"
-      },
-      "original": {
-        "owner": "papercomputeco",
-        "repo": "skills",
-        "type": "github"
-      }
-    },
     "root": {
       "inputs": {
         "dagger": "dagger",
         "flake-utils": "flake-utils",
         "nixpkgs": "nixpkgs",
-        "paper-skills": "paper-skills"
+        "rust-overlay": "rust-overlay"
+      }
+    },
+    "rust-overlay": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1784697913,
+        "narHash": "sha256-DK+AmC9SQ9hmOFNIMu1l05gJtsmKyYsfJnuFtt1TnAU=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "47759faaddf38fadaf172151ca9df8adae9c0b2e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
       }
     },
     "systems": {

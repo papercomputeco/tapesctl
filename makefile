@@ -1,87 +1,87 @@
-# Based around the auto-documented Makefile:
+# Auto-documented Makefile:
 # http://marmelab.com/blog/2016/02/29/auto-documented-makefile.html
+#
+# Two families of targets:
+#   * cargo-native (build/test/fmt/clippy/…) — fast local iteration.
+#   * Dagger (ci/dist/release/…) — the same containerized pipeline CI runs, so a
+#     failing PR reproduces locally. The Dagger module lives in `.dagger/`.
 
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-GOBIN ?= $(shell go env GOBIN)
+.PHONY: help build build-release test fmt fmt-check clippy lint check run install clean \
+	ci lint-ci test-ci dist nightly release upload-install-script
 
-ifeq ($(strip $(GOBIN)),)
-GOBIN := $(shell go env GOPATH)/bin
-endif
+CARGO_TEST_FLAGS ?=
 
-LDFLAGS := -s -w
+help:	## Print available targets
+	@awk 'BEGIN {FS = ":.*##"; printf "Targets:\n"} /^[a-zA-Z_-]+:.*##/ {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-.PHONY: check
-check: ## Runs all Dagger checks. Auto-fixes are not automatically applied.
-	$(call print-target)
-	dagger check
+# --- cargo-native (local) -----------------------------------------------------
 
-.PHONY: format
-format: ## Runs golangci-lint linters and formatters with auto-fixes applied.
-	$(call print-target)
-	dagger call fix-lint export --path .
+build:	## Build all crates (debug)
+	cargo build --workspace
 
-.PHONY: build-local
-build-local: ## Builds local artifacts with the local Go toolchain.
-	$(call print-target)
-	@mkdir -p ./build
-	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o ./build/tapesctl ./cli/tapesctl
+build-release:	## Build the release binary with the local toolchain
+	cargo build --workspace --release
 
-.PHONY: install
-install: build-local ## Builds and installs tapesctl to GOBIN.
-	$(call print-target)
-	@mkdir -p $(GOBIN)
-	# install writes a temp file and renames it into place, avoiding in-place
-	# executable replacement issues on macOS.
-	install -m 0755 ./build/tapesctl $(GOBIN)/tapesctl
+test:	## Run all workspace tests
+	cargo test --workspace $(CARGO_TEST_FLAGS)
 
-.PHONY: build
-build: ## Builds all cross-platform release artifacts.
-	$(call print-target)
-	dagger call build-release export --path ./build
+fmt:	## Format all sources
+	cargo fmt --all
 
-.PHONY: nightly
-nightly: ## Builds and uploads nightly tapesctl artifacts.
-	dagger call \
-		nightly \
-			--endpoint=env://BUCKET_ENDPOINT \
-			--bucket=env://BUCKET_NAME \
-			--access-key-id=env://BUCKET_ACCESS_KEY_ID \
-			--secret-access-key=env://BUCKET_SECRET_ACCESS_KEY
+fmt-check:	## Verify formatting without modifying
+	cargo fmt --all -- --check
 
-.PHONY: upload-install-script
-upload-install-script: ## Uploads the tapesctl install script.
-	dagger call \
-		upload-install-sh \
-			--endpoint=env://BUCKET_ENDPOINT \
-			--bucket=env://BUCKET_NAME \
-			--access-key-id=env://BUCKET_ACCESS_KEY_ID \
-			--secret-access-key=env://BUCKET_SECRET_ACCESS_KEY
+clippy:	## Run clippy with workspace-wide deny warnings
+	cargo clippy --workspace --all-targets -- -D warnings
 
-.PHONY: release
-release: ## Builds and uploads tapesctl release artifacts.
-	dagger call \
-		release-latest \
-			--version=$(VERSION) \
-			--endpoint=env://BUCKET_ENDPOINT \
-			--bucket=env://BUCKET_NAME \
-			--access-key-id=env://BUCKET_ACCESS_KEY_ID \
-			--secret-access-key=env://BUCKET_SECRET_ACCESS_KEY
+lint: fmt-check clippy	## Run all lint checks (fmt + clippy)
 
-.PHONY: clean
-clean: ## Removes built artifacts.
-	$(call print-target)
-	@rm -rf ./build
+check: build clippy test	## Build + lint + test
 
-.PHONY: test
-test: ## Runs tests through Dagger.
-	$(call print-target)
+run:	## Run the tapesctl CLI (e.g. `make run ARGS="version"`)
+	cargo run -p tapesctl -- $(ARGS)
+
+install:	## Install the tapesctl binary into $(HOME)/.local/bin
+	cargo install --path crates/tapesctl --root $(HOME)/.local
+
+clean:	## Remove build artifacts
+	cargo clean
+
+# --- Dagger CI / release ------------------------------------------------------
+# These reproduce CI locally. `dist` and the bucket ops need a container engine;
+# the release/nightly/upload targets read bucket creds from the environment.
+
+ci: lint-ci test-ci	## Run the PR gates through Dagger (lint + test)
+
+lint-ci:	## cargo fmt --check + clippy via Dagger
+	dagger call lint
+
+test-ci:	## cargo test --workspace via Dagger
 	dagger call test
 
-.PHONY: help
-.DEFAULT_GOAL := help
-help: ## Prints this help message.
-	@grep -h -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
+dist:	## Cross-compile all release targets via Dagger into ./build
+	dagger call build-release export --path ./build
 
-define print-target
-    @printf "Executing target: \033[36m$@\033[0m\n"
-endef
+nightly:	## Build and upload nightly artifacts to the release bucket
+	dagger call nightly \
+		--endpoint=env://BUCKET_ENDPOINT \
+		--bucket=env://BUCKET_NAME \
+		--access-key-id=env://BUCKET_ACCESS_KEY_ID \
+		--secret-access-key=env://BUCKET_SECRET_ACCESS_KEY
+
+release:	## Build and upload versioned + latest release artifacts to the bucket
+	dagger call release-latest \
+		--version=$(VERSION) \
+		--endpoint=env://BUCKET_ENDPOINT \
+		--bucket=env://BUCKET_NAME \
+		--access-key-id=env://BUCKET_ACCESS_KEY_ID \
+		--secret-access-key=env://BUCKET_SECRET_ACCESS_KEY
+
+upload-install-script:	## Upload the install script to the release bucket
+	dagger call upload-install-sh \
+		--endpoint=env://BUCKET_ENDPOINT \
+		--bucket=env://BUCKET_NAME \
+		--access-key-id=env://BUCKET_ACCESS_KEY_ID \
+		--secret-access-key=env://BUCKET_SECRET_ACCESS_KEY
+
+.DEFAULT_GOAL := help
