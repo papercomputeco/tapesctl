@@ -56,7 +56,6 @@
           buildInputs = [
             rust
             pkgs.gnumake
-            pkgs.pkg-config
             pkgs.git
             # Dagger drives the CI/release pipeline (`.dagger/`): lint, test, and
             # the cargo-zigbuild cross-compile of all four release targets.

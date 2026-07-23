@@ -59,18 +59,35 @@ func (t *Tapesctl) rustContainer() *dagger.Container {
 	cargoTarget := dag.CacheVolume("tapesctl-cargo-target")
 
 	// zig ships per-arch; match the Dagger worker's arch at runtime so this
-	// works on both x86_64 CI runners and aarch64 dev laptops.
+	// works on both x86_64 CI runners and aarch64 dev laptops. The tarball is
+	// checksum-verified against zig's published SHA256 — pinned per (version,
+	// arch), so bump both together when bumping zigVersion (values from
+	// https://ziglang.org/download/<version>/).
 	installZig := `set -eux
 arch="$(uname -m)"
+case "$arch" in
+  x86_64)  sha="d45312e61ebcc48032b77bc4cf7fd6915c11fa16e4aad116b66c9468211230ea" ;;
+  aarch64) sha="041ac42323837eb5624068acd8b00cd5777dac4cf91179e8dad7a7e90dd0c556" ;;
+  *) echo "unsupported arch: $arch" >&2; exit 1 ;;
+esac
 url="https://ziglang.org/download/` + zigVersion + `/zig-linux-${arch}-` + zigVersion + `.tar.xz"
 curl -fsSL "$url" -o /tmp/zig.tar.xz
+echo "${sha}  /tmp/zig.tar.xz" | sha256sum -c -
 mkdir -p /opt/zig
 tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
 rm /tmp/zig.tar.xz`
 
 	return dag.Container().
 		From(rustImage).
-		WithMountedCache("/usr/local/cargo/registry", cargoRegistry).
+		// Locked sharing serializes registry writes: Build cross-compiles four
+		// targets off this one base, and Dagger runs them concurrently. With the
+		// default Shared mode they race unpacking the same crates and one fails
+		// with `.cargo-ok: File exists (os error 17)`. (Same fix platform/paper
+		// uses.)
+		WithMountedCache("/usr/local/cargo/registry", cargoRegistry,
+			dagger.ContainerWithMountedCacheOpts{
+				Sharing: dagger.CacheSharingModeLocked,
+			}).
 		WithExec([]string{"apt-get", "update"}).
 		WithExec([]string{"apt-get", "install", "-y", "--no-install-recommends",
 			"xz-utils", "ca-certificates", "curl"}).

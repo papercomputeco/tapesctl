@@ -7,7 +7,7 @@ recommended development environment; it pins the Rust toolchain via
 ```bash
 nix develop
 make build
-make run -- version
+make run ARGS=version
 ```
 
 Before opening a pull request, run:

@@ -31,7 +31,7 @@ The Nix flake dev shell pins the Rust toolchain (via `rust-toolchain.toml`):
 ```bash
 nix develop
 make build
-make run -- version
+make run ARGS=version
 ```
 
 Run `make help` for all targets. Before opening a PR:

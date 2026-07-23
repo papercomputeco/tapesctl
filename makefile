@@ -38,8 +38,8 @@ lint: fmt-check clippy	## Run all lint checks (fmt + clippy)
 
 check: build clippy test	## Build + lint + test
 
-run:	## Run the tapesctl CLI (e.g. `make run -- version`)
-	cargo run -p tapesctl -- $(filter-out $@,$(MAKECMDGOALS))
+run:	## Run the tapesctl CLI (e.g. `make run ARGS="version"`)
+	cargo run -p tapesctl -- $(ARGS)
 
 install:	## Install the tapesctl binary into $(HOME)/.local/bin
 	cargo install --path crates/tapesctl --root $(HOME)/.local
