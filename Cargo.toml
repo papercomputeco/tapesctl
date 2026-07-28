@@ -38,6 +38,8 @@ bytes = "1"
 # --- HTTP (JIT proxy + API client; wired in during Track 1) ---
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "http2", "json"] }
 http = "1"
+base64 = "0.22"
+percent-encoding = "2"
 url = { version = "2", features = ["serde"] }
 
 # --- config / serde ---
@@ -52,9 +54,16 @@ snafu = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
+# --- attribution (session watchers, peer-PID lookup) ---
+# Versions match `platform/paper`, which these modules were extracted from,
+# so paperd's lockfile does not fork when it switches to this crate.
+arc-swap = "1"
+libc = "0.2"
+netsock = "0.7"
+
 # --- misc ---
 dirs = "5"
-time = { version = "0.3", features = ["formatting", "serde", "macros"] }
+time = { version = "0.3", features = ["formatting", "parsing", "serde", "macros"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
 # --- test ---
