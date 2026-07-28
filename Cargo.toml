@@ -75,3 +75,23 @@ wiremock = "0.6"
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
+
+# libproc 0.14.11 gates binding generation on `#[cfg(target_os = "macos")]` in
+# its build script. Build-script cfg reflects the HOST, not the target, so
+# cross-compiling Linux -> *-apple-darwin runs the empty branch and never writes
+# `osx_libproc_bindings.rs` — yet lib.rs, compiled *for* macOS, still
+# `include!`s it. Native macOS builds work, which is why this only breaks CI.
+#
+# Downloading an Apple SDK does not help: the branch does not execute on a Linux
+# host at all, and it hardcodes an `-I /Library/Developer/CommandLineTools/...`
+# include path rather than consulting SDKROOT.
+#
+# This rev gates on `CARGO_CFG_TARGET_OS` (the target) and falls back to the
+# bindings libproc already ships for docs.rs — no libclang, no SDK headers, so
+# the zigbuild toolchain is untouched. `platform/paper` pins the identical rev
+# for the identical reason. Drop both when a release carries the fix; 0.14.11 is
+# still the newest as of this pin. Upstream: andrewdavidmackenzie/libproc-rs#168.
+#
+# Reached via `tapes-harness -> netsock -> libproc`.
+[patch.crates-io]
+libproc = { git = "https://github.com/andrewdavidmackenzie/libproc-rs.git", rev = "9e079f3308182bb3a47fe509571d38fb4fd380f3" }
