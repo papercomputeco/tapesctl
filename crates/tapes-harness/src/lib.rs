@@ -20,11 +20,17 @@
 //! - [`envelope`] — the `X-Tapes-*` header contract that carries attribution
 //!   from any capture transport into ingest.
 //!
-//! Everything here is a documented seed today. The substance arrives during
-//! Track 1 by **extracting** paperd's `proxy::session::*`, `headers.rs`, the
-//! transcript uploader's discovery/packaging half, and the launch recipes from
-//! `start.rs` — paperd then becomes a consumer of this crate. See the RFC for
-//! the extraction plan and measured LOC.
+//! [`attribution`] and [`envelope`] are extracted from paperd's
+//! `proxy::session::*` and `proxy::headers` — the code that validated peer-PID
+//! attribution, fork-parent discovery, and the `X-Tapes-*` producer against
+//! real Claude and Codex traffic. The envelope's on-wire behaviour is pinned
+//! by the shared cross-language fixture corpus vendored at
+//! `vendor/tapes-envelope-fixtures/`, which the Go parsers table-test against
+//! too, so producer and parser cannot drift silently.
+//!
+//! [`launch`] and [`transcript`] are still documented seeds; they arrive later
+//! in Track 1 from `start.rs` and the transcript uploader's
+//! discovery/packaging half.
 
 pub mod attribution;
 pub mod envelope;

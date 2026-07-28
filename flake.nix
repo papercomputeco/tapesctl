@@ -28,7 +28,15 @@
             version = self.shortRev or "dev";
             src = final.lib.cleanSource self;
 
-            cargoLock.lockFile = ./Cargo.lock;
+            cargoLock = {
+              lockFile = ./Cargo.lock;
+              # Required for the `[patch.crates-io]` libproc git pin: Nix cannot
+              # infer a hash for a git dependency from the lockfile alone. Same
+              # crate, same rev, same hash as `platform/paper`.
+              outputHashes = {
+                "libproc-0.14.11" = "sha256-B4mZIbjn1FOsTJXqyv3DRXAE3FFwT/4Gl+GDP4r9+9M=";
+              };
+            };
             cargoBuildFlags = [ "-p" "tapesctl" ];
 
             # Workspace tests are exercised in CI (`make test`); keep the package

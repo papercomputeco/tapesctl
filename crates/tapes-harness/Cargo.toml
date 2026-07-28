@@ -13,6 +13,23 @@ name = "tapes_harness"
 path = "src/lib.rs"
 
 [dependencies]
+arc-swap = { workspace = true }
+base64 = { workspace = true }
+dirs = { workspace = true }
+http = { workspace = true }
+libc = { workspace = true }
+netsock = { workspace = true }
+percent-encoding = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+snafu = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 
 [lints]
 workspace = true

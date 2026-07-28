@@ -38,6 +38,8 @@ bytes = "1"
 # --- HTTP (JIT proxy + API client; wired in during Track 1) ---
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "http2", "json"] }
 http = "1"
+base64 = "0.22"
+percent-encoding = "2"
 url = { version = "2", features = ["serde"] }
 
 # --- config / serde ---
@@ -52,9 +54,16 @@ snafu = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
+# --- attribution (session watchers, peer-PID lookup) ---
+# Versions match `platform/paper`, which these modules were extracted from,
+# so paperd's lockfile does not fork when it switches to this crate.
+arc-swap = "1"
+libc = "0.2"
+netsock = "0.7"
+
 # --- misc ---
 dirs = "5"
-time = { version = "0.3", features = ["formatting", "serde", "macros"] }
+time = { version = "0.3", features = ["formatting", "parsing", "serde", "macros"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
 # --- test ---
@@ -66,3 +75,23 @@ wiremock = "0.6"
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
+
+# libproc 0.14.11 gates binding generation on `#[cfg(target_os = "macos")]` in
+# its build script. Build-script cfg reflects the HOST, not the target, so
+# cross-compiling Linux -> *-apple-darwin runs the empty branch and never writes
+# `osx_libproc_bindings.rs` — yet lib.rs, compiled *for* macOS, still
+# `include!`s it. Native macOS builds work, which is why this only breaks CI.
+#
+# Downloading an Apple SDK does not help: the branch does not execute on a Linux
+# host at all, and it hardcodes an `-I /Library/Developer/CommandLineTools/...`
+# include path rather than consulting SDKROOT.
+#
+# This rev gates on `CARGO_CFG_TARGET_OS` (the target) and falls back to the
+# bindings libproc already ships for docs.rs — no libclang, no SDK headers, so
+# the zigbuild toolchain is untouched. `platform/paper` pins the identical rev
+# for the identical reason. Drop both when a release carries the fix; 0.14.11 is
+# still the newest as of this pin. Upstream: andrewdavidmackenzie/libproc-rs#168.
+#
+# Reached via `tapes-harness -> netsock -> libproc`.
+[patch.crates-io]
+libproc = { git = "https://github.com/andrewdavidmackenzie/libproc-rs.git", rev = "9e079f3308182bb3a47fe509571d38fb4fd380f3" }
