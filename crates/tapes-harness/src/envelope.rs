@@ -545,6 +545,51 @@ mod tests {
         assert!(!is_hop_by_hop("X-Paper-Auth"));
     }
 
+    #[test]
+    fn is_hop_by_hop_matches_every_listed_header_in_any_case() {
+        // `hop_by_hop_list_matches_rfc7230` above spot-checks three
+        // entries; this covers the whole list, so an entry added to
+        // HOP_BY_HOP_HEADERS in a form that defeats the comparison
+        // (stray whitespace, embedded upper-case) fails here rather
+        // than leaking a connection-scoped header across the proxy
+        // boundary at runtime.
+        //
+        // The match is `eq_ignore_ascii_case` against a lower-cased
+        // table, so every case permutation of a listed name must hit.
+        for name in HOP_BY_HOP_HEADERS {
+            let upper = name.to_ascii_uppercase();
+            // Title-Case-Each-Word, the form an HTTP stack most often
+            // presents (`Transfer-Encoding`, `Proxy-Authenticate`).
+            let title: String = name
+                .split('-')
+                .map(|seg| {
+                    let mut c = seg.chars();
+                    match c.next() {
+                        Some(first) => first.to_ascii_uppercase().to_string() + c.as_str(),
+                        None => String::new(),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("-");
+
+            assert!(is_hop_by_hop(name), "lower-case `{name}` must match");
+            assert!(is_hop_by_hop(&upper), "upper-case `{upper}` must match");
+            assert!(is_hop_by_hop(&title), "title-case `{title}` must match");
+        }
+
+        // The table itself must stay lower-case: the comparison is
+        // case-insensitive, but a mixed-case entry would still be a
+        // latent trap for any caller that compares against the
+        // constant directly instead of going through `is_hop_by_hop`.
+        for name in HOP_BY_HOP_HEADERS {
+            assert_eq!(
+                *name,
+                name.to_ascii_lowercase(),
+                "HOP_BY_HOP_HEADERS entries are listed lower-case",
+            );
+        }
+    }
+
     /// Build a `ClaudeSessionFile` with sensible defaults for header
     /// tests. Override what the test cares about by mutation after
     /// the call.
