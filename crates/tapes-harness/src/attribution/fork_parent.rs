@@ -200,8 +200,18 @@ fn projects_dir_for(cwd: &str) -> Option<PathBuf> {
 }
 
 /// `/foo/bar` → `-foo-bar`. The harness uses this as the project's
-/// directory name. Exposed for tests.
-pub(crate) fn encode_cwd(cwd: &str) -> String {
+/// directory name.
+///
+/// Public because locating a session's transcript is harness knowledge a
+/// capture client needs outside fork-parent discovery — the transcript lane
+/// resolves `~/.claude/projects/<encode_cwd(cwd)>/` to find the files it
+/// uploads.
+///
+/// This is the *producer* spelling and is deliberately left as-is: the two
+/// envelope parsers disagree about how `cwd` is encoded, and reconciling them
+/// is a contract decision tracked separately — not something to settle by
+/// quietly changing this function.
+pub fn encode_cwd(cwd: &str) -> String {
     cwd.replace('/', "-")
 }
 
