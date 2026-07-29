@@ -9,3 +9,4 @@
 
 # Claude Code
 .claude/
+.worktrees/

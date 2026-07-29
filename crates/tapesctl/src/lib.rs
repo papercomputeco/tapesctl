@@ -57,13 +57,13 @@ pub async fn run(cli: Cli) -> Result<()> {
 
 /// Launch a harness under a just-in-time capture proxy.
 ///
-/// Track 1: spawn the harness with launch env from `tapes_harness::launch`,
-/// stand up the dumb byte-forwarding proxy, stamp the `tapes_harness::envelope`
+/// Track 1: spawn the harness with launch env from `tapes_harnesses::launch`,
+/// stand up the dumb byte-forwarding proxy, stamp the `tapes_harnesses::envelope`
 /// onto every turn, and POST `TurnPayload`s to the tapes ingest server.
 async fn start(args: StartArgs) -> Result<()> {
     tracing::info!(
         harness = %args.harness,
-        envelope_prefix = tapes_harness::envelope::HEADER_PREFIX,
+        envelope_prefix = tapes_harnesses::envelope::HEADER_PREFIX,
         "tapesctl start is not implemented yet",
     );
     Err(Error::NotImplemented {
