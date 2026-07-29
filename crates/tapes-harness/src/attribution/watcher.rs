@@ -71,13 +71,22 @@ pub type Snapshot = Arc<ArcSwap<WatcherSnapshot>>;
 /// `sessions_dir` is typically `~/.claude/sessions/` per
 /// [`super::claude_session::default_sessions_dir`]; tests pass a
 /// tempdir.
+///
+/// The initial scan is deliberately inline: `spawn` is called during
+/// proxy construction, before any request can observe the snapshot, so
+/// paying for it on the caller's thread is what makes the very first
+/// request see a populated candidate set. Every *periodic* scan is
+/// offloaded with `spawn_blocking` — [`scan`] does directory iteration
+/// plus a `read(2)` per session file, and running that inline on a
+/// tokio worker stalls every future that worker owns for the duration
+/// of the scan. The Codex watcher already offloads the same way; this
+/// mirrors it.
 #[must_use]
 pub fn spawn(sessions_dir: PathBuf) -> Snapshot {
     let initial = scan(&sessions_dir);
     let snapshot: Snapshot = Arc::new(ArcSwap::from_pointee(initial));
 
     let weak = Arc::downgrade(&snapshot);
-    let dir = sessions_dir.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         // skip the first immediate tick — we already loaded the
@@ -90,7 +99,21 @@ pub fn spawn(sessions_dir: PathBuf) -> Snapshot {
             let Some(slot) = weak.upgrade() else {
                 break;
             };
-            let next = scan(&dir);
+            let dir = sessions_dir.clone();
+            // A failed join (blocking task panicked, or the runtime is
+            // shutting down) leaves the previous snapshot in place
+            // rather than clearing it — a scan we could not run is not
+            // evidence that the sessions dir is empty.
+            let next = match tokio::task::spawn_blocking(move || scan(&dir)).await {
+                Ok(next) => next,
+                Err(err) => {
+                    tracing::warn!(
+                        error = %err,
+                        "session-watcher: scan task failed",
+                    );
+                    continue;
+                }
+            };
             slot.store(Arc::new(next));
         }
     });
@@ -251,6 +274,160 @@ mod tests {
                 "candidate {pid} present without metadata — torn snapshot read",
             );
         }
+    }
+
+    /// Block until `cond` holds, or `limit` elapses. Returns whether
+    /// it held. Deliberately uses `std::thread::sleep`: the callers
+    /// observe a runtime from the outside, and in the regression case
+    /// the runtime's timer is exactly what stops advancing.
+    #[cfg(unix)]
+    fn wait_until(limit: Duration, mut cond: impl FnMut() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + limit;
+        loop {
+            if cond() {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Create a FIFO at `path`. A `std::fs::read` of a FIFO parks in
+    /// `open(2)` until a writer shows up, which is how the test below
+    /// pins a scan in progress for as long as it needs to.
+    #[cfg(unix)]
+    fn mkfifo(path: &Path) {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let c_path = CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: `c_path` is a valid NUL-terminated path that outlives
+        // the call, and `mkfifo` only reads through the pointer.
+        let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
+        assert_eq!(
+            rc,
+            0,
+            "mkfifo({}) failed: {}",
+            path.display(),
+            std::io::Error::last_os_error(),
+        );
+    }
+
+    /// Wait for a reader to park in `open(2)` on the FIFO at `path`,
+    /// returning the write end. `O_WRONLY | O_NONBLOCK` on a FIFO fails
+    /// with `ENXIO` while no reader is waiting and succeeds once one
+    /// is, so this is an exact "the scan has started and is now
+    /// blocked" signal rather than a sleep-and-hope.
+    #[cfg(unix)]
+    fn wait_for_fifo_reader(path: &Path) -> Option<std::fs::File> {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let mut opened = None;
+        wait_until(Duration::from_secs(15), || {
+            opened = std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(path)
+                .ok();
+            opened.is_some()
+        });
+        opened
+    }
+
+    /// The periodic scan must not run on a tokio worker. [`scan`] does
+    /// directory iteration plus a `read(2)` per session file; inline on
+    /// a worker it stalls every other future that worker owns for the
+    /// duration of the scan — on paperd that is the request-forwarding
+    /// path the attribution exists to serve.
+    ///
+    /// The setup makes that observable without timing heuristics: one
+    /// worker thread, and a FIFO named `<pid>.json` in the sessions dir
+    /// so the scan parks indefinitely instead of finishing in
+    /// microseconds. A heartbeat task then answers the question
+    /// directly — inline, the sole worker is pinned and the heartbeat
+    /// cannot advance; offloaded to `spawn_blocking`, it keeps counting
+    /// while the scan is stuck.
+    #[cfg(unix)]
+    #[test]
+    fn periodic_scan_does_not_block_the_runtime_worker() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("4242.json");
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+
+        // The initial scan is inline in `spawn` by design, so the FIFO
+        // must not exist yet — otherwise this thread parks, not a
+        // worker, and the test would be measuring the wrong scan.
+        let snap = rt.block_on(async { spawn(dir.path().to_path_buf()) });
+        mkfifo(&fifo);
+
+        let beats = Arc::new(AtomicU64::new(0));
+        let counter = Arc::clone(&beats);
+        rt.spawn(async move {
+            loop {
+                counter.fetch_add(1, Ordering::Relaxed);
+                tokio::task::yield_now().await;
+            }
+        });
+
+        let writer = wait_for_fifo_reader(&fifo)
+            .expect("watcher never opened the FIFO — no periodic scan ran");
+
+        let before = beats.load(Ordering::Relaxed);
+        let progressed = wait_until(Duration::from_secs(5), || {
+            beats.load(Ordering::Relaxed) > before
+        });
+        assert!(
+            progressed,
+            "the runtime's only worker made no progress while a sessions-dir \
+             scan was in flight — the scan is running inline on the worker",
+        );
+
+        // Teardown, in order: drop the snapshot so the watcher loop
+        // breaks at its next tick; unlink the FIFO so a re-scan cannot
+        // park on it; then release the parked reader by closing the
+        // write end. Without this the runtime's drop would wait forever
+        // on a blocking task that can never finish.
+        drop(snap);
+        std::fs::remove_file(&fifo).unwrap();
+        drop(writer);
+    }
+
+    /// Offloading the scan must not cost the watcher its actual job:
+    /// a session file that appears after startup still has to reach the
+    /// published snapshot.
+    #[tokio::test]
+    async fn periodic_scan_publishes_sessions_that_appear_after_startup() {
+        let dir = tempfile::tempdir().unwrap();
+        let snap = spawn(dir.path().to_path_buf());
+        assert!(snap.load().candidate_pids.is_empty());
+
+        std::fs::write(
+            dir.path().join("4321.json"),
+            r#"{"pid":4321,"sessionId":"appeared-later"}"#,
+        )
+        .unwrap();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while !snap.load().candidate_pids.contains(&4321) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "periodic scan never published the new session file",
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            snap.load().pid_metadata.get(&4321).unwrap().session_id,
+            "appeared-later",
+        );
     }
 
     #[tokio::test]

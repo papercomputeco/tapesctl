@@ -5,7 +5,7 @@
 //! kernel state. The Claude process on the other end of that connection
 //! has the matching socket in its FD table. The lookup answers:
 //! "given a candidate PID set (the filenames in `~/.claude/sessions/`)
-//! and the peer's loopback port, which candidate owns the socket?"
+//! and the peer's loopback address, which candidate owns the socket?"
 //!
 //! Implementation: [`netsock`] enumerates the TCP socket table; we match
 //! on `local_addr`/`local_port` and check whether a candidate PID owns the
@@ -24,14 +24,22 @@
 //!   unprivileged-host permission storm, so we keep netsock's
 //!   process-attached enumeration as-is.
 //!
-//! A small per-peer-port memoization sits in front of the netsock scan:
-//! Claude's HTTP/2 multiplexes many requests over one TCP connection,
-//! and the `(peer_ip, peer_port)` tuple is invariant for the connection's
-//! lifetime. Caching the resolved PID for [`CACHE_TTL`] turns "global
-//! socket-table scan per request" into "scan once, HashMap lookup
-//! after." Cached PIDs are revalidated against the live candidate set
-//! on every hit so a dead process whose port gets reused inside the
-//! window can't masquerade as the original owner.
+//! A small per-peer-address memoization sits in front of the netsock
+//! scan: Claude's HTTP/2 multiplexes many requests over one TCP
+//! connection, and the `(peer_ip, peer_port)` tuple is invariant for the
+//! connection's lifetime. Caching the resolved PID for [`CACHE_TTL`]
+//! turns "global socket-table scan per request" into "scan once,
+//! HashMap lookup after." Cached PIDs are revalidated against the live
+//! candidate set on every hit so a dead process whose port gets reused
+//! inside the window can't masquerade as the original owner.
+//!
+//! The cache key is the whole [`SocketAddr`], not just the port. A port
+//! number is only unique within an address family and interface
+//! address: `127.0.0.1:54321` and `[::1]:54321` are different sockets
+//! that can be owned by different processes at the same instant, and
+//! the scan below treats them as different (see [`addr_matches`] —
+//! native v6 does not match v4). Keying on the port alone let one
+//! entry answer for both.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -41,7 +49,7 @@ use std::time::{Duration, Instant};
 use netsock::family::AddressFamilyFlags;
 use netsock::protocol::ProtocolFlags;
 
-/// How long a resolved peer-port → PID mapping stays valid. Chosen to
+/// How long a resolved peer-address → PID mapping stays valid. Chosen to
 /// align with the kernel's TIME_WAIT window (≈60 s on Linux/macOS):
 /// a closed port can't be reassigned to a different process until
 /// TIME_WAIT drains, so an entry that survives TIME_WAIT cannot
@@ -65,8 +73,12 @@ struct CacheEntry {
     when: Instant,
 }
 
-fn cache() -> &'static Mutex<HashMap<u16, CacheEntry>> {
-    static C: OnceLock<Mutex<HashMap<u16, CacheEntry>>> = OnceLock::new();
+/// Process-global memo of peer socket address → owning PID. Keyed by
+/// the complete [`SocketAddr`]: the IP is as load-bearing as the port,
+/// since a port is only unique per address, and two loopback peers can
+/// legitimately hold the same port on different addresses.
+fn cache() -> &'static Mutex<HashMap<SocketAddr, CacheEntry>> {
+    static C: OnceLock<Mutex<HashMap<SocketAddr, CacheEntry>>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -108,10 +120,10 @@ fn cached_lookup_owner(peer: SocketAddr) -> Option<i32> {
 }
 
 fn cached_lookup(candidates: &[i32], peer: SocketAddr) -> Option<i32> {
-    let key = peer.port();
+    let key = peer;
 
     // Cache-hit path: revalidate against `candidates`. A stale entry
-    // for a PID the watcher has since dropped (process died, port
+    // for a PID the watcher has since dropped (process died, address
     // reassigned) would mis-attribute fresh connections to a dead
     // owner; checking membership on every hit closes that hole
     // without needing the watcher to notify the cache.
@@ -305,13 +317,13 @@ mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener, TcpStream};
 
-    /// Drop any cached entry for this port so tests reusing the same
-    /// ephemeral port (rare but possible) don't see leftover state.
-    fn clear_cache_for(port: u16) {
+    /// Drop any cached entry for this peer so tests reusing the same
+    /// ephemeral address (rare but possible) don't see leftover state.
+    fn clear_cache_for(peer: SocketAddr) {
         let mut map = cache()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        map.remove(&port);
+        map.remove(&peer);
     }
 
     fn lookup_until_pid(candidates: &[i32], peer: SocketAddr, expected: i32) -> PeerPidLookup {
@@ -361,7 +373,7 @@ mod tests {
         let client = TcpStream::connect(server_addr).unwrap();
         let (_server_side, _peer) = listener.accept().unwrap();
         let peer = client.local_addr().unwrap();
-        clear_cache_for(peer.port());
+        clear_cache_for(peer);
         let me = std::process::id() as i32;
 
         let got = lookup_until_pid(&[me], peer, me);
@@ -379,7 +391,7 @@ mod tests {
         let client = TcpStream::connect(server_addr).unwrap();
         let (_server_side, _peer) = listener.accept().unwrap();
         let peer = client.local_addr().unwrap();
-        clear_cache_for(peer.port());
+        clear_cache_for(peer);
         let me = std::process::id() as i32;
 
         let deadline = Instant::now() + Duration::from_millis(250);
@@ -409,7 +421,7 @@ mod tests {
             let client = TcpStream::connect(server_addr).unwrap();
             let (_server_side, _peer) = listener.accept().unwrap();
             let peer = client.local_addr().unwrap();
-            clear_cache_for(peer.port());
+            clear_cache_for(peer);
 
             let me = std::process::id() as i32;
             assert_eq!(
@@ -441,7 +453,7 @@ mod tests {
         let client = TcpStream::connect(server_addr).unwrap();
         let (_server_side, _peer) = listener.accept().unwrap();
         let peer = client.local_addr().unwrap();
-        clear_cache_for(peer.port());
+        clear_cache_for(peer);
 
         let me = std::process::id() as i32;
         assert_eq!(
@@ -461,6 +473,83 @@ mod tests {
         );
     }
 
+    /// Two peers can hold the same port on different addresses at the
+    /// same instant: `127.0.0.1:N` and `[::1]:N` are distinct sockets,
+    /// and [`addr_matches`] deliberately refuses to equate native v6
+    /// with v4. Keyed by port alone, the cache collapsed them into one
+    /// entry, so a second peer inherited the first peer's PID without
+    /// any socket of its own ever having been resolved — silent
+    /// mis-attribution, since the candidate-set revalidation cannot
+    /// catch it (the PID is live and blessed, just not the owner).
+    #[test]
+    fn distinct_addresses_sharing_a_port_do_not_share_a_cache_entry() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let server_addr = listener.local_addr().unwrap();
+        let client = TcpStream::connect(server_addr).unwrap();
+        let (_server_side, _peer) = listener.accept().unwrap();
+        let v4_peer = client.local_addr().unwrap();
+        // Same port, different address. We own no socket here, so a
+        // correct lookup has nothing to resolve and must answer None.
+        let v6_peer = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), v4_peer.port());
+        clear_cache_for(v4_peer);
+        clear_cache_for(v6_peer);
+
+        let me = std::process::id() as i32;
+        assert_eq!(
+            lookup_until_pid(&[me], v4_peer, me).pid,
+            Some(me),
+            "primer scan failed",
+        );
+
+        assert_eq!(
+            lookup(&[me], v6_peer).pid,
+            None,
+            "the cache entry for {v4_peer} answered for {v6_peer} — \
+             the cache is keyed by port rather than by address",
+        );
+
+        // The entry that legitimately exists is untouched by the miss.
+        assert_eq!(lookup(&[me], v4_peer).pid, Some(me));
+
+        clear_cache_for(v4_peer);
+    }
+
+    /// Structural companion to the behavioural test above: the map
+    /// itself holds one entry per address, so the same port on two
+    /// addresses carries independent PIDs and independent expiry.
+    /// Uses port 9 (discard), outside the ephemeral range, so a real
+    /// socket in a concurrently running test cannot collide with it.
+    #[test]
+    fn cache_holds_one_entry_per_address_not_per_port() {
+        let v4 = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9);
+        let v6 = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 9);
+
+        {
+            let mut map = cache()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            map.insert(
+                v4,
+                CacheEntry {
+                    pid: 111,
+                    when: Instant::now(),
+                },
+            );
+            map.insert(
+                v6,
+                CacheEntry {
+                    pid: 222,
+                    when: Instant::now(),
+                },
+            );
+            assert_eq!(map.get(&v4).map(|e| e.pid), Some(111));
+            assert_eq!(map.get(&v6).map(|e| e.pid), Some(222));
+        }
+
+        clear_cache_for(v4);
+        clear_cache_for(v6);
+    }
+
     #[test]
     fn lookup_returns_none_when_no_candidate_matches() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -468,7 +557,7 @@ mod tests {
         let client = TcpStream::connect(server_addr).unwrap();
         let (_server_side, _peer) = listener.accept().unwrap();
         let peer = client.local_addr().unwrap();
-        clear_cache_for(peer.port());
+        clear_cache_for(peer);
 
         // PID 1 (init/launchd) won't own a socket we just opened.
         let got = lookup(&[1], peer);
@@ -507,11 +596,11 @@ mod tests {
         // pays for a full netsock scan.
         let mut cold = Vec::with_capacity(N);
         for _ in 0..5 {
-            clear_cache_for(peer.port());
+            clear_cache_for(peer);
             let _ = lookup(&[me], peer);
         }
         for _ in 0..N {
-            clear_cache_for(peer.port());
+            clear_cache_for(peer);
             cold.push(lookup(&[me], peer).micros);
         }
         cold.sort_unstable();
@@ -525,7 +614,7 @@ mod tests {
         );
 
         // Warm: prime once, then hammer the cached path.
-        clear_cache_for(peer.port());
+        clear_cache_for(peer);
         let _ = lookup(&[me], peer);
         let mut warm = Vec::with_capacity(N);
         for _ in 0..N {
