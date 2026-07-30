@@ -16,7 +16,7 @@ name = "tapesctl"
 path = "src/main.rs"
 
 [dependencies]
-tapes-harness = { workspace = true }
+tapes-harnesses = { workspace = true }
 clap = { workspace = true }
 snafu = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

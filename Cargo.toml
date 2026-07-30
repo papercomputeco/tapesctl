@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
     "crates/tapesctl",
-    "crates/tapes-harness",
 ]
 
 # Intentionally unlicensed while the repo is closed source — no LICENSE file and
@@ -22,8 +21,13 @@ repository = "https://github.com/papercomputeco/tapesctl"
 # proxy/attribution work lands with the versions already agreed — mirrors the
 # convention in `platform/paper`.
 [workspace.dependencies]
-# --- local crates ---
-tapes-harness = { path = "crates/tapes-harness" }
+# --- shared harness knowledge (its own repo since the split) ---
+# Session attribution, launch recipes, transcript discovery, and the
+# X-Tapes-* envelope live in the tapes-harnesses repository, consumed by
+# both tapesctl and paperd so the two capture paths cannot drift apart.
+# Pinned by revision like any other vendored contract.
+#
+tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "dd1d4d9aad26c9c9aff093d1cf25c2b4c114ee7b" }
 
 # --- CLI ---
 clap = { version = "4", features = ["derive", "env"] }
@@ -92,6 +96,6 @@ panic = "deny"
 # for the identical reason. Drop both when a release carries the fix; 0.14.11 is
 # still the newest as of this pin. Upstream: andrewdavidmackenzie/libproc-rs#168.
 #
-# Reached via `tapes-harness -> netsock -> libproc`.
+# Reached via `tapes-harnesses -> netsock -> libproc`.
 [patch.crates-io]
 libproc = { git = "https://github.com/andrewdavidmackenzie/libproc-rs.git", rev = "9e079f3308182bb3a47fe509571d38fb4fd380f3" }
