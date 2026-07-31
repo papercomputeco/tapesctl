@@ -17,6 +17,16 @@
 //! what this client calls its own Codex provider, and what identity to stamp.
 //! That split is deliberate — it is the same split paperd makes, which is what
 //! keeps the two capture paths producing identical rows.
+//!
+//! # The terminal is not ours
+//!
+//! Unlike paperd, this runs in the foreground of the terminal it hands to a
+//! harness TUI. Between [`spawn_harness`] and the harness's exit, this process
+//! must write nothing to stdout or stderr — a log line or a status print lands
+//! inside someone's half-rendered frame. Diagnostics go to a file for the whole
+//! of that window (see [`crate::logging`]), and the two things worth saying are
+//! said on either side of it: the log path before the launch, the session link
+//! after the exit.
 
 pub mod ingest;
 pub mod peek;
@@ -42,6 +52,7 @@ use url::Url;
 
 use crate::cli::StartArgs;
 use crate::error::{Result, error};
+use crate::logging;
 use crate::transcript::client::TranscriptClient;
 use crate::transcript::tailer::{self, SessionTracker};
 use ingest::IngestClient;
@@ -331,12 +342,10 @@ pub async fn run(args: StartArgs) -> Result<()> {
     let tailer = spawn_tailer(&config, tracker)?;
 
     let written = materialise_config_files(&plan)?;
-    let web_url = config.web_url.clone();
-    let link = tokio::spawn(async move {
-        if let Some(session_id) = session_rx.recv().await {
-            print_session_link(web_url.as_ref(), &session_id);
-        }
-    });
+
+    // The last thing this process writes to the terminal until the harness
+    // gives it back.
+    announce_capture();
 
     let status = spawn_harness(&config, &plan).await;
 
@@ -345,7 +354,6 @@ pub async fn run(args: StartArgs) -> Result<()> {
     // recipes are pure.
     let _ = shutdown_tx.send(());
     let _ = server.await;
-    link.abort();
     remove_config_files(&written);
 
     // The tailer is *awaited*, not aborted. Its shutdown pass is the
@@ -359,6 +367,15 @@ pub async fn run(args: StartArgs) -> Result<()> {
             warn!(error = %err, "transcript tailer did not finish cleanly");
         }
     }
+
+    // The terminal is the caller's again, so the session can finally be named.
+    // The id only becomes known once a turn is attributed, which is mid-session
+    // — the one moment printing is forbidden. The proxy sends exactly one id, so
+    // a single non-blocking read after shutdown collects whatever there was.
+    print_exit_summary(
+        config.web_url.as_ref(),
+        session_rx.try_recv().ok().as_deref(),
+    );
 
     let status = status?;
     if !status.success() {
@@ -397,13 +414,39 @@ fn spawn_tailer(
     Ok(Some(tailer::spawn(client, tracker, tailer_config)))
 }
 
+/// The last line printed before the harness takes the terminal.
+///
+/// The log path has to be handed over *before* that window opens, because from
+/// the spawn until the harness exits this process may not write to the terminal
+/// at all. Silent when tracing is streaming to stderr — then the user is already
+/// watching it, and there is no file to point at.
+fn announce_capture() {
+    if let Some(path) = logging::active_log_file() {
+        println!("tapesctl: capturing; logs at {}", path.display());
+    }
+}
+
+/// What this session was, printed once the terminal belongs to the caller again.
+fn print_exit_summary(web_url: Option<&Url>, session_id: Option<&str>) {
+    match session_id {
+        Some(id) => print_session_link(web_url, id),
+        // Not an error: a harness can be launched and quit without ever calling
+        // a model. Saying so beats printing nothing and leaving the user to
+        // wonder whether capture was ever on.
+        None => println!("tapesctl: no turns were captured"),
+    }
+    if let Some(path) = logging::active_log_file() {
+        println!("tapesctl: logs at {}", path.display());
+    }
+}
+
 fn print_session_link(web_url: Option<&Url>, session_id: &str) {
     match web_url.and_then(|base| base.join(&format!("/sessions/{session_id}")).ok()) {
-        Some(url) => println!("tapesctl: capturing session {session_id} — {url}"),
+        Some(url) => println!("tapesctl: captured session {session_id} — {url}"),
         // Without a console base URL there is no link to print; naming the flag
         // beats printing a guessed host that 404s.
         None => {
-            println!("tapesctl: capturing session {session_id} (pass --web-url for a console link)",)
+            println!("tapesctl: captured session {session_id} (pass --web-url for a console link)",)
         }
     }
 }

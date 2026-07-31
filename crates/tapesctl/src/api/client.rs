@@ -37,6 +37,30 @@ use crate::error::{Error, Result, error};
 /// than rejected, so a caller asking for more must still follow `next_cursor`.
 pub const MAX_LIMIT: u64 = 200;
 
+/// Default number of span search hits, matching both the server's default and
+/// the `tapes search` flag this port reproduces.
+///
+/// There is no server-side ceiling on `top_k` — the handler passes it straight
+/// through — so this is a default, not a clamp.
+pub const DEFAULT_SEARCH_TOP_K: u64 = 5;
+/// The cassette discovery route.
+pub const CASSETTES_PATH: &str = "/v1/cassettes";
+
+/// The outcome of a conditional fetch of a cassette's OpenAPI document.
+#[derive(Debug, Clone)]
+pub enum SpecFetch {
+    /// The server matched our `If-None-Match` and sent no body; the cached copy
+    /// is still current.
+    Unchanged,
+    /// A document, and the validator to revalidate it with next time.
+    Fetched {
+        /// The OpenAPI document, verbatim.
+        document: Value,
+        /// The response `ETag`, when the server sent one.
+        etag: Option<String>,
+    },
+}
+
 /// Remove the empty query `query_pairs_mut` leaves behind when no pair was
 /// appended.
 ///
@@ -44,6 +68,19 @@ pub const MAX_LIMIT: u64 = 200;
 /// so a request with every parameter unset would go out as `/v1/sessions?`.
 /// Servers ignore it, but it means the same request has two spellings — which
 /// shows up in logs, in cached URLs, and in any test that compares them.
+/// Replace the `{name}` placeholders in one path segment.
+///
+/// The result is pushed through `path_segments_mut`, which percent-encodes the
+/// whole segment — so a value containing a slash stays one segment rather than
+/// addressing a different route.
+fn substitute(segment: &str, path_params: &[(String, String)]) -> String {
+    let mut rendered = segment.to_owned();
+    for (name, value) in path_params {
+        rendered = rendered.replace(&format!("{{{name}}}"), value);
+    }
+    rendered
+}
+
 fn drop_empty_query(url: &mut Url) {
     if url.query() == Some("") {
         url.set_query(None);
@@ -140,6 +177,23 @@ pub struct SessionListParams<'a> {
     pub auth_subject: Option<&'a str>,
 }
 
+/// One call against a cassette route, assembled from that cassette's spec.
+#[derive(Debug, Default, Clone)]
+pub struct Call<'a> {
+    /// The HTTP verb, uppercased.
+    pub method: &'a str,
+    /// The public path template, `{name}` placeholders included.
+    pub path: &'a str,
+    /// Values for those placeholders, by placeholder name.
+    pub path_params: Vec<(String, String)>,
+    /// Query parameters, under their wire names.
+    pub query: Vec<(String, String)>,
+    /// Header parameters, under their wire names.
+    pub headers: Vec<(String, String)>,
+    /// A JSON request body, when the operation takes one.
+    pub body: Option<String>,
+}
+
 /// A client for one tapes API server.
 #[derive(Debug, Clone)]
 pub struct ApiClient {
@@ -151,10 +205,41 @@ impl ApiClient {
     /// Build a client against `base`.
     #[must_use]
     pub fn new(base: Url) -> Self {
-        Self {
-            http: reqwest::Client::new(),
-            base,
-        }
+        // Redirects are refused, not followed: this client speaks to exactly
+        // the server the user configured, and both the discovery document and
+        // a cassette's own spec are data that must not be able to steer a
+        // request — least of all one carrying a user-provided body — onto
+        // another host. The tapes API never redirects, so a 3xx here is
+        // always either a misconfiguration or an attempt to move the client.
+        let http = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            // Building with only a redirect policy cannot fail in practice;
+            // the fallback default client is guarded by `refuse_moved` on
+            // every response path regardless.
+            .unwrap_or_default();
+        Self { http, base }
+    }
+
+    /// Refuse a response that is a redirect or that a redirect produced.
+    ///
+    /// The primary defence is the client's `Policy::none`; this backstop makes
+    /// the property visible per-response: any 3xx errors out, and the origin
+    /// that answered must be the origin the user configured.
+    fn refuse_moved(&self, response: &reqwest::Response) -> Result<()> {
+        snafu::ensure!(
+            !response.status().is_redirection(),
+            error::ApiContractSnafu {
+                detail: "the server answered with a redirect; this client does not follow them",
+            }
+        );
+        snafu::ensure!(
+            response.url().origin() == self.base.origin(),
+            error::ApiContractSnafu {
+                detail: "the response came from a different origin than the configured server",
+            }
+        );
+        Ok(())
     }
 
     /// The base URL, for logging.
@@ -292,6 +377,31 @@ impl ApiClient {
         self.get_json(url).await
     }
 
+    /// The URL `search_spans` will call.
+    ///
+    /// Both parameters are always sent, unlike [`Self::sessions_list_url`]'s
+    /// omit-when-unset rule: the command that calls this always has a `top_k`
+    /// (its flag carries the default), and the Go command it ports sets both
+    /// unconditionally. Sending them keeps one request spelling rather than two.
+    fn search_spans_url(&self, query: &str, top_k: u64) -> Result<Url> {
+        let mut url = self.url("/v1/search/spans")?;
+        url.query_pairs_mut()
+            .append_pair("query", query)
+            .append_pair("top_k", &top_k.to_string());
+        Ok(url)
+    }
+
+    /// `GET /v1/search/spans` — semantic search over span embeddings.
+    ///
+    /// Answers 503 when the deployment has no embedder or no span embedding
+    /// store, and 503 again when the store exists but no embed pass has run —
+    /// both surface as [`Error::ApiStatus`] carrying the server's message,
+    /// which names which of the two it is.
+    pub async fn search_spans(&self, query: &str, top_k: u64) -> Result<Value> {
+        let url = self.search_spans_url(query, top_k)?;
+        self.get_json(url).await
+    }
+
     /// `GET /v1/sessions/{id}/export` — the streaming export bundle.
     ///
     /// Returns the live response rather than a buffered body: an export can be
@@ -307,6 +417,140 @@ impl ApiClient {
             url.query_pairs_mut().append_pair("detail", detail.as_str());
         }
         self.get_stream(url).await
+    }
+
+    /// `GET /v1/cassettes` — the cassette discovery document.
+    ///
+    /// Returned raw for the same reason every other read is: discovery grows
+    /// fields (`problems` and `contract_version` are both younger than the
+    /// route) and a partial model would eat them.
+    pub async fn list_cassettes(&self) -> Result<Value> {
+        let url = self.url(CASSETTES_PATH)?;
+        self.get_json(url).await
+    }
+
+    /// `GET /v1/cassettes/{name}/openapi.json` — one cassette's own document.
+    ///
+    /// `path` is the `openapi_path` discovery published rather than a path this
+    /// client builds, so core stays free to move the route. It is required to be
+    /// server-relative: `Url::join` treats an absolute URL as a replacement, so
+    /// a discovery document naming `http://elsewhere/openapi.json` would
+    /// otherwise redirect this fetch off the server the user asked for.
+    ///
+    /// `etag` is the validator from a previous fetch. The route answers a
+    /// matching `If-None-Match` with 304 and an empty body, which is what makes
+    /// revalidating a cached surface cheap.
+    pub async fn fetch_cassette_spec(&self, path: &str, etag: Option<&str>) -> Result<SpecFetch> {
+        // Discovery is data, not authority. A single leading slash keeps the
+        // request on the server that served discovery; `//host/path` is a
+        // protocol-RELATIVE reference that Url::join resolves onto a
+        // different host entirely, so it is rejected up front — and the
+        // built URL's origin is checked against the base as the backstop for
+        // any other authority-changing join.
+        if !path.starts_with('/') || path.starts_with("//") {
+            return error::CassetteSpecPathSnafu {
+                path: path.to_owned(),
+            }
+            .fail();
+        }
+        let url = self.url(path)?;
+        if url.origin() != self.base.origin() {
+            return error::CassetteSpecPathSnafu {
+                path: path.to_owned(),
+            }
+            .fail();
+        }
+
+        let mut request = self.http.get(url.clone());
+        if let Some(etag) = etag {
+            request = request.header(http::header::IF_NONE_MATCH, etag);
+        }
+        let response = request.send().await.context(error::ApiSendSnafu)?;
+        self.refuse_moved(&response)?;
+
+        // The pre-flight guards validate the URL this client BUILT; a 30x
+        // from the server can still walk the request elsewhere, and reqwest
+        // follows redirects by default. The origin that ultimately answered
+        // must be the origin the user configured — a spec served from
+        // anywhere else is refused unread. (Nothing sensitive left with the
+        // redirected request: this fetch carries no credentials.)
+        if response.url().origin() != self.base.origin() {
+            return error::CassetteSpecPathSnafu {
+                path: path.to_owned(),
+            }
+            .fail();
+        }
+
+        if response.status() == http::StatusCode::NOT_MODIFIED {
+            return Ok(SpecFetch::Unchanged);
+        }
+        let etag = response
+            .headers()
+            .get(http::header::ETAG)
+            .and_then(|value| value.to_str().ok())
+            .map(ToOwned::to_owned);
+        let document = Self::decode_json(response, &url).await?;
+
+        Ok(SpecFetch::Fetched { document, etag })
+    }
+
+    /// Make one call described by a cassette's OpenAPI document.
+    ///
+    /// The verb, path and parameter names all come from the server's own spec
+    /// rather than from anything compiled in here, which is the whole point of
+    /// the generated surface — see [`crate::cassette`].
+    pub async fn call(&self, call: &Call<'_>) -> Result<Value> {
+        let url = self.call_url(call)?;
+        let method = reqwest::Method::from_bytes(call.method.as_bytes()).map_err(|_| {
+            error::CassetteMethodSnafu {
+                method: call.method,
+            }
+            .build()
+        })?;
+
+        let mut request = self.http.request(method, url.clone());
+        for (name, value) in &call.headers {
+            request = request.header(name, value);
+        }
+        if let Some(body) = &call.body {
+            request = request
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(body.clone());
+        }
+
+        let response = request.send().await.context(error::ApiSendSnafu)?;
+        // Cassette calls carry user-provided bodies and headers, so of all
+        // requests this client makes these are the ones a redirect must never
+        // be able to move.
+        self.refuse_moved(&response)?;
+        Self::decode_json(response, &url).await
+    }
+
+    /// Build the URL for a cassette call.
+    ///
+    /// Path parameters are substituted into their segment and the segment is
+    /// then pushed through `path_segments_mut`, which percent-encodes it whole.
+    /// A value containing a slash therefore stays one segment instead of
+    /// addressing a different route.
+    fn call_url(&self, call: &Call<'_>) -> Result<Url> {
+        let mut url = self.url("/")?;
+        {
+            let mut segments = url
+                .path_segments_mut()
+                .map_err(|()| error::NotABaseSnafu.build())?;
+            segments.clear();
+            for segment in call.path.split('/').filter(|s| !s.is_empty()) {
+                segments.push(&substitute(segment, &call.path_params));
+            }
+        }
+        {
+            let mut query = url.query_pairs_mut();
+            for (name, value) in &call.query {
+                query.append_pair(name, value);
+            }
+        }
+        drop_empty_query(&mut url);
+        Ok(url)
     }
 
     /// `POST /v1/admin/seed/demo` — populate a server with demo sessions.
@@ -333,6 +577,7 @@ impl ApiClient {
             .send()
             .await
             .context(error::ApiSendSnafu)?;
+        self.refuse_moved(&response)?;
         Self::decode_json(response, &url).await
     }
 
@@ -343,6 +588,7 @@ impl ApiClient {
             .send()
             .await
             .context(error::ApiSendSnafu)?;
+        self.refuse_moved(&response)?;
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
@@ -367,6 +613,12 @@ impl ApiClient {
                 body: String::from_utf8_lossy(&body).into_owned(),
             });
         }
+        // A successful response with no body is a real answer, not a decode
+        // failure: cassette routes are free to return 204, and the core seed
+        // route is simply the only one today that never does.
+        if body.iter().all(u8::is_ascii_whitespace) {
+            return Ok(Value::Null);
+        }
         serde_json::from_slice(&body).context(error::ApiDecodeSnafu)
     }
 }
@@ -384,6 +636,64 @@ mod tests {
 
     fn base(raw: &str) -> ApiClient {
         ApiClient::new(Url::parse(raw).unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_spec_path_may_not_change_the_request_authority() {
+        // `//host/path` is protocol-relative: it survives a naive
+        // leading-slash check while Url::join moves the request onto a
+        // different host. Both the prefix guard and the origin backstop must
+        // refuse before anything is sent.
+        let client = base("http://tapes.local:8081");
+        for path in ["//evil.example/spec.json", "relative/spec.json", ""] {
+            let err = client.fetch_cassette_spec(path, None).await.unwrap_err();
+            assert!(
+                err.to_string().contains("non-relative OpenAPI path"),
+                "{path:?} produced the wrong error: {err}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_redirected_spec_fetch_may_not_leave_the_configured_origin() {
+        // The URL guards validate what this client builds; a 30x can still
+        // walk the request onto another host, and reqwest follows it. The
+        // answering origin is checked after the fact, so the foreign
+        // document is refused unread.
+        let elsewhere = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/spec.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "openapi": "3.1.0"
+            })))
+            .mount(&elsewhere)
+            .await;
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/cassettes/x/openapi.json"))
+            .respond_with(ResponseTemplate::new(302).insert_header(
+                "location",
+                format!("{}/spec.json", elsewhere.uri()).as_str(),
+            ))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let err = client
+            .fetch_cassette_spec("/v1/cassettes/x/openapi.json", None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("redirect"), "wrong error: {err}");
+        // Nothing left the configured origin: the redirect was refused, not
+        // followed and then rejected.
+        assert!(
+            elsewhere
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .is_empty(),
+            "the foreign host must never see a request"
+        );
     }
 
     #[test]
@@ -567,6 +877,66 @@ mod tests {
             .await;
 
         assert!(client_for(&server).list_traces("s1").await.is_ok());
+    }
+
+    #[test]
+    fn a_search_sends_both_parameters_under_the_servers_names() {
+        let url = base("http://127.0.0.1:8081")
+            .search_spans_url("gum glow charm", 10)
+            .unwrap();
+        assert_eq!(url.path(), "/v1/search/spans");
+        let query = url.query().unwrap();
+        assert!(
+            query.contains("query=gum+glow+charm"),
+            "the query must be form-encoded: {query}",
+        );
+        assert!(query.contains("top_k=10"), "got: {query}");
+    }
+
+    #[tokio::test]
+    async fn a_search_response_is_passed_through_verbatim() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/search/spans"))
+            .and(query_param("query", "hooks"))
+            .and(query_param("top_k", "5"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"query":"hooks","count":1,"results":[{"trace_id":"t-1","a_new_field":1}]}"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let got = client_for(&server).search_spans("hooks", 5).await.unwrap();
+
+        assert_eq!(got["count"], 1);
+        assert_eq!(got["results"][0]["a_new_field"], 1);
+    }
+
+    #[tokio::test]
+    async fn an_unconfigured_span_search_surfaces_the_servers_explanation() {
+        // 503 is the "no embedder" / "no embed pass has run" answer, and its
+        // body is the only thing that says which — losing it would leave the
+        // user with a bare status and no next step.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/search/spans"))
+            .respond_with(ResponseTemplate::new(503).set_body_string(
+                r#"{"error":"span search is not configured: embedder and span embedding store are required"}"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let err = client_for(&server)
+            .search_spans("hooks", 5)
+            .await
+            .unwrap_err();
+
+        let rendered = format!("{err}");
+        assert!(rendered.contains("503"), "got: {rendered}");
+        assert!(
+            rendered.contains("span search is not configured"),
+            "got: {rendered}",
+        );
     }
 
     #[tokio::test]

@@ -27,10 +27,14 @@ repository = "https://github.com/papercomputeco/tapesctl"
 # both tapesctl and paperd so the two capture paths cannot drift apart.
 # Pinned by revision like any other vendored contract.
 #
-tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "99ff2e767f452319384226dca23dba4395b7051e" }
+tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "25268328b7b14063c18762cf9635f2876dd7701c" }
 
 # --- CLI ---
-clap = { version = "4", features = ["derive", "env"] }
+# `string` lets a Command/Arg be named by an owned String rather than only by a
+# `&'static str`. The generated cassette surface is built from a document fetched
+# at runtime, so every one of its names is owned; without this feature that
+# surface cannot be expressed at all.
+clap = { version = "4", features = ["derive", "env", "string"] }
 anstream = "1"
 anstyle = "1"
 

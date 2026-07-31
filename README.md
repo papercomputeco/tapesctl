@@ -11,9 +11,7 @@ attribution, transcript tailing, and the capture envelope) — which paperd also
 consumes, so capture fidelity is identical between `tapesctl start` and
 `paper start`.
 
-See the "Tapes and Cassettes" RFC for the full design. The *generated*
-`<cassette> <method>` surface is still to come, with `/v1/cassettes` discovery
-and OpenAPI client generation (Track 4).
+See the "Tapes and Cassettes" RFC for the full design.
 
 ## Capture
 
@@ -33,6 +31,24 @@ tool_use forked which subagent. A capture without it records every call a
 subagent made but renders that work as flat dispatch text instead of nested
 rows. Pass `--no-transcripts` only when another capture client is already
 tailing the same tree.
+
+While a harness is running it owns the terminal, so `start` writes its
+diagnostics to a file instead of the screen — a stray log line lands in the
+middle of a TUI frame. The path is printed before the harness launches and
+again when it exits:
+
+```bash
+~/.tapes/logs/start-<timestamp>-<pid>.log
+```
+
+`RUST_LOG` sets the level as usual. Pass `-v` (before the subcommand) to stream
+to stderr instead of a file, accepting what that does to the display:
+
+```bash
+tapesctl -v start claude --tapes-url http://localhost:8081
+```
+
+Every other command logs to stderr as before.
 
 ```bash
 tapesctl sync    # backstop: sweep transcripts no live tailer saw
@@ -59,8 +75,81 @@ takes `--tapes-url`, falling back to `TAPES_URL`.
 ```bash
 tapesctl export <session-id> -o bundle.jsonl
 tapesctl seed                              # demo data for a fresh server
-tapesctl skill sync <name> --claude        # copy an authored skill into place
 ```
+
+## Searching
+
+```bash
+tapesctl search "how to configure logging"
+tapesctl search "error handling patterns" --top 10
+tapesctl search "gum glow charm" --quiet   # session ids, one per line
+```
+
+Hits are individual main-conversation LLM spans with their trace and turn
+context — "find the turn where X happened". This needs a server with span
+embeddings written (`tapes serve`, its embed worker, or the `tapes dev
+embed-spans` backfill); a deployment without them answers `503` rather than an
+empty result set.
+
+`--quiet` prints bare session ids in score order, which is what `skill generate`
+takes as arguments:
+
+```bash
+tapesctl skill generate $(tapesctl search "charm CLI" --quiet --top 1) --name charm-patterns
+```
+
+## Skills
+
+A skill is a markdown file with frontmatter under `~/.tapes/skills/`. Generate
+one from captured sessions, list what you have, and install it where an agent
+will look:
+
+```bash
+tapesctl skill generate <session-id> --name debug-react-hooks
+tapesctl skill generate --search "react hooks" --search-top 3 --name react-debug
+tapesctl skill generate <session-id> --name morning-work --since 2026-02-17
+tapesctl skill list --type workflow
+tapesctl skill sync debug-react-hooks --claude   # copy it into place
+```
+
+`generate` talks to two servers: `--tapes-url` for the session transcript, and
+an LLM provider for the extraction. The provider is `--provider`
+(`openai`, `anthropic`, or `ollama`), keyed from `--api-key` or the provider's
+own environment variable — prefer the variable, since an argument is visible in
+the process list. `--preview` renders the skill without writing it.
+
+Skill files are written `0600`, and a skills path that resolves outside the
+directory you selected is refused rather than followed.
+## Cassettes
+
+A tapes deployment can serve **cassettes** — independently built API extensions
+mounted under `/v1/cassettes/<name>`. `tapesctl` discovers whichever ones your
+server serves and turns them into commands, so the generated nouns and their
+`--help` *are* the cassette listing:
+
+```bash
+tapesctl --help                            # lists the cassettes this server serves
+tapesctl hello-world --help                # lists that cassette's methods
+tapesctl hello-world get-hello
+tapesctl hello-world create-hello --body '{"hello":"hi"}'
+tapesctl hello-world create-hello --body @row.json
+```
+
+Method names are each operation's `operationId`, kebab-cased. Path parameters
+become positional arguments and query parameters become flags, both taken from
+the cassette's own OpenAPI document — so a cassette this binary has never heard
+of still gets a correct, typed-ish command line.
+
+Discovery is a **runtime** step, not a build-time one: which cassettes exist is
+deployment configuration, so a compiled-in list would be one deployment's
+cassettes frozen into everyone's binary. The discovered surface is cached per
+server and revalidated on a timer (`ETag`/`If-None-Match`), so `--help` stays
+instant and keeps working offline. Point it elsewhere with `--tapes-url` /
+`TAPES_URL`; override the cache location with `TAPESCTL_CACHE_DIR`.
+
+Without a reachable server there are simply no cassette nouns — the commands
+above this section are unaffected. Deploying and configuring cassettes is an
+operator task and is not part of this surface.
 
 ## Install
 
@@ -108,6 +197,8 @@ publish to `download.tapes.dev` via the `release` / `nightly` Dagger functions.
   - `start/` — the just-in-time capture proxy (the wire lane).
   - `transcript/` — the transcript lane: live tailer and `sync` sweep.
   - `api/` — the `<resource> <method>` read client.
+  - `cassette/` — the generated `<cassette> <method>` surface: discovery, the
+    spec reducer, the cache, and clap synthesis.
   - `ports/` — commands ported from the Go `tapes` CLI.
 
 Shared client-side harness knowledge lives in its own repository,

@@ -36,6 +36,10 @@
 //! response past the raw cap, a request body that is not JSON — the turn is
 //! dropped from capture with a warning and the proxy keeps forwarding. The
 //! harness must never fail because telemetry could not be recorded.
+//!
+//! Bodiless requests are the exception, and they are logged at debug rather
+//! than warn: a GET has nothing to capture by construction, so reporting it as
+//! a degradation would bury the cases above in noise.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -158,6 +162,13 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
                 .and_then(|v| v.to_str().ok()),
             codex_marker: marker.as_deref(),
             codex_route: state.codex_lane,
+            // The rollout the request itself names — the only evidence that
+            // separates threads inside one Codex process. First present
+            // header wins, in the crate's declared order.
+            codex_rollout_id: tapes_harnesses::attribution::codex::CODEX_ROLLOUT_ID_HEADERS
+                .iter()
+                .find_map(|name| parts.headers.get(*name).and_then(|v| v.to_str().ok()))
+                .filter(|value| !value.trim().is_empty()),
         },
     )
     .await;
@@ -492,6 +503,24 @@ impl TurnCapture {
         // the bytes verbatim in a JSON document.
         let request = match RawValue::from_string(String::from_utf8_lossy(body).into_owned()) {
             Ok(request) => request,
+            // An empty body on a method that never carries one is not a
+            // defect: it is what every GET on this endpoint looks like, and a
+            // harness makes several of those (model listing, auth probes) per
+            // session. Warning on them trains the reader to ignore the one
+            // severity that means "a turn you expected to see was dropped".
+            // But an empty body on a turn-shaped method (POST/PUT/PATCH) IS
+            // that dropped turn, so it keeps the warning.
+            Err(_)
+                if body.is_empty()
+                    && !matches!(self.meta.method.as_str(), "POST" | "PUT" | "PATCH") =>
+            {
+                debug!(
+                    request_id = %self.meta.request_id,
+                    method = %self.meta.method,
+                    "request had no body; nothing to capture",
+                );
+                return;
+            }
             Err(err) => {
                 warn!(
                     error = %err,
