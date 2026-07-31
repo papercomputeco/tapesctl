@@ -29,6 +29,7 @@ use tracing::info;
 
 use crate::cli::SkillSyncArgs;
 use crate::error::{Result, error};
+use crate::ports::skill_paths::{validate_name, write_contained};
 
 /// Where authored skills live.
 #[must_use]
@@ -77,20 +78,6 @@ pub fn destination(home: &Path, cwd: &Path, claude: bool, local: bool) -> Destin
     }
 }
 
-/// A skill name is a bare file stem. Anything that could steer the joins
-/// below outside the skills directories — separators, `..`, an empty or
-/// all-dots name — is rejected before it touches the filesystem, because
-/// the name feeds a read, a write, AND a chmod.
-fn validate_name(name: &str) -> Result<()> {
-    let simple = !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-        && !name.chars().all(|c| c == '.');
-    snafu::ensure!(simple, error::SkillNameSnafu { name });
-    Ok(())
-}
-
 /// Copy `<source_dir>/<name>.md` into `destination`, returning the written path.
 pub fn sync(name: &str, source_dir: &Path, destination: &Destination) -> Result<PathBuf> {
     validate_name(name)?;
@@ -102,76 +89,8 @@ pub fn sync(name: &str, source_dir: &Path, destination: &Destination) -> Result<
     std::fs::create_dir_all(&destination.dir).context(error::SkillWriteSnafu {
         path: destination.dir.clone(),
     })?;
-    // A repository can pre-create the project-local skills directory as a
-    // symlink pointing anywhere; following it would put the write AND the
-    // chmod on a file outside the tree the user selected. Resolve the
-    // directory that actually exists on disk and require it to still sit
-    // beneath the chosen base.
-    let resolved_dir = destination
-        .dir
-        .canonicalize()
-        .context(error::SkillWriteSnafu {
-            path: destination.dir.clone(),
-        })?;
-    let resolved_base = destination
-        .base
-        .canonicalize()
-        .context(error::SkillWriteSnafu {
-            path: destination.base.clone(),
-        })?;
-    snafu::ensure!(
-        resolved_dir.starts_with(&resolved_base),
-        error::SkillDestinationSnafu {
-            path: destination.dir.clone(),
-        }
-    );
-    let target = resolved_dir.join(format!("{name}.md"));
-    // The final component cannot be handled with a look-then-write: a racer
-    // replacing the target with a symlink between the check and the write
-    // would route both the bytes and the chmod elsewhere. Instead the old
-    // file is removed and the new one is created with O_EXCL — which never
-    // follows a symlink — so a racer's link makes the create FAIL rather
-    // than redirect, and the permissions are set through the open handle,
-    // never by path.
-    match std::fs::remove_file(&target) {
-        Ok(()) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(_) => {
-            return error::SkillDestinationSnafu {
-                path: target.clone(),
-            }
-            .fail();
-        }
-    }
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&target)
-        .context(error::SkillWriteSnafu {
-            path: target.clone(),
-        })?;
-    restrict_permissions(&file, &target)?;
-    use std::io::Write as _;
-    file.write_all(&contents).context(error::SkillWriteSnafu {
-        path: target.clone(),
-    })?;
+    let target = write_contained(&destination.dir, &destination.base, name, &contents)?;
     Ok(target)
-}
-
-/// Narrow the open file to owner-only, through its handle.
-#[cfg(unix)]
-fn restrict_permissions(file: &std::fs::File, path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    file.set_permissions(std::fs::Permissions::from_mode(0o600))
-        .context(error::SkillWriteSnafu {
-            path: path.to_path_buf(),
-        })
-}
-
-/// No-op off Unix, where the mode bits have no equivalent.
-#[cfg(not(unix))]
-fn restrict_permissions(_file: &std::fs::File, _path: &Path) -> Result<()> {
-    Ok(())
 }
 
 /// Run one `skill sync`.

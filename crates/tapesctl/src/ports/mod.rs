@@ -1,8 +1,14 @@
 //! Commands ported from the Go `tapes` CLI.
 //!
-//! These three exist here so a user of the open client never has to install the
+//! These exist here so a user of the open client never has to install the
 //! operator binary to do ordinary things: pull a session out, fill a fresh
-//! server with something to look at, put a skill where an agent will find it.
+//! server with something to look at, find the turn where something happened,
+//! author a skill from it, and put that skill where an agent will find it.
+//!
+//! `search` and the `skill` commands are expected to move again: they are
+//! client-shaped surfaces over the API rather than core client plumbing, and
+//! the plan is for them to be extracted as cassettes once that surface exists.
+//! They live here in the meantime so nothing is lost between the two homes.
 //!
 //! They are *thin* ports on purpose. Where the Go command's behaviour is a
 //! contract — the export bundle's bytes, the seed route's request, the skill
@@ -15,5 +21,12 @@
 //! implementations in hand.
 
 pub mod export;
+pub mod search;
 pub mod seed;
 pub mod skill;
+pub mod skill_document;
+pub mod skill_generate;
+pub mod skill_list;
+pub mod skill_llm;
+pub mod skill_paths;
+pub mod skill_transcript;
