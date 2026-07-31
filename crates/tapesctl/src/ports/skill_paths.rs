@@ -54,16 +54,10 @@ pub fn contained_target(dir: &Path, base: &Path, name: &str) -> Result<PathBuf> 
         }
     );
 
-    let target = resolved_dir.join(format!("{name}.md"));
-    if let Ok(meta) = std::fs::symlink_metadata(&target) {
-        snafu::ensure!(
-            !meta.file_type().is_symlink(),
-            error::SkillDestinationSnafu {
-                path: target.clone(),
-            }
-        );
-    }
-    Ok(target)
+    // No lstat check on the final component here: it would be a
+    // look-then-act race. `write_contained` handles pre-planted and raced
+    // symlinks alike — remove, then create with O_EXCL, which never follows.
+    Ok(resolved_dir.join(format!("{name}.md")))
 }
 
 /// Narrow a written skill to owner-only.
@@ -190,7 +184,9 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_symlinked_target_file_is_refused() {
+    fn a_symlinked_target_is_replaced_never_followed() {
+        // A pre-planted link is the racer's move; the O_EXCL writer replaces
+        // the link itself and the file it pointed at survives untouched.
         let base = tempfile::tempdir().unwrap();
         let victim = base.path().join("victim.txt");
         std::fs::write(&victim, "precious").unwrap();
@@ -198,8 +194,14 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::os::unix::fs::symlink(&victim, dir.join("review.md")).unwrap();
 
-        let err = contained_target(&dir, base.path(), "review").unwrap_err();
-        assert!(err.to_string().contains("resolves outside"), "got: {err}");
+        let written = write_contained(&dir, base.path(), "review", b"body").unwrap();
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "precious");
+        assert!(
+            !std::fs::symlink_metadata(&written)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_to_string(&written).unwrap(), "body");
     }
 }
