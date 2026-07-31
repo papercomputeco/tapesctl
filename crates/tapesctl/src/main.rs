@@ -9,12 +9,19 @@
 use std::process::ExitCode;
 
 use clap::Parser;
-use tapesctl::cli::Cli;
+use tapesctl::cli::{Cli, Command};
 
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
-    tapesctl::init_tracing(cli.verbose);
+    // Destination before dispatch, because a command that hands the terminal to
+    // a harness must never trace onto it. See `tapesctl::logging`.
+    tapesctl::logging::init(
+        cli.command
+            .as_ref()
+            .is_some_and(Command::hands_over_terminal),
+        cli.verbose,
+    );
 
     match tapesctl::run(cli).await {
         Ok(()) => ExitCode::SUCCESS,

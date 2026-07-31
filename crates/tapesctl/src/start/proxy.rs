@@ -36,6 +36,10 @@
 //! response past the raw cap, a request body that is not JSON — the turn is
 //! dropped from capture with a warning and the proxy keeps forwarding. The
 //! harness must never fail because telemetry could not be recorded.
+//!
+//! Bodiless requests are the exception, and they are logged at debug rather
+//! than warn: a GET has nothing to capture by construction, so reporting it as
+//! a degradation would bury the cases above in noise.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -492,6 +496,19 @@ impl TurnCapture {
         // the bytes verbatim in a JSON document.
         let request = match RawValue::from_string(String::from_utf8_lossy(body).into_owned()) {
             Ok(request) => request,
+            // An *empty* body is not a defect and never will be capturable: it
+            // is what every GET on this endpoint looks like, and a harness makes
+            // several of those (model listing, auth probes) per session. Warning
+            // on them trains the reader to ignore the one severity that means
+            // "a turn you expected to see was dropped". A non-empty body that
+            // does not parse is the real thing that warning is for.
+            Err(_) if body.is_empty() => {
+                debug!(
+                    request_id = %self.meta.request_id,
+                    "request had no body; nothing to capture",
+                );
+                return;
+            }
             Err(err) => {
                 warn!(
                     error = %err,
