@@ -71,8 +71,23 @@ pub fn destination(home: &Path, cwd: &Path, claude: bool, local: bool) -> Destin
     }
 }
 
+/// A skill name is a bare file stem. Anything that could steer the joins
+/// below outside the skills directories — separators, `..`, an empty or
+/// all-dots name — is rejected before it touches the filesystem, because
+/// the name feeds a read, a write, AND a chmod.
+fn validate_name(name: &str) -> Result<()> {
+    let simple = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        && !name.chars().all(|c| c == '.');
+    snafu::ensure!(simple, error::SkillNameSnafu { name });
+    Ok(())
+}
+
 /// Copy `<source_dir>/<name>.md` into `destination`, returning the written path.
 pub fn sync(name: &str, source_dir: &Path, destination: &Destination) -> Result<PathBuf> {
+    validate_name(name)?;
     let source = source_dir.join(format!("{name}.md"));
     let contents = std::fs::read(&source).context(error::SkillReadSnafu {
         path: source.clone(),
@@ -175,6 +190,46 @@ mod tests {
             destination(&home, &cwd, true, true).label,
             "project, claude"
         );
+    }
+
+    #[test]
+    fn a_traversal_name_is_refused_before_any_filesystem_touch() {
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        // A real file sitting one level above the skills dir: the exact
+        // thing a `../` name would reach.
+        std::fs::write(source.path().join("secret.md"), "leak").unwrap();
+        let skills = source.path().join("skills");
+        std::fs::create_dir_all(&skills).unwrap();
+
+        let destination = Destination {
+            dir: target.path().to_path_buf(),
+            label: "global",
+        };
+        for name in [
+            "../secret",
+            "..",
+            "a/b",
+            "a\\b",
+            ".",
+            "",
+            "sub/../../secret",
+        ] {
+            let err = sync(name, &skills, &destination).unwrap_err();
+            assert!(
+                err.to_string().contains("invalid skill name"),
+                "{name:?} produced the wrong error: {err}"
+            );
+        }
+        // Nothing was written anywhere.
+        assert!(std::fs::read_dir(target.path()).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn ordinary_stems_still_pass_validation() {
+        for name in ["review", "code-review", "v1.2_final"] {
+            assert!(validate_name(name).is_ok(), "{name:?} should be valid");
+        }
     }
 
     #[test]

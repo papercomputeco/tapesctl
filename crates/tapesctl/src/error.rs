@@ -276,6 +276,16 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    /// The skill name would escape the skills directory.
+    #[snafu(display(
+        "invalid skill name {name:?}: a skill name is a bare file stem \
+         (letters, digits, `.`, `_`, `-`), never a path"
+    ))]
+    SkillName {
+        /// The rejected name.
+        name: String,
+    },
+
     /// The named skill could not be read.
     #[snafu(display("could not read the skill at {}", path.display()))]
     SkillRead {
