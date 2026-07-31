@@ -86,6 +86,11 @@ where
     let mut count: u8 = 0;
     for argument in argv {
         let argument = argument.as_ref();
+        // Everything after a bare `--` is the harness's, exactly as in
+        // `discovery_url`: a harness's own -v must not raise tapesctl's.
+        if argument == "--" {
+            break;
+        }
         if argument == "--verbose" {
             count = count.saturating_add(1);
         } else if argument.len() > 1
@@ -561,6 +566,18 @@ mod tests {
         assert_eq!(
             discovery_url(["tapesctl", "summary", "reports", "--tapes-url=http://y"]),
             Some("http://y".to_owned()),
+        );
+    }
+
+    #[test]
+    fn verbosity_after_the_separator_belongs_to_the_harness() {
+        assert_eq!(
+            verbosity(["tapesctl", "start", "claude", "--", "-vv", "--verbose"]),
+            0
+        );
+        assert_eq!(
+            verbosity(["tapesctl", "-v", "start", "claude", "--", "-vv"]),
+            1
         );
     }
 
