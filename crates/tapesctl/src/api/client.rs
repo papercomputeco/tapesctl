@@ -379,13 +379,25 @@ impl ApiClient {
     /// matching `If-None-Match` with 304 and an empty body, which is what makes
     /// revalidating a cached surface cheap.
     pub async fn fetch_cassette_spec(&self, path: &str, etag: Option<&str>) -> Result<SpecFetch> {
-        if !path.starts_with('/') {
+        // Discovery is data, not authority. A single leading slash keeps the
+        // request on the server that served discovery; `//host/path` is a
+        // protocol-RELATIVE reference that Url::join resolves onto a
+        // different host entirely, so it is rejected up front — and the
+        // built URL's origin is checked against the base as the backstop for
+        // any other authority-changing join.
+        if !path.starts_with('/') || path.starts_with("//") {
             return error::CassetteSpecPathSnafu {
                 path: path.to_owned(),
             }
             .fail();
         }
         let url = self.url(path)?;
+        if url.origin() != self.base.origin() {
+            return error::CassetteSpecPathSnafu {
+                path: path.to_owned(),
+            }
+            .fail();
+        }
 
         let mut request = self.http.get(url.clone());
         if let Some(etag) = etag {
@@ -542,6 +554,22 @@ mod tests {
 
     fn base(raw: &str) -> ApiClient {
         ApiClient::new(Url::parse(raw).unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_spec_path_may_not_change_the_request_authority() {
+        // `//host/path` is protocol-relative: it survives a naive
+        // leading-slash check while Url::join moves the request onto a
+        // different host. Both the prefix guard and the origin backstop must
+        // refuse before anything is sent.
+        let client = base("http://tapes.local:8081");
+        for path in ["//evil.example/spec.json", "relative/spec.json", ""] {
+            let err = client.fetch_cassette_spec(path, None).await.unwrap_err();
+            assert!(
+                err.to_string().contains("non-relative OpenAPI path"),
+                "{path:?} produced the wrong error: {err}"
+            );
+        }
     }
 
     #[test]

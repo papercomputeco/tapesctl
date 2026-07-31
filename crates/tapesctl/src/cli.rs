@@ -44,6 +44,12 @@ where
 
     while let Some(argument) = arguments.next() {
         let argument = argument.as_ref();
+        // Everything after a bare `--` belongs to the launched harness, not
+        // to tapesctl — a harness flag that happens to be spelled
+        // `--tapes-url` must not steer discovery.
+        if argument == "--" {
+            break;
+        }
         let value = if let Some(value) = argument.strip_prefix(&joined) {
             Some(value.to_owned())
         } else if argument == TAPES_URL_FLAG {
@@ -555,6 +561,21 @@ mod tests {
         assert_eq!(
             discovery_url(["tapesctl", "summary", "reports", "--tapes-url=http://y"]),
             Some("http://y".to_owned()),
+        );
+    }
+
+    #[test]
+    fn flags_after_the_separator_belong_to_the_harness_not_discovery() {
+        assert_eq!(
+            discovery_url([
+                "tapesctl",
+                "start",
+                "claude",
+                "--",
+                "--tapes-url",
+                "http://evil"
+            ]),
+            std::env::var(TAPES_URL_ENV).ok().filter(|v| !v.is_empty()),
         );
     }
 
