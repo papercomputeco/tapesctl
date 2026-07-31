@@ -52,6 +52,26 @@ pub struct StartArgs {
     /// Base URL of the tapes ingest server. Falls back to `TAPES_URL`.
     #[arg(long, env = "TAPES_URL")]
     pub tapes_url: Option<String>,
+
+    /// Where to forward the harness's LLM traffic. Defaults to the harness's
+    /// own provider API, so the harness behaves exactly as it would unproxied.
+    #[arg(long, env = "TAPES_UPSTREAM")]
+    pub upstream: Option<String>,
+
+    /// Base URL of the web console, used to print a link to the captured
+    /// session. Without it the session id is printed on its own.
+    #[arg(long, env = "TAPES_WEB_URL")]
+    pub web_url: Option<String>,
+
+    /// Org id to stamp on captured turns. Must be a UUID; empty (the default)
+    /// selects the server's local sentinel org.
+    #[arg(long, env = "TAPES_ORG_ID")]
+    pub org_id: Option<String>,
+
+    /// Acting subject to stamp on captured turns. Defaults to
+    /// `local:<username>`; agents and CI override it (e.g. `gardener-ci`).
+    #[arg(long, env = "TAPES_AUTH_SUBJECT")]
+    pub auth_subject: Option<String>,
 }
 
 /// `tapesctl plugin` subcommands.

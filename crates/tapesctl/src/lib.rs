@@ -3,6 +3,7 @@
 
 pub mod cli;
 pub mod error;
+pub mod start;
 
 use cli::{Cli, Command, PluginCommand, StartArgs};
 pub use error::{Error, Result};
@@ -57,18 +58,12 @@ pub async fn run(cli: Cli) -> Result<()> {
 
 /// Launch a harness under a just-in-time capture proxy.
 ///
-/// Track 1: spawn the harness with launch env from `tapes_harnesses::launch`,
-/// stand up the dumb byte-forwarding proxy, stamp the `tapes_harnesses::envelope`
-/// onto every turn, and POST `TurnPayload`s to the tapes ingest server.
+/// Spawns the harness with launch env from `tapes_harnesses::launch`, stands up
+/// the dumb byte-forwarding proxy, stamps the `tapes_harnesses::envelope` onto
+/// every turn, and POSTs `TurnPayload`s to the tapes ingest server. See
+/// [`start`] for the lifetime and the division of knowledge.
 async fn start(args: StartArgs) -> Result<()> {
-    tracing::info!(
-        harness = %args.harness,
-        envelope_prefix = tapes_harnesses::envelope::HEADER_PREFIX,
-        "tapesctl start is not implemented yet",
-    );
-    Err(Error::NotImplemented {
-        what: "tapesctl start",
-    })
+    start::run(args).await
 }
 
 /// Manage harness capture plugins (backed by `tapes-harness` plugin assets).

@@ -27,7 +27,7 @@ repository = "https://github.com/papercomputeco/tapesctl"
 # both tapesctl and paperd so the two capture paths cannot drift apart.
 # Pinned by revision like any other vendored contract.
 #
-tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "85582db0607798ac09fa03f1e92cb8c5985ca0e0" }
+tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "99ff2e767f452319384226dca23dba4395b7051e" }
 
 # --- CLI ---
 clap = { version = "4", features = ["derive", "env"] }
@@ -39,9 +39,20 @@ tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"
 bytes = "1"
 
-# --- HTTP (JIT proxy + API client; wired in during Track 1) ---
+# --- HTTP (JIT proxy + API client) ---
+# reqwest is built WITHOUT any compression feature on purpose. With one
+# enabled it transparently decompresses a `Content-Encoding: gzip` response
+# and strips the header — which would silently break two invariants at once:
+# the proxy would hand the harness bytes that no longer match the encoding it
+# forwarded, and the captured `raw_response` would no longer be the verbatim
+# upstream bytes. Passing the encoded bytes through untouched, and telling
+# ingest which encoding they are in, keeps both honest. paperd omits it for
+# the same reason.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "http2", "json"] }
+axum = { version = "0.7", default-features = false, features = ["http1", "http2", "tokio"] }
 http = "1"
+http-body = "1"
+http-body-util = "0.1"
 base64 = "0.22"
 percent-encoding = "2"
 url = { version = "2", features = ["serde"] }
