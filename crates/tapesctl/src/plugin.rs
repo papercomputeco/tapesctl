@@ -88,33 +88,45 @@ pub fn install(artifact: &PluginArtifact, home: &Path) -> Result<PathBuf> {
 
     let target = resolved_dir.join(artifact.file_name());
     // Reinstalling must replace the file — that is how an artifact is upgraded
-    // — but the replacement cannot be a look-then-write. Unlink first, then
-    // create with `O_EXCL`, which never follows a symlink: a racer who plants a
-    // link between the two steps loses the create instead of redirecting the
-    // bytes.
-    match std::fs::remove_file(&target) {
-        Ok(()) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(_) => {
-            return error::PluginDestinationSnafu {
-                path: target.clone(),
-            }
-            .fail();
-        }
-    }
+    // — but neither a look-then-write nor an unlink-then-write will do. The
+    // first can be raced through a planted symlink; the second removes a
+    // WORKING plugin before its replacement exists, so any later failure
+    // leaves the harness with nothing (or a partial file). So: write the
+    // whole replacement to a sibling temp file created with `O_EXCL` (which
+    // never follows a symlink), set its permissions through the handle, and
+    // only then rename it over the target — an atomic swap with no window in
+    // which the plugin is absent or half-written. A rename replaces even a
+    // planted symlink itself rather than writing through it.
+    let staged = resolved_dir.join(format!(
+        ".{}.tapesctl-install-{}",
+        artifact.file_name(),
+        std::process::id()
+    ));
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(&target)
+        .open(&staged)
         .context(error::PluginWriteSnafu {
-            path: target.clone(),
+            path: staged.clone(),
         })?;
-    restrict_permissions(&file, &target)?;
+    restrict_permissions(&file, &staged)?;
     use std::io::Write as _;
-    file.write_all(artifact.contents().as_bytes())
+    let staged_result = file
+        .write_all(artifact.contents().as_bytes())
+        .and_then(|()| file.sync_all())
         .context(error::PluginWriteSnafu {
-            path: target.clone(),
-        })?;
+            path: staged.clone(),
+        })
+        .and_then(|()| {
+            std::fs::rename(&staged, &target).context(error::PluginWriteSnafu {
+                path: target.clone(),
+            })
+        });
+    if staged_result.is_err() {
+        // Best-effort cleanup: the working plugin was never touched.
+        let _ = std::fs::remove_file(&staged);
+    }
+    staged_result?;
     Ok(target)
 }
 
@@ -262,6 +274,15 @@ mod tests {
             std::fs::read_to_string(&second).unwrap(),
             PI_GATEWAY_EXTENSION.contents(),
         );
+        // The staged temp file must not survive a successful swap: the
+        // extension directory is auto-loaded, and a leftover would be one
+        // upgrade away from being executed.
+        let strays: Vec<_> = std::fs::read_dir(second.parent().unwrap())
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with('.'))
+            .collect();
+        assert!(strays.is_empty(), "staging residue: {strays:?}");
     }
 
     #[cfg(unix)]
