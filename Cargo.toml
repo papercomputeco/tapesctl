@@ -27,7 +27,7 @@ repository = "https://github.com/papercomputeco/tapesctl"
 # both tapesctl and paperd so the two capture paths cannot drift apart.
 # Pinned by revision like any other vendored contract.
 #
-tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "b0347e2d7ff82a361694a6e785f79e6a67d5ab43" }
+tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "2ff994adf4ee81bcc27ef2854e4c48b3735ea5bf" }
 
 # --- CLI ---
 clap = { version = "4", features = ["derive", "env"] }

@@ -316,6 +316,15 @@ struct ResponseTee<S> {
     inner: std::pin::Pin<Box<S>>,
     /// `None` once finalized. Taking it is what makes finalize-once true.
     tx: Option<UnboundedSender<TeeEvent>>,
+    /// Bytes cloned into the capture channel so far. The channel is
+    /// unbounded, so the bound must live at the SENDER: without it a fast,
+    /// large response queues every chunk clone ahead of the capture task's
+    /// cap check, and the queue itself becomes the memory blowup.
+    teed_bytes: usize,
+    /// Set once the cap is crossed; one final over-cap chunk is sent (which
+    /// deterministically flips the capture task's overflow handling) and
+    /// nothing further is cloned. Forwarding is untouched.
+    capture_capped: bool,
 }
 
 impl<S> ResponseTee<S> {
@@ -323,6 +332,8 @@ impl<S> ResponseTee<S> {
         Self {
             inner: Box::pin(stream),
             tx: Some(tx),
+            teed_bytes: 0,
+            capture_capped: false,
         }
     }
 
@@ -348,9 +359,17 @@ where
             Poll::Ready(Some(Ok(chunk))) => {
                 // One non-blocking send, then straight back to the consumer.
                 // A failed send means the capture task is gone, which must not
-                // interrupt the stream the user is reading.
-                if let Some(tx) = self.tx.as_ref() {
-                    let _ = tx.send(TeeEvent::Chunk(chunk.clone()));
+                // interrupt the stream the user is reading. Past the raw cap,
+                // nothing more is cloned — the last (over-cap) send is what
+                // tells the capture task to drop-and-mark.
+                if !self.capture_capped {
+                    if let Some(tx) = self.tx.as_ref() {
+                        let _ = tx.send(TeeEvent::Chunk(chunk.clone()));
+                    }
+                    self.teed_bytes = self.teed_bytes.saturating_add(chunk.len());
+                    if self.teed_bytes > RAW_RESPONSE_CAP {
+                        self.capture_capped = true;
+                    }
                 }
                 Poll::Ready(Some(Ok(chunk)))
             }
@@ -609,6 +628,34 @@ mod tests {
             "application/json".parse().unwrap(),
         );
         assert!(!is_event_stream(&headers));
+    }
+
+    // The queue is unbounded, so the byte bound must hold at the sender: a
+    // response far past the raw cap must stop being cloned once one over-cap
+    // chunk has been sent (that chunk is what flips the capture task into
+    // drop-and-mark), while forwarding continues untouched.
+    #[tokio::test]
+    async fn tee_stops_cloning_past_the_raw_cap() {
+        use futures_util::StreamExt;
+        let big: &'static [u8] = Box::leak(vec![0u8; 4 * 1024 * 1024].into_boxed_slice());
+        // 5 chunks of 4 MiB = 20 MiB forwarded; cap is 8 MiB.
+        let (mut tee, mut rx) = tee_of(vec![big, big, big, big, big]);
+        let mut forwarded = 0usize;
+        while let Some(chunk) = tee.next().await {
+            forwarded += chunk.unwrap().len();
+        }
+        drop(tee);
+        let (teed, _finishes) = drain_events(&mut rx);
+        assert_eq!(forwarded, 20 * 1024 * 1024, "forwarding must be untouched");
+        assert!(
+            teed.len() <= RAW_RESPONSE_CAP + 4 * 1024 * 1024,
+            "the capture queue must be bounded by the cap plus one chunk, got {} bytes",
+            teed.len(),
+        );
+        assert!(
+            teed.len() > RAW_RESPONSE_CAP,
+            "exactly one over-cap chunk must be sent so the capture task marks the overflow",
+        );
     }
 
     // --- the tee ---------------------------------------------------------
