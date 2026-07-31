@@ -337,6 +337,25 @@ impl<S> ResponseTee<S> {
         }
     }
 
+    /// One non-blocking send, then straight back to the consumer. A failed
+    /// send means the capture task is gone, which must not interrupt the
+    /// stream the user is reading. Past the raw cap, nothing more is cloned —
+    /// the last (over-cap) send is what tells the capture task to
+    /// drop-and-mark, and the sender-side accounting is what bounds the
+    /// unbounded channel's memory.
+    fn tee_chunk(&mut self, chunk: &Bytes) {
+        if self.capture_capped {
+            return;
+        }
+        if let Some(tx) = self.tx.as_ref() {
+            let _ = tx.send(TeeEvent::Chunk(chunk.clone()));
+        }
+        self.teed_bytes = self.teed_bytes.saturating_add(chunk.len());
+        if self.teed_bytes > RAW_RESPONSE_CAP {
+            self.capture_capped = true;
+        }
+    }
+
     fn finalize(&mut self, reason: &'static str) {
         if let Some(tx) = self.tx.take() {
             let _ = tx.send(TeeEvent::Finish(reason));
@@ -357,20 +376,7 @@ where
         use std::task::Poll;
         match self.inner.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(chunk))) => {
-                // One non-blocking send, then straight back to the consumer.
-                // A failed send means the capture task is gone, which must not
-                // interrupt the stream the user is reading. Past the raw cap,
-                // nothing more is cloned — the last (over-cap) send is what
-                // tells the capture task to drop-and-mark.
-                if !self.capture_capped {
-                    if let Some(tx) = self.tx.as_ref() {
-                        let _ = tx.send(TeeEvent::Chunk(chunk.clone()));
-                    }
-                    self.teed_bytes = self.teed_bytes.saturating_add(chunk.len());
-                    if self.teed_bytes > RAW_RESPONSE_CAP {
-                        self.capture_capped = true;
-                    }
-                }
+                self.tee_chunk(&chunk);
                 Poll::Ready(Some(Ok(chunk)))
             }
             Poll::Ready(Some(Err(err))) => {
