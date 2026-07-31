@@ -181,6 +181,28 @@ async fn a_bodiless_request_is_not_a_warning_but_a_malformed_one_still_is() {
         after_post.contains("request body is not JSON"),
         "a malformed body is a dropped turn and must still warn: {after_post}",
     );
+
+    // And the third shape: an EMPTY body on a turn-shaped method. Unlike a
+    // GET, a POST with nothing in it is a turn that will never be captured —
+    // the demotion must not swallow it.
+    let response = client
+        .post(format!("http://{proxy}/v1/messages"))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let _ = response.bytes().await.unwrap();
+
+    settle().await;
+
+    let after_empty_post = logs.contents();
+    let warns_before = after_post.matches("request body is not JSON").count();
+    let warns_after = after_empty_post.matches("request body is not JSON").count();
+    assert!(
+        warns_after > warns_before,
+        "an empty POST is a dropped turn and must add its own warn \
+         (before: {warns_before}, after: {warns_after}): {after_empty_post}",
+    );
 }
 
 /// Give the detached capture task time to finalize.

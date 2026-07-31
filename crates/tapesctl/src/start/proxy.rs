@@ -496,15 +496,20 @@ impl TurnCapture {
         // the bytes verbatim in a JSON document.
         let request = match RawValue::from_string(String::from_utf8_lossy(body).into_owned()) {
             Ok(request) => request,
-            // An *empty* body is not a defect and never will be capturable: it
-            // is what every GET on this endpoint looks like, and a harness makes
-            // several of those (model listing, auth probes) per session. Warning
-            // on them trains the reader to ignore the one severity that means
-            // "a turn you expected to see was dropped". A non-empty body that
-            // does not parse is the real thing that warning is for.
-            Err(_) if body.is_empty() => {
+            // An empty body on a method that never carries one is not a
+            // defect: it is what every GET on this endpoint looks like, and a
+            // harness makes several of those (model listing, auth probes) per
+            // session. Warning on them trains the reader to ignore the one
+            // severity that means "a turn you expected to see was dropped".
+            // But an empty body on a turn-shaped method (POST/PUT/PATCH) IS
+            // that dropped turn, so it keeps the warning.
+            Err(_)
+                if body.is_empty()
+                    && !matches!(self.meta.method.as_str(), "POST" | "PUT" | "PATCH") =>
+            {
                 debug!(
                     request_id = %self.meta.request_id,
+                    method = %self.meta.method,
                     "request had no body; nothing to capture",
                 );
                 return;
