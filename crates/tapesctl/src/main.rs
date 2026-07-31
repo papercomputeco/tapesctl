@@ -1,10 +1,10 @@
 //! `tapesctl` — the Tapes client CLI.
 //!
-//! See the "Tapes and Cassettes" RFC for the intended surface. This is the
-//! Rust bootstrap: the CLI parses and dispatches, `version` and the canary
-//! work today, and the capture/sync/plugin commands are wired but return
-//! `NotImplemented` until their implementations land (Track 1 — the JIT proxy
-//! and the `tapes-harness` extraction from paperd).
+//! See the "Tapes and Cassettes" RFC for the intended surface. Every
+//! hand-written command dispatches to a real implementation; what is still to
+//! come is the *generated* `<cassette> <method>` surface, which arrives with
+//! `/v1/cassettes` discovery in Track 4 and covers resources this binary cannot
+//! know about at compile time.
 
 use std::process::ExitCode;
 

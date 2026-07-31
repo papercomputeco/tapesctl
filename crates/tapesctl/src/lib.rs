@@ -4,6 +4,7 @@
 pub mod api;
 pub mod cli;
 pub mod error;
+pub mod plugin;
 pub mod ports;
 pub mod start;
 pub mod transcript;
@@ -59,7 +60,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Some(Command::Export(args)) => ports::export::run(args).await,
         Some(Command::Seed(args)) => ports::seed::run(args).await,
         Some(Command::Skill(SkillCommand::Sync(args))) => ports::skill::run(args),
-        Some(Command::Plugin(cmd)) => plugin(cmd),
+        Some(Command::Plugin(PluginCommand::Install(args))) => plugin::run(args),
     }
 }
 
@@ -75,23 +76,11 @@ async fn start(args: StartArgs) -> Result<()> {
     start::run(args).await
 }
 
-/// Manage harness capture plugins (backed by `tapes-harnesses` plugin assets).
-fn plugin(cmd: PluginCommand) -> Result<()> {
-    match cmd {
-        PluginCommand::Install { harness } => {
-            tracing::info!(%harness, "tapesctl plugin install is not implemented yet");
-            Err(Error::NotImplemented {
-                what: "tapesctl plugin install",
-            })
-        }
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use cli::{ApiArgs, SeedArgs, SessionIdArgs, SessionsCommand};
+    use cli::{ApiArgs, PluginInstallArgs, SeedArgs, SessionIdArgs, SessionsCommand};
 
     #[tokio::test]
     async fn no_subcommand_is_ok() {
@@ -112,16 +101,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn plugin_install_is_still_the_only_unimplemented_command() {
-        // `sync` used to live here too; it is implemented now, and this test is
-        // what would notice if a future refactor quietly stubbed it again.
+    async fn no_command_is_stubbed_out_any_more() {
+        // `sync` and `plugin install` both used to answer `NotImplemented`
+        // here. Both are implemented now, and this is what would notice if a
+        // future refactor quietly stubbed one again.
         let cli = Cli {
             verbose: 0,
-            command: Some(Command::Plugin(PluginCommand::Install {
+            command: Some(Command::Plugin(PluginCommand::Install(PluginInstallArgs {
+                // A harness needing no plugin: reaches the implementation and
+                // reports, without writing to the runner's home.
                 harness: "claude".to_owned(),
-            })),
+                dry_run: false,
+            }))),
         };
-        assert!(matches!(run(cli).await, Err(Error::NotImplemented { .. })));
+        assert!(!matches!(run(cli).await, Err(Error::NotImplemented { .. })));
     }
 
     #[tokio::test]

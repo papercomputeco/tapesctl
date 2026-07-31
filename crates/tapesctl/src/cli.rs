@@ -342,11 +342,20 @@ pub struct SkillSyncArgs {
 /// `tapesctl plugin` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum PluginCommand {
-    /// Install the capture plugin/hooks for a harness.
-    Install {
-        /// The harness to install capture support for (e.g. `claude`, `codex`).
-        harness: String,
-    },
+    /// Install the capture plugin for a harness.
+    Install(PluginInstallArgs),
+}
+
+/// Arguments for `tapesctl plugin install`.
+#[derive(Debug, Args)]
+pub struct PluginInstallArgs {
+    /// The harness to install capture support for (e.g. `pi`). Harnesses
+    /// captured by redirection alone need no plugin and report so.
+    pub harness: String,
+
+    /// Report what would be installed, and where, without writing anything.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[cfg(test)]
@@ -461,6 +470,29 @@ mod tests {
                 assert!(args.claude);
                 assert!(args.local);
             }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plugin_install_names_a_harness_and_needs_no_server() {
+        // Installing a plugin is a local file copy over crate-owned bytes;
+        // nothing is fetched, so requiring --tapes-url would be a lie.
+        let cli = parse(&["tapesctl", "plugin", "install", "pi"]);
+        match cli.command {
+            Some(Command::Plugin(PluginCommand::Install(args))) => {
+                assert_eq!(args.harness, "pi");
+                assert!(!args.dry_run);
+            }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plugin_install_takes_a_dry_run() {
+        let cli = parse(&["tapesctl", "plugin", "install", "pi", "--dry-run"]);
+        match cli.command {
+            Some(Command::Plugin(PluginCommand::Install(args))) => assert!(args.dry_run),
             other => panic!("got: {other:?}"),
         }
     }
