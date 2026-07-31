@@ -126,37 +126,51 @@ pub fn sync(name: &str, source_dir: &Path, destination: &Destination) -> Result<
         }
     );
     let target = resolved_dir.join(format!("{name}.md"));
-    // The final component gets the same treatment: an existing symlink at
-    // the target would route the write through it.
-    if let Ok(meta) = std::fs::symlink_metadata(&target) {
-        snafu::ensure!(
-            !meta.file_type().is_symlink(),
-            error::SkillDestinationSnafu {
+    // The final component cannot be handled with a look-then-write: a racer
+    // replacing the target with a symlink between the check and the write
+    // would route both the bytes and the chmod elsewhere. Instead the old
+    // file is removed and the new one is created with O_EXCL — which never
+    // follows a symlink — so a racer's link makes the create FAIL rather
+    // than redirect, and the permissions are set through the open handle,
+    // never by path.
+    match std::fs::remove_file(&target) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => {
+            return error::SkillDestinationSnafu {
                 path: target.clone(),
             }
-        );
+            .fail();
+        }
     }
-    std::fs::write(&target, &contents).context(error::SkillWriteSnafu {
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target)
+        .context(error::SkillWriteSnafu {
+            path: target.clone(),
+        })?;
+    restrict_permissions(&file, &target)?;
+    use std::io::Write as _;
+    file.write_all(&contents).context(error::SkillWriteSnafu {
         path: target.clone(),
     })?;
-    restrict_permissions(&target)?;
     Ok(target)
 }
 
-/// Narrow the written file to owner-only.
+/// Narrow the open file to owner-only, through its handle.
 #[cfg(unix)]
-fn restrict_permissions(path: &Path) -> Result<()> {
+fn restrict_permissions(file: &std::fs::File, path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).context(
-        error::SkillWriteSnafu {
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))
+        .context(error::SkillWriteSnafu {
             path: path.to_path_buf(),
-        },
-    )
+        })
 }
 
 /// No-op off Unix, where the mode bits have no equivalent.
 #[cfg(not(unix))]
-fn restrict_permissions(_path: &Path) -> Result<()> {
+fn restrict_permissions(_file: &std::fs::File, _path: &Path) -> Result<()> {
     Ok(())
 }
 
@@ -302,7 +316,10 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_symlinked_target_file_is_refused() {
+    fn a_symlinked_target_is_replaced_never_followed() {
+        // The pre-planted link is the racer's move; O_EXCL after the
+        // remove means the link itself is what dies — the file it pointed
+        // at must survive untouched, with its original permissions.
         let source = tempfile::tempdir().unwrap();
         let target = tempfile::tempdir().unwrap();
         let victim = target.path().join("victim.txt");
@@ -313,16 +330,20 @@ mod tests {
         std::os::unix::fs::symlink(&victim, skills.join("review.md")).unwrap();
 
         let destination = Destination {
-            dir: skills,
+            dir: skills.clone(),
             base: target.path().to_path_buf(),
             label: "global",
         };
-        let err = sync("review", source.path(), &destination).unwrap_err();
-        assert!(
-            err.to_string().contains("resolves outside"),
-            "wrong error: {err}"
-        );
+        let written = sync("review", source.path(), &destination).unwrap();
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "precious");
+        assert!(
+            !std::fs::symlink_metadata(&written)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the target must be a regular file after sync"
+        );
+        assert_eq!(std::fs::read_to_string(&written).unwrap(), "body");
     }
 
     #[test]
