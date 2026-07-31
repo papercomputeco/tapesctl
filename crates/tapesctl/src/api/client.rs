@@ -405,6 +405,19 @@ impl ApiClient {
         }
         let response = request.send().await.context(error::ApiSendSnafu)?;
 
+        // The pre-flight guards validate the URL this client BUILT; a 30x
+        // from the server can still walk the request elsewhere, and reqwest
+        // follows redirects by default. The origin that ultimately answered
+        // must be the origin the user configured — a spec served from
+        // anywhere else is refused unread. (Nothing sensitive left with the
+        // redirected request: this fetch carries no credentials.)
+        if response.url().origin() != self.base.origin() {
+            return error::CassetteSpecPathSnafu {
+                path: path.to_owned(),
+            }
+            .fail();
+        }
+
         if response.status() == http::StatusCode::NOT_MODIFIED {
             return Ok(SpecFetch::Unchanged);
         }
@@ -570,6 +583,41 @@ mod tests {
                 "{path:?} produced the wrong error: {err}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_redirected_spec_fetch_may_not_leave_the_configured_origin() {
+        // The URL guards validate what this client builds; a 30x can still
+        // walk the request onto another host, and reqwest follows it. The
+        // answering origin is checked after the fact, so the foreign
+        // document is refused unread.
+        let elsewhere = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/spec.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "openapi": "3.1.0"
+            })))
+            .mount(&elsewhere)
+            .await;
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/cassettes/x/openapi.json"))
+            .respond_with(ResponseTemplate::new(302).insert_header(
+                "location",
+                format!("{}/spec.json", elsewhere.uri()).as_str(),
+            ))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let err = client
+            .fetch_cassette_spec("/v1/cassettes/x/openapi.json", None)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("non-relative OpenAPI path"),
+            "wrong error: {err}"
+        );
     }
 
     #[test]
