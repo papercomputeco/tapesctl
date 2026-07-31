@@ -8,15 +8,19 @@
 
 use std::process::ExitCode;
 
-use clap::Parser;
-use tapesctl::cli::Cli;
-
 #[tokio::main]
 async fn main() -> ExitCode {
-    let cli = Cli::parse();
-    tapesctl::init_tracing(cli.verbose);
+    let argv: Vec<String> = std::env::args().collect();
+    // Tracing is installed before discovery runs, because discovery's own
+    // tracing is the only account of why an expected cassette did not appear.
+    tapesctl::init_tracing(tapesctl::cli::verbosity(&argv));
 
-    match tapesctl::run(cli).await {
+    // `resolve` rather than `Cli::parse`: the cassette nouns are discovered from
+    // the server before the command line is parsed, so that
+    // `tapesctl <cassette> <method>` parses and `--help` lists them.
+    let invocation = tapesctl::resolve(argv).await;
+
+    match tapesctl::dispatch(invocation).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             // The daemon/proxy work will grow structured error reporting; for

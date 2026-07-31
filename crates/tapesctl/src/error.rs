@@ -252,6 +252,59 @@ pub enum Error {
         payload: String,
     },
 
+    // --- the generated cassette surface -------------------------------------
+    /// Discovery named an OpenAPI document somewhere other than on this server.
+    /// Refused rather than followed: `Url::join` treats an absolute URL as a
+    /// replacement, so honouring it would fetch a spec from a host the user
+    /// never named.
+    #[snafu(display("cassette discovery named a non-relative OpenAPI path {path:?}"))]
+    CassetteSpecPath {
+        /// What discovery published.
+        path: String,
+    },
+
+    /// A cassette's spec described an operation with a verb that is not an HTTP
+    /// method.
+    #[snafu(display("cassette spec used an unusable HTTP method {method:?}"))]
+    CassetteMethod {
+        /// The offending verb.
+        method: String,
+    },
+
+    /// A cassette noun parsed but is not on the surface. Only reachable if the
+    /// surface changed between building the parser and dispatching.
+    #[snafu(display("no cassette named {name:?} is served here"))]
+    UnknownCassette {
+        /// The noun that was invoked.
+        name: String,
+    },
+
+    /// A cassette method parsed but is not on the cassette.
+    #[snafu(display("cassette {cassette:?} has no method {method:?}"))]
+    UnknownCassetteMethod {
+        /// The cassette that was invoked.
+        cassette: String,
+        /// The method that was invoked.
+        method: String,
+    },
+
+    /// `--body @<path>` could not be read.
+    #[snafu(display("could not read the request body at {path}"))]
+    BodyFile {
+        /// Where the read was attempted.
+        path: String,
+        /// Underlying IO failure.
+        source: std::io::Error,
+    },
+
+    /// `--body` was not JSON. Checked here so the failure names the quoting
+    /// mistake rather than arriving as a cassette's schema error.
+    #[snafu(display("--body is not valid JSON"))]
+    InvalidBody {
+        /// Underlying JSON failure.
+        source: serde_json::Error,
+    },
+
     // --- ported commands ----------------------------------------------------
     /// The export output file could not be created.
     #[snafu(display("could not create the export file at {}", path.display()))]

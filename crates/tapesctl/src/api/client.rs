@@ -37,6 +37,24 @@ use crate::error::{Error, Result, error};
 /// than rejected, so a caller asking for more must still follow `next_cursor`.
 pub const MAX_LIMIT: u64 = 200;
 
+/// The cassette discovery route.
+pub const CASSETTES_PATH: &str = "/v1/cassettes";
+
+/// The outcome of a conditional fetch of a cassette's OpenAPI document.
+#[derive(Debug, Clone)]
+pub enum SpecFetch {
+    /// The server matched our `If-None-Match` and sent no body; the cached copy
+    /// is still current.
+    Unchanged,
+    /// A document, and the validator to revalidate it with next time.
+    Fetched {
+        /// The OpenAPI document, verbatim.
+        document: Value,
+        /// The response `ETag`, when the server sent one.
+        etag: Option<String>,
+    },
+}
+
 /// Remove the empty query `query_pairs_mut` leaves behind when no pair was
 /// appended.
 ///
@@ -44,6 +62,19 @@ pub const MAX_LIMIT: u64 = 200;
 /// so a request with every parameter unset would go out as `/v1/sessions?`.
 /// Servers ignore it, but it means the same request has two spellings — which
 /// shows up in logs, in cached URLs, and in any test that compares them.
+/// Replace the `{name}` placeholders in one path segment.
+///
+/// The result is pushed through `path_segments_mut`, which percent-encodes the
+/// whole segment — so a value containing a slash stays one segment rather than
+/// addressing a different route.
+fn substitute(segment: &str, path_params: &[(String, String)]) -> String {
+    let mut rendered = segment.to_owned();
+    for (name, value) in path_params {
+        rendered = rendered.replace(&format!("{{{name}}}"), value);
+    }
+    rendered
+}
+
 fn drop_empty_query(url: &mut Url) {
     if url.query() == Some("") {
         url.set_query(None);
@@ -138,6 +169,23 @@ pub struct SessionListParams<'a> {
     pub until: Option<&'a str>,
     /// Exact-match filter on the acting subject.
     pub auth_subject: Option<&'a str>,
+}
+
+/// One call against a cassette route, assembled from that cassette's spec.
+#[derive(Debug, Default, Clone)]
+pub struct Call<'a> {
+    /// The HTTP verb, uppercased.
+    pub method: &'a str,
+    /// The public path template, `{name}` placeholders included.
+    pub path: &'a str,
+    /// Values for those placeholders, by placeholder name.
+    pub path_params: Vec<(String, String)>,
+    /// Query parameters, under their wire names.
+    pub query: Vec<(String, String)>,
+    /// Header parameters, under their wire names.
+    pub headers: Vec<(String, String)>,
+    /// A JSON request body, when the operation takes one.
+    pub body: Option<String>,
 }
 
 /// A client for one tapes API server.
@@ -309,6 +357,110 @@ impl ApiClient {
         self.get_stream(url).await
     }
 
+    /// `GET /v1/cassettes` — the cassette discovery document.
+    ///
+    /// Returned raw for the same reason every other read is: discovery grows
+    /// fields (`problems` and `contract_version` are both younger than the
+    /// route) and a partial model would eat them.
+    pub async fn list_cassettes(&self) -> Result<Value> {
+        let url = self.url(CASSETTES_PATH)?;
+        self.get_json(url).await
+    }
+
+    /// `GET /v1/cassettes/{name}/openapi.json` — one cassette's own document.
+    ///
+    /// `path` is the `openapi_path` discovery published rather than a path this
+    /// client builds, so core stays free to move the route. It is required to be
+    /// server-relative: `Url::join` treats an absolute URL as a replacement, so
+    /// a discovery document naming `http://elsewhere/openapi.json` would
+    /// otherwise redirect this fetch off the server the user asked for.
+    ///
+    /// `etag` is the validator from a previous fetch. The route answers a
+    /// matching `If-None-Match` with 304 and an empty body, which is what makes
+    /// revalidating a cached surface cheap.
+    pub async fn fetch_cassette_spec(&self, path: &str, etag: Option<&str>) -> Result<SpecFetch> {
+        if !path.starts_with('/') {
+            return error::CassetteSpecPathSnafu {
+                path: path.to_owned(),
+            }
+            .fail();
+        }
+        let url = self.url(path)?;
+
+        let mut request = self.http.get(url.clone());
+        if let Some(etag) = etag {
+            request = request.header(http::header::IF_NONE_MATCH, etag);
+        }
+        let response = request.send().await.context(error::ApiSendSnafu)?;
+
+        if response.status() == http::StatusCode::NOT_MODIFIED {
+            return Ok(SpecFetch::Unchanged);
+        }
+        let etag = response
+            .headers()
+            .get(http::header::ETAG)
+            .and_then(|value| value.to_str().ok())
+            .map(ToOwned::to_owned);
+        let document = Self::decode_json(response, &url).await?;
+
+        Ok(SpecFetch::Fetched { document, etag })
+    }
+
+    /// Make one call described by a cassette's OpenAPI document.
+    ///
+    /// The verb, path and parameter names all come from the server's own spec
+    /// rather than from anything compiled in here, which is the whole point of
+    /// the generated surface — see [`crate::cassette`].
+    pub async fn call(&self, call: &Call<'_>) -> Result<Value> {
+        let url = self.call_url(call)?;
+        let method = reqwest::Method::from_bytes(call.method.as_bytes()).map_err(|_| {
+            error::CassetteMethodSnafu {
+                method: call.method,
+            }
+            .build()
+        })?;
+
+        let mut request = self.http.request(method, url.clone());
+        for (name, value) in &call.headers {
+            request = request.header(name, value);
+        }
+        if let Some(body) = &call.body {
+            request = request
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(body.clone());
+        }
+
+        let response = request.send().await.context(error::ApiSendSnafu)?;
+        Self::decode_json(response, &url).await
+    }
+
+    /// Build the URL for a cassette call.
+    ///
+    /// Path parameters are substituted into their segment and the segment is
+    /// then pushed through `path_segments_mut`, which percent-encodes it whole.
+    /// A value containing a slash therefore stays one segment instead of
+    /// addressing a different route.
+    fn call_url(&self, call: &Call<'_>) -> Result<Url> {
+        let mut url = self.url("/")?;
+        {
+            let mut segments = url
+                .path_segments_mut()
+                .map_err(|()| error::NotABaseSnafu.build())?;
+            segments.clear();
+            for segment in call.path.split('/').filter(|s| !s.is_empty()) {
+                segments.push(&substitute(segment, &call.path_params));
+            }
+        }
+        {
+            let mut query = url.query_pairs_mut();
+            for (name, value) in &call.query {
+                query.append_pair(name, value);
+            }
+        }
+        drop_empty_query(&mut url);
+        Ok(url)
+    }
+
     /// `POST /v1/admin/seed/demo` — populate a server with demo sessions.
     pub async fn seed_demo(&self) -> Result<Value> {
         let url = self.url("/v1/admin/seed/demo")?;
@@ -366,6 +518,12 @@ impl ApiClient {
                 endpoint: url.to_string(),
                 body: String::from_utf8_lossy(&body).into_owned(),
             });
+        }
+        // A successful response with no body is a real answer, not a decode
+        // failure: cassette routes are free to return 204, and the core seed
+        // route is simply the only one today that never does.
+        if body.iter().all(u8::is_ascii_whitespace) {
+            return Ok(Value::Null);
         }
         serde_json::from_slice(&body).context(error::ApiDecodeSnafu)
     }
