@@ -276,6 +276,17 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    /// The skills destination resolves outside the selected tree.
+    #[snafu(display(
+        "refusing the skills destination {}: it resolves outside the selected \
+         directory (a symlinked skills path is not followed)",
+        path.display()
+    ))]
+    SkillDestination {
+        /// The refused destination path.
+        path: PathBuf,
+    },
+
     /// The skill name would escape the skills directory.
     #[snafu(display(
         "invalid skill name {name:?}: a skill name is a bare file stem \
