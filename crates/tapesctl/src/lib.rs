@@ -2,12 +2,19 @@
 //! dispatch is unit-testable without spawning the binary.
 
 pub mod api;
+pub mod cassette;
 pub mod cli;
 pub mod error;
+pub mod logging;
 pub mod ports;
 pub mod start;
 pub mod transcript;
 
+use clap::{ArgMatches, CommandFactory, FromArgMatches};
+use url::Url;
+
+use api::client::ApiClient;
+use cassette::Surface;
 use cli::{Cli, Command, PluginCommand, SkillCommand, StartArgs};
 pub use error::{Error, Result};
 
@@ -15,29 +22,112 @@ pub use error::{Error, Result};
 /// the release smoke test asserts on this exact string, so keep it stable.
 const CANARY: &str = "All in all, just another tape in the stereo";
 
-/// Initialize `tracing` output on stderr. `verbose` bumps the default filter
-/// (`RUST_LOG` still wins when set): `-v` → debug, `-vv` → trace.
-pub fn init_tracing(verbose: u8) {
-    use tracing_subscriber::{EnvFilter, fmt};
-
-    let default = match verbose {
-        0 => "info",
-        1 => "debug",
-        _ => "trace",
-    };
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
-
-    // `try_init` is fine to ignore: a failure just means a subscriber is
-    // already installed (e.g. in tests), which is not fatal here.
-    let _ = fmt()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr)
-        .try_init();
-}
-
 /// The build version, stamped by cargo.
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+/// What one command line resolved to.
+///
+/// The two arms exist because only one of them can be a typed value: the static
+/// surface is a derived enum, while a cassette command is not known until a
+/// server has been asked, so it stays as the matches plus the surface that
+/// explains them.
+#[derive(Debug)]
+pub enum Invocation {
+    /// A hand-written command.
+    Static(Box<Cli>),
+    /// A generated cassette command.
+    Cassette {
+        /// Verbosity from the global flag, which the derive would otherwise own.
+        verbose: u8,
+        /// The cassette noun.
+        name: String,
+        /// The cassette-level matches; its subcommand names the method.
+        matches: Box<ArgMatches>,
+        /// The surface the command was generated from.
+        surface: Box<Surface>,
+    },
+}
+
+impl Invocation {
+    /// Verbosity, whichever arm this is.
+    #[must_use]
+    pub fn verbose(&self) -> u8 {
+        match self {
+            Self::Static(cli) => cli.verbose,
+            Self::Cassette { verbose, .. } => *verbose,
+        }
+    }
+}
+
+/// Build the parser — cassette nouns included — and parse one command line.
+///
+/// Discovery happens before parsing because the generated nouns have to be in
+/// the parser for `tapesctl <cassette> ...` to parse at all, and for
+/// `tapesctl --help` to list them. It is cheap in the common case: the surface
+/// comes from [`cassette::cache`] and only reaches the network when that has
+/// gone stale.
+///
+/// Exits the process on a parse error or on `--help`, which is what
+/// `clap::Parser::parse` does and what the caller already expects.
+pub async fn resolve<I, S>(argv: I) -> Invocation
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String> + Clone,
+{
+    let argv: Vec<String> = argv.into_iter().map(Into::into).collect();
+    let surface = discover(&argv).await;
+
+    let command = cassette::command::augment(Cli::command(), &surface);
+    let matches = command.get_matches_from(&argv);
+
+    // A noun on the surface is a generated command; anything else is one of the
+    // derived ones. Built-ins win the name — `augment` never generates over one.
+    if let Some((name, cassette_matches)) = matches.subcommand() {
+        if surface.cassette(name).is_some() {
+            return Invocation::Cassette {
+                verbose: matches.get_count("verbose"),
+                name: name.to_owned(),
+                matches: Box::new(cassette_matches.clone()),
+                surface: Box::new(surface),
+            };
+        }
+    }
+
+    match Cli::from_arg_matches(&matches) {
+        Ok(cli) => Invocation::Static(Box::new(cli)),
+        Err(error) => error.exit(),
+    }
+}
+
+/// The cassette surface for whatever server this command line names.
+///
+/// Never fails: with no server, an unparseable one, or an unreachable one, the
+/// result is simply no cassette nouns. The hand-written surface has to keep
+/// working on a machine that cannot reach any tapes server at all.
+async fn discover(argv: &[String]) -> Surface {
+    let Some(raw) = cli::discovery_url(argv) else {
+        return Surface::default();
+    };
+    let Ok(url) = Url::parse(&raw) else {
+        tracing::debug!(%raw, "not a URL, so no cassettes were discovered");
+        return Surface::default();
+    };
+    cassette::cache::load(&ApiClient::new(url)).await
+}
+
+/// Dispatch one resolved invocation.
+pub async fn dispatch(invocation: Invocation) -> Result<()> {
+    match invocation {
+        Invocation::Static(cli) => run(*cli).await,
+        Invocation::Cassette {
+            name,
+            matches,
+            surface,
+            ..
+        } => cassette::command::dispatch(&surface, &name, &matches).await,
+    }
 }
 
 /// Dispatch a parsed CLI invocation.
