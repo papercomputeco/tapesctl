@@ -150,6 +150,23 @@ fn parse_bracket_list(value: &str) -> Vec<String> {
         .collect()
 }
 
+/// Keep the `.md` files, in name order.
+///
+/// Split out from [`list`] so the ordering is testable at all: it takes the
+/// entries as an argument, where a test can hand it an unsorted list. Asserting
+/// on a real directory instead would prove nothing, because `read_dir` is free
+/// to return already-sorted entries — and on the common filesystems it usually
+/// does, so such a test passes whether or not the sort is there.
+#[must_use]
+pub fn ordered_skill_files(files: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = files
+        .into_iter()
+        .filter(|path| path.extension().is_some_and(|ext| ext == "md"))
+        .collect();
+    files.sort();
+    files
+}
+
 /// Read every skill in `dir`, sorted by file name.
 ///
 /// A missing directory is an empty list, not an error — it just means nothing
@@ -166,13 +183,13 @@ pub fn list(dir: &Path) -> Result<Vec<Skill>> {
         }
     };
 
-    let mut files: Vec<PathBuf> = entries
-        .filter_map(std::result::Result::ok)
-        .filter(|entry| entry.file_type().is_ok_and(|kind| !kind.is_dir()))
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "md"))
-        .collect();
-    files.sort();
+    let files = ordered_skill_files(
+        entries
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| entry.file_type().is_ok_and(|kind| !kind.is_dir()))
+            .map(|entry| entry.path())
+            .collect(),
+    );
 
     let mut skills = Vec::new();
     for path in files {
@@ -294,9 +311,41 @@ mod tests {
     }
 
     #[test]
+    fn entries_are_ordered_by_name_whatever_order_the_filesystem_gave_them() {
+        // The guarantee `list` relies on, asserted where an unsorted input can
+        // actually be supplied. A real directory would not prove it: read_dir
+        // commonly returns sorted entries already, so the assertion would hold
+        // with the sort deleted.
+        let unsorted = vec![
+            PathBuf::from("/s/zebra.md"),
+            PathBuf::from("/s/alpha.md"),
+            PathBuf::from("/s/middle.md"),
+        ];
+        assert_eq!(
+            ordered_skill_files(unsorted),
+            vec![
+                PathBuf::from("/s/alpha.md"),
+                PathBuf::from("/s/middle.md"),
+                PathBuf::from("/s/zebra.md"),
+            ],
+        );
+    }
+
+    #[test]
+    fn non_markdown_entries_are_dropped_before_ordering() {
+        let mixed = vec![
+            PathBuf::from("/s/notes.txt"),
+            PathBuf::from("/s/skill.md"),
+            PathBuf::from("/s/no-extension"),
+        ];
+        assert_eq!(
+            ordered_skill_files(mixed),
+            vec![PathBuf::from("/s/skill.md")],
+        );
+    }
+
+    #[test]
     fn listing_is_sorted_and_names_come_from_the_file_stem() {
-        // read_dir promises no order; without the sort this output would
-        // differ between runs on the same directory.
         let dir = tempfile::tempdir().unwrap();
         for stem in ["zebra", "alpha", "middle"] {
             std::fs::write(
