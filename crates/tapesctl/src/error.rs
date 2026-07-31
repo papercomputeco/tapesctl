@@ -31,9 +31,10 @@ pub enum Error {
         harness: String,
     },
 
-    /// No ingest server was named, so there would be nowhere to send turns.
-    /// Failing loudly beats running a capture session that captures nothing.
-    #[snafu(display("no tapes ingest URL: pass --tapes-url or set TAPES_URL"))]
+    /// No server was named. On the capture side there would be nowhere to send
+    /// turns, and failing loudly beats running a session that captures nothing;
+    /// on the read side there is nothing to query.
+    #[snafu(display("no tapes server URL: pass --tapes-url or set TAPES_URL"))]
     MissingTapesUrl,
 
     /// `--tapes-url` was not a URL.
@@ -137,5 +138,167 @@ pub enum Error {
         status: u16,
         /// Response body, verbatim.
         body: String,
+    },
+
+    // --- the transcript lane ------------------------------------------------
+    /// The transcript endpoint could not be built from the base URL.
+    #[snafu(display("could not build the transcript ingest endpoint"))]
+    TranscriptUrl {
+        /// Underlying join failure.
+        source: url::ParseError,
+    },
+
+    /// A transcript file could not be read off disk.
+    #[snafu(display("could not read the transcript at {}", path.display()))]
+    TranscriptRead {
+        /// Where the read was attempted.
+        path: PathBuf,
+        /// Underlying IO failure.
+        source: std::io::Error,
+    },
+
+    /// The JSONL could not be framed as a JSON array. Only reachable if the
+    /// crate's converter ever emitted invalid JSON, which its own tests forbid.
+    #[snafu(display("could not frame the transcript records"))]
+    TranscriptRecords {
+        /// Underlying JSON failure.
+        source: serde_json::Error,
+    },
+
+    /// The transcript could not be delivered.
+    #[snafu(display("could not reach the tapes transcript endpoint"))]
+    TranscriptSend {
+        /// Underlying transport failure.
+        source: reqwest::Error,
+    },
+
+    /// Ingest refused the transcript. A 400 names the offending envelope field.
+    #[snafu(display("tapes ingest rejected the transcript ({status}): {body}"))]
+    TranscriptRejected {
+        /// HTTP status returned.
+        status: u16,
+        /// Response body, verbatim.
+        body: String,
+    },
+
+    /// Some transcripts in a sweep could not be delivered. Reported as a failure
+    /// because `sync` is an explicit request to move data — unlike background
+    /// capture, which must degrade silently rather than take a harness down.
+    #[snafu(display("{failed} of {files} transcript(s) could not be delivered"))]
+    SyncIncomplete {
+        /// How many files failed.
+        failed: usize,
+        /// How many were offered in total.
+        files: usize,
+    },
+
+    // --- the read API -------------------------------------------------------
+    /// An API endpoint could not be built from the base URL.
+    #[snafu(display("could not build the API endpoint"))]
+    ApiUrl {
+        /// Underlying join failure.
+        source: url::ParseError,
+    },
+
+    /// The configured base URL cannot carry a path (e.g. `mailto:`), so no
+    /// route can be appended to it.
+    #[snafu(display("the tapes URL cannot be used as a base for API routes"))]
+    NotABase,
+
+    /// The API request itself failed.
+    #[snafu(display("could not reach the tapes API"))]
+    ApiSend {
+        /// Underlying transport failure.
+        source: reqwest::Error,
+    },
+
+    /// The API answered with a non-success status. The body is carried because
+    /// every tapes error body names the offending parameter.
+    #[snafu(display("tapes API returned {status} for {endpoint}: {body}"))]
+    ApiStatus {
+        /// HTTP status returned.
+        status: u16,
+        /// Endpoint that was called.
+        endpoint: String,
+        /// Response body, verbatim.
+        body: String,
+    },
+
+    /// The API answered with something that is not JSON.
+    #[snafu(display("could not decode the tapes API response"))]
+    ApiDecode {
+        /// Underlying JSON failure.
+        source: serde_json::Error,
+    },
+
+    /// A response could not be rendered for printing.
+    #[snafu(display("could not render the response"))]
+    RenderJson {
+        /// Underlying JSON failure.
+        source: serde_json::Error,
+    },
+
+    /// `--detail` was not an export grain the server accepts.
+    #[snafu(display("invalid --detail {detail:?} (valid values: spans, traces)"))]
+    InvalidExportDetail {
+        /// What the user asked for.
+        detail: String,
+    },
+
+    /// `--payload` was not a grain the server accepts.
+    #[snafu(display("invalid --payload {payload:?} (valid values: full, preview)"))]
+    InvalidPayloadDetail {
+        /// What the user asked for.
+        payload: String,
+    },
+
+    // --- ported commands ----------------------------------------------------
+    /// The export output file could not be created.
+    #[snafu(display("could not create the export file at {}", path.display()))]
+    ExportFile {
+        /// Where the create was attempted.
+        path: PathBuf,
+        /// Underlying IO failure.
+        source: std::io::Error,
+    },
+
+    /// The export body failed mid-stream.
+    #[snafu(display("the export stream failed"))]
+    ExportStream {
+        /// Underlying transport failure.
+        source: reqwest::Error,
+    },
+
+    /// The export could not be written out.
+    #[snafu(display("could not write the export"))]
+    ExportWrite {
+        /// Underlying IO failure.
+        source: std::io::Error,
+    },
+
+    /// The named skill could not be read.
+    #[snafu(display("could not read the skill at {}", path.display()))]
+    SkillRead {
+        /// Where the read was attempted.
+        path: PathBuf,
+        /// Underlying IO failure.
+        source: std::io::Error,
+    },
+
+    /// The skill could not be written to its destination.
+    #[snafu(display("could not write the skill to {}", path.display()))]
+    SkillWrite {
+        /// Where the write was attempted.
+        path: PathBuf,
+        /// Underlying IO failure.
+        source: std::io::Error,
+    },
+
+    /// The working directory could not be read, so a `--local` destination
+    /// cannot be resolved.
+    #[snafu(display("could not determine the working directory"))]
+    WorkingDir {
+        /// Underlying IO failure.
+        source: std::io::Error,
     },
 }

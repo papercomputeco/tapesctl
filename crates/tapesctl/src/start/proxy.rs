@@ -62,6 +62,7 @@ use super::ingest::{
 };
 use super::peek::BoundedPeek;
 use crate::error::{Result, error};
+use crate::transcript::tailer::SessionTracker;
 
 /// How much of a request body is buffered so the turn can be described to
 /// ingest. Beyond this the turn is forwarded but not captured.
@@ -96,6 +97,13 @@ pub struct ProxyState {
     /// Notified with the harness session id the first time one resolves, so the
     /// caller can print a session URL.
     pub session_seen: Arc<tokio::sync::Mutex<Option<UnboundedSender<String>>>>,
+    /// Sessions whose transcripts this process is responsible for.
+    ///
+    /// An attributed request is the proof that a session's traffic flows
+    /// through this proxy, which is exactly the transcript tailer's scope rule —
+    /// so the registry is fed from here rather than from a separate discovery
+    /// pass that could disagree with what was actually captured.
+    pub transcript_tracker: SessionTracker,
 }
 
 /// Axum fallback handler — every method and path forwards through here.
@@ -153,6 +161,13 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
         },
     )
     .await;
+
+    // Register the session for transcript tailing before anything else can fail:
+    // the wire turn may yet be skipped for being oversize or unparseable, but the
+    // session's transcripts are still ours to deliver.
+    if let Some(session) = attributed.claude_session() {
+        state.transcript_tracker.observe(session);
+    }
 
     let envelope_attribution = attributed.envelope();
     let session = envelope_attribution
