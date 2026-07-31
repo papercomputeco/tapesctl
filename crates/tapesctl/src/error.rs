@@ -231,6 +231,13 @@ pub enum Error {
         source: serde_json::Error,
     },
 
+    /// The server's response shape changed out from under this client.
+    #[snafu(display("unexpected server contract: {detail}"))]
+    ApiContract {
+        /// What changed.
+        detail: &'static str,
+    },
+
     /// A response could not be rendered for printing.
     #[snafu(display("could not render the response"))]
     RenderJson {

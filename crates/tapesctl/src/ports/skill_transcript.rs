@@ -114,6 +114,20 @@ pub async fn session_turns(
     filter: &TurnFilter,
 ) -> Result<Vec<TurnSummary>> {
     let document = client.list_traces(session_id).await?;
+    // `/v1/traces?session_id=` is unpaginated by contract — the handler takes
+    // no cursor or limit and returns the session's full turn list. This
+    // tripwire turns a future, silently-truncating change of that contract
+    // into a loud failure instead of an incomplete transcript.
+    if document
+        .get("next_cursor")
+        .is_some_and(|cursor| !cursor.is_null())
+    {
+        return error::ApiContractSnafu {
+            detail: "the traces listing began paginating; this client must learn cursors before \
+                     it can build a complete transcript",
+        }
+        .fail();
+    }
     let items = document
         .get("items")
         .cloned()

@@ -292,7 +292,13 @@ fn turn_filter(since: Option<&str>, until: Option<&str>) -> Result<TurnFilter> {
     })
 }
 
-/// Accept RFC 3339 or a bare `YYYY-MM-DD`, which means midnight UTC.
+/// Accept RFC 3339 or a bare `YYYY-MM-DD`.
+///
+/// A bare date names the whole day: as a lower bound it starts at midnight
+/// UTC, as an upper bound it ends at the day's last instant — otherwise
+/// `--until 2026-07-31` would exclude everything after the day's first
+/// nanosecond, silently dropping nearly the entire final day the user asked
+/// for.
 fn parse_bound(flag: &'static str, value: Option<&str>) -> Result<Option<OffsetDateTime>> {
     let Some(raw) = value.map(str::trim).filter(|raw| !raw.is_empty()) else {
         return Ok(None);
@@ -301,7 +307,12 @@ fn parse_bound(flag: &'static str, value: Option<&str>) -> Result<Option<OffsetD
         return Ok(Some(parsed));
     }
     if let Ok(date) = time::Date::parse(raw, format_description!("[year]-[month]-[day]")) {
-        return Ok(Some(date.midnight().assume_utc()));
+        let start = date.midnight().assume_utc();
+        return Ok(Some(if flag == "--until" {
+            start + time::Duration::days(1) - time::Duration::nanoseconds(1)
+        } else {
+            start
+        }));
     }
     error::InvalidSkillTimeSnafu {
         flag,
@@ -354,6 +365,9 @@ mod tests {
     fn a_date_bound_means_midnight_utc() {
         let at = parse_bound("--since", Some("2026-07-31")).unwrap().unwrap();
         assert_eq!(at.to_string(), "2026-07-31 0:00:00.0 +00:00:00");
+        // A bare upper bound covers the WHOLE named day.
+        let at = parse_bound("--until", Some("2026-07-31")).unwrap().unwrap();
+        assert_eq!(at.to_string(), "2026-07-31 23:59:59.999999999 +00:00:00");
     }
 
     #[test]
