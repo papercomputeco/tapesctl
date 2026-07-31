@@ -199,10 +199,41 @@ impl ApiClient {
     /// Build a client against `base`.
     #[must_use]
     pub fn new(base: Url) -> Self {
-        Self {
-            http: reqwest::Client::new(),
-            base,
-        }
+        // Redirects are refused, not followed: this client speaks to exactly
+        // the server the user configured, and both the discovery document and
+        // a cassette's own spec are data that must not be able to steer a
+        // request — least of all one carrying a user-provided body — onto
+        // another host. The tapes API never redirects, so a 3xx here is
+        // always either a misconfiguration or an attempt to move the client.
+        let http = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            // Building with only a redirect policy cannot fail in practice;
+            // the fallback default client is guarded by `refuse_moved` on
+            // every response path regardless.
+            .unwrap_or_default();
+        Self { http, base }
+    }
+
+    /// Refuse a response that is a redirect or that a redirect produced.
+    ///
+    /// The primary defence is the client's `Policy::none`; this backstop makes
+    /// the property visible per-response: any 3xx errors out, and the origin
+    /// that answered must be the origin the user configured.
+    fn refuse_moved(&self, response: &reqwest::Response) -> Result<()> {
+        snafu::ensure!(
+            !response.status().is_redirection(),
+            error::ApiContractSnafu {
+                detail: "the server answered with a redirect; this client does not follow them",
+            }
+        );
+        snafu::ensure!(
+            response.url().origin() == self.base.origin(),
+            error::ApiContractSnafu {
+                detail: "the response came from a different origin than the configured server",
+            }
+        );
+        Ok(())
     }
 
     /// The base URL, for logging.
@@ -404,6 +435,7 @@ impl ApiClient {
             request = request.header(http::header::IF_NONE_MATCH, etag);
         }
         let response = request.send().await.context(error::ApiSendSnafu)?;
+        self.refuse_moved(&response)?;
 
         // The pre-flight guards validate the URL this client BUILT; a 30x
         // from the server can still walk the request elsewhere, and reqwest
@@ -456,6 +488,10 @@ impl ApiClient {
         }
 
         let response = request.send().await.context(error::ApiSendSnafu)?;
+        // Cassette calls carry user-provided bodies and headers, so of all
+        // requests this client makes these are the ones a redirect must never
+        // be able to move.
+        self.refuse_moved(&response)?;
         Self::decode_json(response, &url).await
     }
 
@@ -510,6 +546,7 @@ impl ApiClient {
             .send()
             .await
             .context(error::ApiSendSnafu)?;
+        self.refuse_moved(&response)?;
         Self::decode_json(response, &url).await
     }
 
@@ -520,6 +557,7 @@ impl ApiClient {
             .send()
             .await
             .context(error::ApiSendSnafu)?;
+        self.refuse_moved(&response)?;
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
@@ -614,9 +652,16 @@ mod tests {
             .fetch_cassette_spec("/v1/cassettes/x/openapi.json", None)
             .await
             .unwrap_err();
+        assert!(err.to_string().contains("redirect"), "wrong error: {err}");
+        // Nothing left the configured origin: the redirect was refused, not
+        // followed and then rejected.
         assert!(
-            err.to_string().contains("non-relative OpenAPI path"),
-            "wrong error: {err}"
+            elsewhere
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .is_empty(),
+            "the foreign host must never see a request"
         );
     }
 
