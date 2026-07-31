@@ -37,7 +37,7 @@
                 "libproc-0.14.11" = "sha256-B4mZIbjn1FOsTJXqyv3DRXAE3FFwT/4Gl+GDP4r9+9M=";
                 # The shared harness crate, consumed by git pin since the
                 # repo split. Recompute when the pin rev bumps.
-                "tapes-harnesses-0.1.0" = "sha256-EajBnfCJ16nq2KNEWNyJtLZclWckIlBk3HHXTSZwvBs=";
+                "tapes-harnesses-0.1.0" = "sha256-f0GVfFELkipeSjmFPzpOlykvLUb2vR/+XD6RgE0otuE=";
               };
             };
             cargoBuildFlags = [ "-p" "tapesctl" ];
