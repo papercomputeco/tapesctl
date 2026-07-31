@@ -39,9 +39,20 @@ tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"
 bytes = "1"
 
-# --- HTTP (JIT proxy + API client; wired in during Track 1) ---
+# --- HTTP (JIT proxy + API client) ---
+# reqwest is built WITHOUT any compression feature on purpose. With one
+# enabled it transparently decompresses a `Content-Encoding: gzip` response
+# and strips the header — which would silently break two invariants at once:
+# the proxy would hand the harness bytes that no longer match the encoding it
+# forwarded, and the captured `raw_response` would no longer be the verbatim
+# upstream bytes. Passing the encoded bytes through untouched, and telling
+# ingest which encoding they are in, keeps both honest. paperd omits it for
+# the same reason.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "http2", "json"] }
+axum = { version = "0.7", default-features = false, features = ["http1", "http2", "tokio"] }
 http = "1"
+http-body = "1"
+http-body-util = "0.1"
 base64 = "0.22"
 percent-encoding = "2"
 url = { version = "2", features = ["serde"] }
@@ -99,3 +110,11 @@ panic = "deny"
 # Reached via `tapes-harnesses -> netsock -> libproc`.
 [patch.crates-io]
 libproc = { git = "https://github.com/andrewdavidmackenzie/libproc-rs.git", rev = "9e079f3308182bb3a47fe509571d38fb4fd380f3" }
+
+# TEMPORARY — grove development only. Points `tapes-harnesses` at the sibling
+# grove member so a crate change and its consumer can be developed in one pass.
+# Remove this block and advance the `rev` above before merging: a path override
+# silently ignores the pinned revision, so leaving it in would make CI build
+# whatever happens to be checked out next to it.
+[patch."https://github.com/papercomputeco/tapes-harnesses"]
+tapes-harnesses = { path = "../tapes-harnesses" }
