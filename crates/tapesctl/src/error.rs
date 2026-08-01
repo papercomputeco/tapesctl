@@ -205,6 +205,12 @@ pub enum Error {
     #[snafu(display("the tapes URL cannot be used as a base for API routes"))]
     NotABase,
 
+    /// The HTTP client itself could not be constructed. Requests error out
+    /// rather than fall back to a client with different (redirect-following)
+    /// behavior.
+    #[snafu(display("could not initialize the HTTP client"))]
+    ClientInit,
+
     /// The API request itself failed.
     #[snafu(display("could not reach the tapes API"))]
     ApiSend {
