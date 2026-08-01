@@ -28,7 +28,7 @@
 //! gateway adds its own on the way through.
 
 use serde_json::Value;
-use snafu::ResultExt;
+use snafu::{OptionExt, ResultExt};
 use url::Url;
 
 use crate::error::{Error, Result, error};
@@ -189,9 +189,13 @@ pub struct Call<'a> {
 }
 
 /// A client for one tapes API server.
+///
+/// `http` is `None` only if the no-redirect client could not be built at all —
+/// in which case every request errors, rather than any fallback silently
+/// following redirects.
 #[derive(Debug, Clone)]
 pub struct ApiClient {
-    http: reqwest::Client,
+    http: Option<reqwest::Client>,
     base: Url,
 }
 
@@ -205,14 +209,20 @@ impl ApiClient {
         // request — least of all one carrying a user-provided body — onto
         // another host. The tapes API never redirects, so a 3xx here is
         // always either a misconfiguration or an attempt to move the client.
+        // There is deliberately NO fallback client: if this build fails
+        // (which a redirect policy alone cannot cause in practice), every
+        // request errors instead of any default client quietly following
+        // redirects.
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .build()
-            // Building with only a redirect policy cannot fail in practice;
-            // the fallback default client is guarded by `refuse_moved` on
-            // every response path regardless.
-            .unwrap_or_default();
+            .ok();
         Self { http, base }
+    }
+
+    /// The one HTTP client, or a hard error — never a redirect-following one.
+    fn http(&self) -> Result<&reqwest::Client> {
+        self.http.as_ref().context(error::ClientInitSnafu)
     }
 
     /// Refuse a response that is a redirect or that a redirect produced.
@@ -430,7 +440,7 @@ impl ApiClient {
             .fail();
         }
 
-        let mut request = self.http.get(url.clone());
+        let mut request = self.http()?.get(url.clone());
         if let Some(etag) = etag {
             request = request.header(http::header::IF_NONE_MATCH, etag);
         }
@@ -477,7 +487,7 @@ impl ApiClient {
             .build()
         })?;
 
-        let mut request = self.http.request(method, url.clone());
+        let mut request = self.http()?.request(method, url.clone());
         for (name, value) in &call.headers {
             request = request.header(name, value);
         }
@@ -526,7 +536,7 @@ impl ApiClient {
     pub async fn seed_demo(&self) -> Result<Value> {
         let url = self.url("/v1/admin/seed/demo")?;
         let response = self
-            .http
+            .http()?
             .post(url.clone())
             .header(http::header::CONTENT_TYPE, "application/json")
             // The server's request schema has one optional field, and the only
@@ -541,7 +551,7 @@ impl ApiClient {
 
     async fn get_json(&self, url: Url) -> Result<Value> {
         let response = self
-            .http
+            .http()?
             .get(url.clone())
             .send()
             .await
@@ -552,7 +562,7 @@ impl ApiClient {
 
     async fn get_stream(&self, url: Url) -> Result<reqwest::Response> {
         let response = self
-            .http
+            .http()?
             .get(url.clone())
             .send()
             .await
