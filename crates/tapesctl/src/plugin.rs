@@ -102,13 +102,25 @@ pub fn install(artifact: &PluginArtifact, home: &Path) -> Result<PathBuf> {
         artifact.file_name(),
         std::process::id()
     ));
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&staged)
-        .context(error::PluginWriteSnafu {
-            path: staged.clone(),
-        })?;
+    let mut file = match open_staging(&staged) {
+        Ok(file) => file,
+        // Crash residue: a previous install died between staging and rename,
+        // and PID reuse landed a later run on the same name. The name is ours
+        // by construction (dot-prefixed, tapesctl-install-suffixed), so the
+        // leftover is removed and the exclusive create retried exactly once —
+        // a racer re-planting between the two still loses the O_EXCL.
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            let _ = std::fs::remove_file(&staged);
+            open_staging(&staged).context(error::PluginWriteSnafu {
+                path: staged.clone(),
+            })?
+        }
+        Err(err) => {
+            return Err(err).context(error::PluginWriteSnafu {
+                path: staged.clone(),
+            });
+        }
+    };
     restrict_permissions(&file, &staged)?;
     use std::io::Write as _;
     let staged_result = file
@@ -128,6 +140,14 @@ pub fn install(artifact: &PluginArtifact, home: &Path) -> Result<PathBuf> {
     }
     staged_result?;
     Ok(target)
+}
+
+/// Open the staging file exclusively — never through an existing entry.
+fn open_staging(staged: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(staged)
 }
 
 /// Narrow the open file to owner-only, through its handle rather than by path.
@@ -283,6 +303,30 @@ mod tests {
             .filter(|entry| entry.file_name().to_string_lossy().starts_with('.'))
             .collect();
         assert!(strays.is_empty(), "staging residue: {strays:?}");
+    }
+
+    #[test]
+    fn crash_residue_at_the_staging_name_does_not_block_a_retry() {
+        // A previous install died between staging and rename; PID reuse lands
+        // this run on the same staging name. The residue is ours — the retry
+        // must clear it and complete.
+        let home = tempfile::tempdir().unwrap();
+        let artifact = &PI_GATEWAY_EXTENSION;
+        let dir = artifact.install_dir(home.path());
+        std::fs::create_dir_all(&dir).unwrap();
+        let staged = dir.join(format!(
+            ".{}.tapesctl-install-{}",
+            artifact.file_name(),
+            std::process::id()
+        ));
+        std::fs::write(&staged, "// residue from a dead installer").unwrap();
+
+        let written = install(artifact, home.path()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&written).unwrap(),
+            artifact.contents()
+        );
+        assert!(!staged.exists(), "the residue must be gone after the swap");
     }
 
     #[cfg(unix)]
