@@ -42,6 +42,8 @@ use url::Url;
 
 use crate::cli::StartArgs;
 use crate::error::{Result, error};
+use crate::transcript::client::TranscriptClient;
+use crate::transcript::tailer::{self, SessionTracker};
 use ingest::IngestClient;
 use proxy::ProxyState;
 
@@ -206,6 +208,8 @@ pub struct StartConfig {
     pub org_id: String,
     /// Acting subject stamped on captured turns.
     pub auth_subject: String,
+    /// Whether to tail this session's transcripts alongside the wire lane.
+    pub transcripts: bool,
 }
 
 impl StartConfig {
@@ -241,11 +245,18 @@ impl StartConfig {
             auth_subject: args
                 .auth_subject
                 .unwrap_or_else(|| format!("local:{}", local_username())),
+            // Transcripts are the only source of a session's fork skeleton, so
+            // the lane is on unless the user explicitly says another client is
+            // already tailing the same tree.
+            transcripts: !args.no_transcripts,
         })
     }
 }
 
-fn local_username() -> String {
+/// The local OS username, or `unknown`. Shared with `tapesctl sync`, which
+/// stamps the same default subject.
+#[must_use]
+pub fn local_username() -> String {
     std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "unknown".to_owned())
@@ -275,9 +286,11 @@ pub async fn run(args: StartArgs) -> Result<()> {
     );
     let (session_tx, mut session_rx) = unbounded_channel::<String>();
 
+    let tracker = SessionTracker::new();
     let state = ProxyState {
         upstream: config.upstream.clone(),
         ingest: IngestClient::new(&config.tapes_url)?,
+        transcript_tracker: tracker.clone(),
         attribution: Arc::new(attribution),
         attribution_config: Arc::new(AttributionConfig::new(CodexProviderFilter::new(
             CODEX_PROVIDER_PREFIX,
@@ -315,6 +328,8 @@ pub async fn run(args: StartArgs) -> Result<()> {
         "capture proxy listening",
     );
 
+    let tailer = spawn_tailer(&config, tracker)?;
+
     let written = materialise_config_files(&plan)?;
     let web_url = config.web_url.clone();
     let link = tokio::spawn(async move {
@@ -333,11 +348,53 @@ pub async fn run(args: StartArgs) -> Result<()> {
     link.abort();
     remove_config_files(&written);
 
+    // The tailer is *awaited*, not aborted. Its shutdown pass is the
+    // `PushReason::Exit` push that delivers the completed transcript set —
+    // including the subagent files that carry the fork skeleton — and it can
+    // only run after the harness has finished writing them. Aborting here would
+    // drop exactly the data the transcript lane exists to capture.
+    if let Some((shutdown, handle)) = tailer {
+        let _ = shutdown.send(());
+        if let Err(err) = handle.await {
+            warn!(error = %err, "transcript tailer did not finish cleanly");
+        }
+    }
+
     let status = status?;
     if !status.success() {
         warn!(code = ?status.code(), "harness exited with a non-zero status");
     }
     Ok(())
+}
+
+/// Start the transcript tailer for this session, when the harness has one.
+///
+/// `None` covers the two cases where the lane cannot or should not run: the user
+/// opted out, or the harness is Codex — whose transcripts do not live in the
+/// Claude project tree the shared crate's discovery walks. Returning `None`
+/// rather than failing is deliberate: a Codex capture is still a good wire
+/// capture, and refusing to start it over a lane that does not apply would be a
+/// regression against PR 5.
+fn spawn_tailer(
+    config: &StartConfig,
+    tracker: SessionTracker,
+) -> Result<
+    Option<(
+        tokio::sync::oneshot::Sender<()>,
+        tokio::task::JoinHandle<()>,
+    )>,
+> {
+    if !config.transcripts || config.harness != Harness::Claude {
+        return Ok(None);
+    }
+    let projects_root = tailer::default_projects_root().context(error::NoHomeDirSnafu)?;
+    let tailer_config = tailer::TailerConfig::new(
+        projects_root,
+        claude_sessions_dir()?,
+        config.auth_subject.clone(),
+    );
+    let client = TranscriptClient::new(&config.tapes_url)?;
+    Ok(Some(tailer::spawn(client, tracker, tailer_config)))
 }
 
 fn print_session_link(web_url: Option<&Url>, session_id: &str) {
@@ -418,6 +475,7 @@ mod tests {
             web_url: None,
             org_id: None,
             auth_subject: None,
+            no_transcripts: false,
         }
     }
 

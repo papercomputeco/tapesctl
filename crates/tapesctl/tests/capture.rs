@@ -21,6 +21,7 @@ use tapes_harnesses::attribution::{
 };
 use tapesctl::start::ingest::IngestClient;
 use tapesctl::start::proxy::{ProxyState, forward_handler};
+use tapesctl::transcript::tailer::SessionTracker;
 use url::Url;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -76,6 +77,7 @@ async fn start_harness(response: ResponseTemplate) -> Harness {
         org_id: Arc::new(String::new()),
         auth_subject: Arc::new("local:test".to_owned()),
         session_seen: Arc::new(tokio::sync::Mutex::new(None)),
+        transcript_tracker: SessionTracker::new(),
     };
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
