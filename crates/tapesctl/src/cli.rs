@@ -155,6 +155,18 @@ pub enum Command {
     Version,
 }
 
+impl Command {
+    /// Whether this command gives the terminal to a child process.
+    ///
+    /// The one thing the logging setup needs to know before dispatch: a command
+    /// that launches a TUI cannot also write to the terminal, so its diagnostics
+    /// have to go somewhere else. See [`crate::logging`].
+    #[must_use]
+    pub fn hands_over_terminal(&self) -> bool {
+        matches!(self, Self::Start(_))
+    }
+}
+
 /// Where the tapes server is, shared by every command that talks to one.
 #[derive(Debug, Clone, Args)]
 pub struct ApiArgs {

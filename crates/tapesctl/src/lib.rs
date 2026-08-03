@@ -5,6 +5,7 @@ pub mod api;
 pub mod cassette;
 pub mod cli;
 pub mod error;
+pub mod logging;
 pub mod ports;
 pub mod start;
 pub mod transcript;
@@ -20,26 +21,6 @@ pub use error::{Error, Result};
 /// The tapesctl canary. Printed when the binary is invoked with no subcommand;
 /// the release smoke test asserts on this exact string, so keep it stable.
 const CANARY: &str = "All in all, just another tape in the stereo";
-
-/// Initialize `tracing` output on stderr. `verbose` bumps the default filter
-/// (`RUST_LOG` still wins when set): `-v` → debug, `-vv` → trace.
-pub fn init_tracing(verbose: u8) {
-    use tracing_subscriber::{EnvFilter, fmt};
-
-    let default = match verbose {
-        0 => "info",
-        1 => "debug",
-        _ => "trace",
-    };
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
-
-    // `try_init` is fine to ignore: a failure just means a subscriber is
-    // already installed (e.g. in tests), which is not fatal here.
-    let _ = fmt()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr)
-        .try_init();
-}
 
 /// The build version, stamped by cargo.
 pub fn version() -> &'static str {

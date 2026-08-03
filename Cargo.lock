@@ -1672,6 +1672,7 @@ dependencies = [
  "tapes-harnesses",
  "tempfile",
  "test-case",
+ "time",
  "tokio",
  "tracing",
  "tracing-subscriber",
