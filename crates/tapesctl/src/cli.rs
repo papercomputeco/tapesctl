@@ -886,3 +886,289 @@ mod tests {
         assert!(Cli::try_parse_from(["tapesctl", "spans", "get", "t-1"]).is_err());
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn the_cli_definition_is_well_formed() {
+        // clap panics at runtime on a malformed definition — a duplicated short
+        // flag between a flattened struct and its parent, for instance — so this
+        // is the assertion that the surface is constructible at all.
+        Cli::command().debug_assert();
+    }
+
+    fn parse(args: &[&str]) -> Cli {
+        Cli::try_parse_from(args).unwrap()
+    }
+
+    #[test]
+    fn resource_and_method_parse_as_two_words() {
+        let cli = parse(&["tapesctl", "sessions", "list", "--tapes-url", "http://x"]);
+        assert!(matches!(
+            cli.command,
+            Some(Command::Sessions(SessionsCommand::List(_))),
+        ));
+    }
+
+    #[test]
+    fn a_span_is_addressed_by_its_trace_and_its_own_id() {
+        let cli = parse(&[
+            "tapesctl",
+            "spans",
+            "get",
+            "t-1",
+            "s-1",
+            "--tapes-url",
+            "http://x",
+        ]);
+        match cli.command {
+            Some(Command::Spans(SpansCommand::Get(args))) => {
+                assert_eq!(args.trace_id, "t-1");
+                assert_eq!(args.span_id, "s-1");
+            }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn harness_arguments_after_start_are_not_eaten_by_tapesctl() {
+        // `--verbose` here belongs to the harness; treating it as tapesctl's
+        // would change what the user's command does.
+        let cli = parse(&[
+            "tapesctl",
+            "start",
+            "claude",
+            "--tapes-url",
+            "http://x",
+            "--",
+            "--verbose",
+            "-p",
+            "hi",
+        ]);
+        match cli.command {
+            Some(Command::Start(args)) => {
+                assert_eq!(args.harness, "claude");
+                assert_eq!(args.harness_args, vec!["--verbose", "-p", "hi"]);
+            }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sync_defaults_to_the_bounded_window_and_the_home_tree() {
+        let cli = parse(&["tapesctl", "sync", "--tapes-url", "http://x"]);
+        match cli.command {
+            Some(Command::Sync(args)) => {
+                assert_eq!(args.since_days, None);
+                assert_eq!(args.projects_root, None);
+            }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn export_takes_a_short_output_flag_like_the_command_it_ports() {
+        let cli = parse(&[
+            "tapesctl",
+            "export",
+            "s-1",
+            "-o",
+            "out.jsonl",
+            "--tapes-url",
+            "http://x",
+        ]);
+        match cli.command {
+            Some(Command::Export(args)) => {
+                assert_eq!(args.output, Some(PathBuf::from("out.jsonl")));
+            }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn skill_sync_needs_no_server() {
+        // It is a local file copy; requiring --tapes-url would be a lie.
+        let cli = parse(&["tapesctl", "skill", "sync", "review", "--claude", "--local"]);
+        match cli.command {
+            Some(Command::Skill(SkillCommand::Sync(args))) => {
+                assert_eq!(args.name, "review");
+                assert!(args.claude);
+                assert!(args.local);
+            }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn search_defaults_match_the_command_it_ports() {
+        let cli = parse(&[
+            "tapesctl",
+            "search",
+            "gum glow charm",
+            "--tapes-url",
+            "http://x",
+        ]);
+        match cli.command {
+            Some(Command::Search(args)) => {
+                assert_eq!(args.query, "gum glow charm");
+                assert_eq!(args.top, 5, "the Go default is 5");
+                assert!(!args.quiet);
+            }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn search_keeps_the_short_flags_muscle_memory_expects() {
+        let cli = parse(&[
+            "tapesctl",
+            "search",
+            "hooks",
+            "-k",
+            "10",
+            "-q",
+            "--tapes-url",
+            "http://x",
+        ]);
+        match cli.command {
+            Some(Command::Search(args)) => {
+                assert_eq!(args.top, 10);
+                assert!(args.quiet);
+            }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_negative_result_count_is_refused_by_the_parser() {
+        // The server would 400 on `top_k <= 0`; rejecting it here costs no
+        // round trip and names the flag.
+        assert!(Cli::try_parse_from(["tapesctl", "search", "x", "-k", "-1"]).is_err());
+    }
+
+    #[test]
+    fn generate_requires_a_name_and_defaults_the_rest() {
+        let cli = parse(&[
+            "tapesctl",
+            "skill",
+            "generate",
+            "s-1",
+            "s-2",
+            "--name",
+            "debug-hooks",
+            "--tapes-url",
+            "http://x",
+        ]);
+        match cli.command {
+            Some(Command::Skill(SkillCommand::Generate(args))) => {
+                assert_eq!(args.session_ids, vec!["s-1", "s-2"]);
+                assert_eq!(args.name, "debug-hooks");
+                assert_eq!(args.skill_type, "workflow");
+                assert_eq!(args.provider, "openai");
+                assert_eq!(args.search_top, 3);
+                assert!(!args.preview);
+            }
+            other => panic!("got: {other:?}"),
+        }
+        assert!(
+            Cli::try_parse_from(["tapesctl", "skill", "generate", "s-1"]).is_err(),
+            "--name is required",
+        );
+    }
+
+    #[test]
+    fn the_discovery_server_is_found_under_both_spellings_clap_accepts() {
+        // The cassette nouns must exist before argv is parsed, so this scan is
+        // what stands in for the parse that has not happened yet.
+        assert_eq!(
+            discovery_url(["tapesctl", "sessions", "list", "--tapes-url", "http://x"]),
+            Some("http://x".to_owned()),
+        );
+        assert_eq!(
+            discovery_url(["tapesctl", "summary", "reports", "--tapes-url=http://y"]),
+            Some("http://y".to_owned()),
+        );
+    }
+
+    #[test]
+    fn generate_can_take_its_sessions_from_a_search_instead() {
+        let cli = parse(&[
+            "tapesctl",
+            "skill",
+            "generate",
+            "--search",
+            "react hooks",
+            "--search-top",
+            "5",
+            "--name",
+            "react-debug",
+            "--tapes-url",
+            "http://x",
+        ]);
+        match cli.command {
+            Some(Command::Skill(SkillCommand::Generate(args))) => {
+                assert!(args.session_ids.is_empty());
+                assert_eq!(args.search.as_deref(), Some("react hooks"));
+                assert_eq!(args.search_top, 5);
+            }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn skill_list_needs_no_server() {
+        // It reads the authoring directory; requiring --tapes-url would be a lie.
+        let cli = parse(&["tapesctl", "skill", "list", "--type", "workflow"]);
+        match cli.command {
+            Some(Command::Skill(SkillCommand::List(args))) => {
+                assert_eq!(args.skill_type.as_deref(), Some("workflow"));
+            }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verbosity_after_the_separator_belongs_to_the_harness() {
+        assert_eq!(
+            verbosity(["tapesctl", "start", "claude", "--", "-vv", "--verbose"]),
+            0
+        );
+        assert_eq!(
+            verbosity(["tapesctl", "-v", "start", "claude", "--", "-vv"]),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_after_the_separator_belong_to_the_harness_not_discovery() {
+        assert_eq!(
+            discovery_url([
+                "tapesctl",
+                "start",
+                "claude",
+                "--",
+                "--tapes-url",
+                "http://evil"
+            ]),
+            std::env::var(TAPES_URL_ENV).ok().filter(|v| !v.is_empty()),
+        );
+    }
+
+    #[test]
+    fn a_dangling_server_flag_is_not_read_as_a_value() {
+        assert_eq!(
+            discovery_url(["tapesctl", "sessions", "list", "--tapes-url"]),
+            std::env::var(TAPES_URL_ENV).ok().filter(|v| !v.is_empty()),
+        );
+    }
+
+    #[test]
+    fn a_missing_required_positional_is_rejected() {
+        assert!(Cli::try_parse_from(["tapesctl", "sessions", "get"]).is_err());
+        assert!(Cli::try_parse_from(["tapesctl", "spans", "get", "t-1"]).is_err());
+    }
+}
