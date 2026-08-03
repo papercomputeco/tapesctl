@@ -32,6 +32,24 @@ subagent made but renders that work as flat dispatch text instead of nested
 rows. Pass `--no-transcripts` only when another capture client is already
 tailing the same tree.
 
+While a harness is running it owns the terminal, so `start` writes its
+diagnostics to a file instead of the screen — a stray log line lands in the
+middle of a TUI frame. The path is printed before the harness launches and
+again when it exits:
+
+```bash
+~/.tapes/logs/start-<timestamp>-<pid>.log
+```
+
+`RUST_LOG` sets the level as usual. Pass `-v` (before the subcommand) to stream
+to stderr instead of a file, accepting what that does to the display:
+
+```bash
+tapesctl -v start claude --tapes-url http://localhost:8081
+```
+
+Every other command logs to stderr as before.
+
 ```bash
 tapesctl sync    # backstop: sweep transcripts no live tailer saw
 ```
@@ -57,9 +75,51 @@ takes `--tapes-url`, falling back to `TAPES_URL`.
 ```bash
 tapesctl export <session-id> -o bundle.jsonl
 tapesctl seed                              # demo data for a fresh server
-tapesctl skill sync <name> --claude        # copy an authored skill into place
 ```
 
+## Searching
+
+```bash
+tapesctl search "how to configure logging"
+tapesctl search "error handling patterns" --top 10
+tapesctl search "gum glow charm" --quiet   # session ids, one per line
+```
+
+Hits are individual main-conversation LLM spans with their trace and turn
+context — "find the turn where X happened". This needs a server with span
+embeddings written (`tapes serve`, its embed worker, or the `tapes dev
+embed-spans` backfill); a deployment without them answers `503` rather than an
+empty result set.
+
+`--quiet` prints bare session ids in score order, which is what `skill generate`
+takes as arguments:
+
+```bash
+tapesctl skill generate $(tapesctl search "charm CLI" --quiet --top 1) --name charm-patterns
+```
+
+## Skills
+
+A skill is a markdown file with frontmatter under `~/.tapes/skills/`. Generate
+one from captured sessions, list what you have, and install it where an agent
+will look:
+
+```bash
+tapesctl skill generate <session-id> --name debug-react-hooks
+tapesctl skill generate --search "react hooks" --search-top 3 --name react-debug
+tapesctl skill generate <session-id> --name morning-work --since 2026-02-17
+tapesctl skill list --type workflow
+tapesctl skill sync debug-react-hooks --claude   # copy it into place
+```
+
+`generate` talks to two servers: `--tapes-url` for the session transcript, and
+an LLM provider for the extraction. The provider is `--provider`
+(`openai`, `anthropic`, or `ollama`), keyed from `--api-key` or the provider's
+own environment variable — prefer the variable, since an argument is visible in
+the process list. `--preview` renders the skill without writing it.
+
+Skill files are written `0600`, and a skills path that resolves outside the
+directory you selected is refused rather than followed.
 ## Cassettes
 
 A tapes deployment can serve **cassettes** — independently built API extensions

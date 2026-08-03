@@ -388,4 +388,135 @@ pub enum Error {
         /// Underlying IO failure.
         source: std::io::Error,
     },
+
+    // --- skill generation ---------------------------------------------------
+    /// `--type` was not a skill type the format defines.
+    #[snafu(display("invalid --type {value:?} (valid types: {valid})"))]
+    InvalidSkillType {
+        /// What the user asked for.
+        value: String,
+        /// The accepted values.
+        valid: String,
+    },
+
+    /// `--since` or `--until` was not a time.
+    #[snafu(display("invalid {flag} {value:?} (expected RFC 3339 or YYYY-MM-DD)"))]
+    InvalidSkillTime {
+        /// Which flag carried it.
+        flag: &'static str,
+        /// What the user asked for.
+        value: String,
+    },
+
+    /// Neither session ids nor a search query were given.
+    #[snafu(display(
+        "no session ids provided and no --search query; name a session or pass --search"
+    ))]
+    NoSessionsNamed,
+
+    /// A `--search` query matched no sessions.
+    #[snafu(display("no sessions found for search {query:?}"))]
+    NoSearchResults {
+        /// The query that matched nothing.
+        query: String,
+    },
+
+    /// A session contributed no turns to extract from.
+    #[snafu(display(
+        "no turns in session {session}{}",
+        if *filtered { " after applying --since/--until" } else { "" }
+    ))]
+    NoTurnsInSession {
+        /// The session that came back empty.
+        session: String,
+        /// Whether a time window was in play, which is usually the cause.
+        filtered: bool,
+    },
+
+    /// The extraction model's response was not a skill document.
+    #[snafu(display("could not read a skill from the model's response"))]
+    SkillJson {
+        /// Underlying JSON failure.
+        source: serde_json::Error,
+    },
+
+    /// The model never returned parseable JSON.
+    #[snafu(display("the model did not return valid JSON in {attempts} attempts"))]
+    SkillNotExtracted {
+        /// How many times it was asked.
+        attempts: u32,
+    },
+
+    // --- the extraction provider --------------------------------------------
+    /// `--provider` names something this client cannot call.
+    #[snafu(display("unsupported provider {provider:?} (supported: openai, anthropic, ollama)"))]
+    LlmProvider {
+        /// What the user asked for.
+        provider: String,
+    },
+
+    /// No API key resolved for a provider that requires one.
+    #[snafu(display("no API key for {provider}: set {env_var} or pass --api-key"))]
+    LlmNoApiKey {
+        /// The provider that needs a key.
+        provider: &'static str,
+        /// The environment variable consulted.
+        env_var: &'static str,
+    },
+
+    /// The provider's base URL could not be built.
+    #[snafu(display("could not build the LLM provider endpoint"))]
+    LlmUrl {
+        /// Underlying parse failure.
+        source: url::ParseError,
+    },
+
+    /// The extraction call could not be delivered.
+    #[snafu(display("could not reach the LLM provider"))]
+    LlmSend {
+        /// Underlying transport failure.
+        source: reqwest::Error,
+    },
+
+    /// The provider answered with a non-success status. The body is carried
+    /// because it is where a provider names the offending model or key.
+    #[snafu(display("{provider} returned {status}: {body}"))]
+    LlmStatus {
+        /// Which provider answered.
+        provider: &'static str,
+        /// HTTP status returned.
+        status: u16,
+        /// Response body, verbatim.
+        body: String,
+    },
+
+    /// The provider's response was not the JSON its API documents.
+    #[snafu(display("could not decode the LLM provider's response"))]
+    LlmDecode {
+        /// Underlying JSON failure.
+        source: serde_json::Error,
+    },
+
+    /// The provider returned a success status carrying an error document.
+    #[snafu(display("{provider} error: {message}"))]
+    LlmRefused {
+        /// Which provider answered.
+        provider: &'static str,
+        /// The provider's message.
+        message: String,
+    },
+
+    /// The provider returned a success status carrying no content.
+    #[snafu(display("{provider} returned no content"))]
+    LlmEmpty {
+        /// Which provider answered.
+        provider: &'static str,
+    },
+
+    /// The extraction call did not finish inside its deadline.
+    #[snafu(display("the {provider} extraction call timed out"))]
+    LlmTimeout {
+        /// Which provider was being called.
+        provider: &'static str,
+    },
 }

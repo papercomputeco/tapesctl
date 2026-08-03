@@ -146,8 +146,13 @@ pub async fn run(cli: Cli) -> Result<()> {
         Some(Command::Sessions(command)) => api::sessions(command).await,
         Some(Command::Traces(command)) => api::traces(command).await,
         Some(Command::Spans(command)) => api::spans(command).await,
+        Some(Command::Search(args)) => ports::search::run(args).await,
         Some(Command::Export(args)) => ports::export::run(args).await,
         Some(Command::Seed(args)) => ports::seed::run(args).await,
+        Some(Command::Skill(SkillCommand::Generate(args))) => {
+            ports::skill_generate::run(args).await
+        }
+        Some(Command::Skill(SkillCommand::List(args))) => ports::skill_list::run(args),
         Some(Command::Skill(SkillCommand::Sync(args))) => ports::skill::run(args),
         Some(Command::Plugin(cmd)) => plugin(cmd),
     }

@@ -37,6 +37,12 @@ use crate::error::{Error, Result, error};
 /// than rejected, so a caller asking for more must still follow `next_cursor`.
 pub const MAX_LIMIT: u64 = 200;
 
+/// Default number of span search hits, matching both the server's default and
+/// the `tapes search` flag this port reproduces.
+///
+/// There is no server-side ceiling on `top_k` — the handler passes it straight
+/// through — so this is a default, not a clamp.
+pub const DEFAULT_SEARCH_TOP_K: u64 = 5;
 /// The cassette discovery route.
 pub const CASSETTES_PATH: &str = "/v1/cassettes";
 
@@ -378,6 +384,31 @@ impl ApiClient {
     /// `GET /v1/traces/{trace_id}/spans/{span_id}`
     pub async fn get_span(&self, trace_id: &str, span_id: &str) -> Result<Value> {
         let url = self.trace_url(trace_id, Some(span_id))?;
+        self.get_json(url).await
+    }
+
+    /// The URL `search_spans` will call.
+    ///
+    /// Both parameters are always sent, unlike [`Self::sessions_list_url`]'s
+    /// omit-when-unset rule: the command that calls this always has a `top_k`
+    /// (its flag carries the default), and the Go command it ports sets both
+    /// unconditionally. Sending them keeps one request spelling rather than two.
+    fn search_spans_url(&self, query: &str, top_k: u64) -> Result<Url> {
+        let mut url = self.url("/v1/search/spans")?;
+        url.query_pairs_mut()
+            .append_pair("query", query)
+            .append_pair("top_k", &top_k.to_string());
+        Ok(url)
+    }
+
+    /// `GET /v1/search/spans` — semantic search over span embeddings.
+    ///
+    /// Answers 503 when the deployment has no embedder or no span embedding
+    /// store, and 503 again when the store exists but no embed pass has run —
+    /// both surface as [`Error::ApiStatus`] carrying the server's message,
+    /// which names which of the two it is.
+    pub async fn search_spans(&self, query: &str, top_k: u64) -> Result<Value> {
+        let url = self.search_spans_url(query, top_k)?;
         self.get_json(url).await
     }
 
@@ -856,6 +887,66 @@ mod tests {
             .await;
 
         assert!(client_for(&server).list_traces("s1").await.is_ok());
+    }
+
+    #[test]
+    fn a_search_sends_both_parameters_under_the_servers_names() {
+        let url = base("http://127.0.0.1:8081")
+            .search_spans_url("gum glow charm", 10)
+            .unwrap();
+        assert_eq!(url.path(), "/v1/search/spans");
+        let query = url.query().unwrap();
+        assert!(
+            query.contains("query=gum+glow+charm"),
+            "the query must be form-encoded: {query}",
+        );
+        assert!(query.contains("top_k=10"), "got: {query}");
+    }
+
+    #[tokio::test]
+    async fn a_search_response_is_passed_through_verbatim() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/search/spans"))
+            .and(query_param("query", "hooks"))
+            .and(query_param("top_k", "5"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"query":"hooks","count":1,"results":[{"trace_id":"t-1","a_new_field":1}]}"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let got = client_for(&server).search_spans("hooks", 5).await.unwrap();
+
+        assert_eq!(got["count"], 1);
+        assert_eq!(got["results"][0]["a_new_field"], 1);
+    }
+
+    #[tokio::test]
+    async fn an_unconfigured_span_search_surfaces_the_servers_explanation() {
+        // 503 is the "no embedder" / "no embed pass has run" answer, and its
+        // body is the only thing that says which — losing it would leave the
+        // user with a bare status and no next step.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/search/spans"))
+            .respond_with(ResponseTemplate::new(503).set_body_string(
+                r#"{"error":"span search is not configured: embedder and span embedding store are required"}"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let err = client_for(&server)
+            .search_spans("hooks", 5)
+            .await
+            .unwrap_err();
+
+        let rendered = format!("{err}");
+        assert!(rendered.contains("503"), "got: {rendered}");
+        assert!(
+            rendered.contains("span search is not configured"),
+            "got: {rendered}",
+        );
     }
 
     #[tokio::test]
