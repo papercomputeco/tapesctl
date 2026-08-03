@@ -41,6 +41,8 @@ pub fn default_source_dir() -> Option<PathBuf> {
 pub struct Destination {
     /// Directory the skill is written into.
     pub dir: PathBuf,
+    /// The root (home or project cwd) the write must stay beneath.
+    pub base: PathBuf,
     /// How the destination is described to the user.
     pub label: &'static str,
 }
@@ -54,18 +56,22 @@ pub fn destination(home: &Path, cwd: &Path, claude: bool, local: bool) -> Destin
     match (claude, local) {
         (false, false) => Destination {
             dir: home.join(".agents").join("skills"),
+            base: home.to_path_buf(),
             label: "global",
         },
         (false, true) => Destination {
             dir: cwd.join(".agents").join("skills"),
+            base: cwd.to_path_buf(),
             label: "project",
         },
         (true, false) => Destination {
             dir: home.join(".claude").join("skills"),
+            base: home.to_path_buf(),
             label: "global, claude",
         },
         (true, true) => Destination {
             dir: cwd.join(".claude").join("skills"),
+            base: cwd.to_path_buf(),
             label: "project, claude",
         },
     }
@@ -96,28 +102,75 @@ pub fn sync(name: &str, source_dir: &Path, destination: &Destination) -> Result<
     std::fs::create_dir_all(&destination.dir).context(error::SkillWriteSnafu {
         path: destination.dir.clone(),
     })?;
-    let target = destination.dir.join(format!("{name}.md"));
-    std::fs::write(&target, &contents).context(error::SkillWriteSnafu {
+    // A repository can pre-create the project-local skills directory as a
+    // symlink pointing anywhere; following it would put the write AND the
+    // chmod on a file outside the tree the user selected. Resolve the
+    // directory that actually exists on disk and require it to still sit
+    // beneath the chosen base.
+    let resolved_dir = destination
+        .dir
+        .canonicalize()
+        .context(error::SkillWriteSnafu {
+            path: destination.dir.clone(),
+        })?;
+    let resolved_base = destination
+        .base
+        .canonicalize()
+        .context(error::SkillWriteSnafu {
+            path: destination.base.clone(),
+        })?;
+    snafu::ensure!(
+        resolved_dir.starts_with(&resolved_base),
+        error::SkillDestinationSnafu {
+            path: destination.dir.clone(),
+        }
+    );
+    let target = resolved_dir.join(format!("{name}.md"));
+    // The final component cannot be handled with a look-then-write: a racer
+    // replacing the target with a symlink between the check and the write
+    // would route both the bytes and the chmod elsewhere. Instead the old
+    // file is removed and the new one is created with O_EXCL — which never
+    // follows a symlink — so a racer's link makes the create FAIL rather
+    // than redirect, and the permissions are set through the open handle,
+    // never by path.
+    match std::fs::remove_file(&target) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => {
+            return error::SkillDestinationSnafu {
+                path: target.clone(),
+            }
+            .fail();
+        }
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target)
+        .context(error::SkillWriteSnafu {
+            path: target.clone(),
+        })?;
+    restrict_permissions(&file, &target)?;
+    use std::io::Write as _;
+    file.write_all(&contents).context(error::SkillWriteSnafu {
         path: target.clone(),
     })?;
-    restrict_permissions(&target)?;
     Ok(target)
 }
 
-/// Narrow the written file to owner-only.
+/// Narrow the open file to owner-only, through its handle.
 #[cfg(unix)]
-fn restrict_permissions(path: &Path) -> Result<()> {
+fn restrict_permissions(file: &std::fs::File, path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).context(
-        error::SkillWriteSnafu {
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))
+        .context(error::SkillWriteSnafu {
             path: path.to_path_buf(),
-        },
-    )
+        })
 }
 
 /// No-op off Unix, where the mode bits have no equivalent.
 #[cfg(not(unix))]
-fn restrict_permissions(_path: &Path) -> Result<()> {
+fn restrict_permissions(_file: &std::fs::File, _path: &Path) -> Result<()> {
     Ok(())
 }
 
@@ -204,6 +257,7 @@ mod tests {
 
         let destination = Destination {
             dir: target.path().to_path_buf(),
+            base: target.path().to_path_buf(),
             label: "global",
         };
         for name in [
@@ -225,6 +279,73 @@ mod tests {
         assert!(std::fs::read_dir(target.path()).unwrap().next().is_none());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_skills_directory_is_refused() {
+        // The repo pre-created `.agents/skills` as a symlink out of the
+        // project: the write and the chmod must not follow it.
+        let source = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::fs::write(source.path().join("review.md"), "body").unwrap();
+        std::fs::create_dir_all(project.path().join(".agents")).unwrap();
+        std::os::unix::fs::symlink(
+            elsewhere.path(),
+            project.path().join(".agents").join("skills"),
+        )
+        .unwrap();
+
+        let destination = Destination {
+            dir: project.path().join(".agents").join("skills"),
+            base: project.path().to_path_buf(),
+            label: "project",
+        };
+        let err = sync("review", source.path(), &destination).unwrap_err();
+        assert!(
+            err.to_string().contains("resolves outside"),
+            "wrong error: {err}"
+        );
+        assert!(
+            std::fs::read_dir(elsewhere.path())
+                .unwrap()
+                .next()
+                .is_none(),
+            "nothing may land behind the symlink"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_target_is_replaced_never_followed() {
+        // The pre-planted link is the racer's move; O_EXCL after the
+        // remove means the link itself is what dies — the file it pointed
+        // at must survive untouched, with its original permissions.
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let victim = target.path().join("victim.txt");
+        std::fs::write(&victim, "precious").unwrap();
+        std::fs::write(source.path().join("review.md"), "body").unwrap();
+        let skills = target.path().join("skills");
+        std::fs::create_dir_all(&skills).unwrap();
+        std::os::unix::fs::symlink(&victim, skills.join("review.md")).unwrap();
+
+        let destination = Destination {
+            dir: skills.clone(),
+            base: target.path().to_path_buf(),
+            label: "global",
+        };
+        let written = sync("review", source.path(), &destination).unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "precious");
+        assert!(
+            !std::fs::symlink_metadata(&written)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the target must be a regular file after sync"
+        );
+        assert_eq!(std::fs::read_to_string(&written).unwrap(), "body");
+    }
+
     #[test]
     fn ordinary_stems_still_pass_validation() {
         for name in ["review", "code-review", "v1.2_final"] {
@@ -241,6 +362,7 @@ mod tests {
 
         let destination = Destination {
             dir: target.path().join("skills"),
+            base: target.path().to_path_buf(),
             label: "global",
         };
         let written = sync("review", source.path(), &destination).unwrap();
@@ -257,6 +379,7 @@ mod tests {
 
         let destination = Destination {
             dir: target.path().join("deep").join("nested").join("skills"),
+            base: target.path().to_path_buf(),
             label: "project",
         };
         assert!(sync("s", source.path(), &destination).is_ok());
@@ -268,6 +391,7 @@ mod tests {
         let target = tempfile::tempdir().unwrap();
         let destination = Destination {
             dir: target.path().to_path_buf(),
+            base: target.path().to_path_buf(),
             label: "global",
         };
 
@@ -281,6 +405,7 @@ mod tests {
         let target = tempfile::tempdir().unwrap();
         let destination = Destination {
             dir: target.path().to_path_buf(),
+            base: target.path().to_path_buf(),
             label: "global",
         };
         std::fs::write(source.path().join("s.md"), "first").unwrap();
@@ -301,6 +426,7 @@ mod tests {
         std::fs::write(source.path().join("s.md"), "x").unwrap();
         let destination = Destination {
             dir: target.path().to_path_buf(),
+            base: target.path().to_path_buf(),
             label: "global",
         };
 
