@@ -1634,7 +1634,7 @@ dependencies = [
 [[package]]
 name = "tapes-harnesses"
 version = "0.1.0"
-source = "git+https://github.com/papercomputeco/tapes-harnesses?rev=25268328b7b14063c18762cf9635f2876dd7701c#25268328b7b14063c18762cf9635f2876dd7701c"
+source = "git+https://github.com/papercomputeco/tapes-harnesses?rev=f497e0b110727d031c901b4cf9c2d8be0781eede#f497e0b110727d031c901b4cf9c2d8be0781eede"
 dependencies = [
  "arc-swap",
  "base64",
