@@ -11,9 +11,7 @@ attribution, transcript tailing, and the capture envelope) — which paperd also
 consumes, so capture fidelity is identical between `tapesctl start` and
 `paper start`.
 
-See the "Tapes and Cassettes" RFC for the full design. The *generated*
-`<cassette> <method>` surface is still to come, with `/v1/cassettes` discovery
-and OpenAPI client generation (Track 4).
+See the "Tapes and Cassettes" RFC for the full design.
 
 ## Capture
 
@@ -62,6 +60,37 @@ tapesctl seed                              # demo data for a fresh server
 tapesctl skill sync <name> --claude        # copy an authored skill into place
 ```
 
+## Cassettes
+
+A tapes deployment can serve **cassettes** — independently built API extensions
+mounted under `/v1/cassettes/<name>`. `tapesctl` discovers whichever ones your
+server serves and turns them into commands, so the generated nouns and their
+`--help` *are* the cassette listing:
+
+```bash
+tapesctl --help                            # lists the cassettes this server serves
+tapesctl hello-world --help                # lists that cassette's methods
+tapesctl hello-world get-hello
+tapesctl hello-world create-hello --body '{"hello":"hi"}'
+tapesctl hello-world create-hello --body @row.json
+```
+
+Method names are each operation's `operationId`, kebab-cased. Path parameters
+become positional arguments and query parameters become flags, both taken from
+the cassette's own OpenAPI document — so a cassette this binary has never heard
+of still gets a correct, typed-ish command line.
+
+Discovery is a **runtime** step, not a build-time one: which cassettes exist is
+deployment configuration, so a compiled-in list would be one deployment's
+cassettes frozen into everyone's binary. The discovered surface is cached per
+server and revalidated on a timer (`ETag`/`If-None-Match`), so `--help` stays
+instant and keeps working offline. Point it elsewhere with `--tapes-url` /
+`TAPES_URL`; override the cache location with `TAPESCTL_CACHE_DIR`.
+
+Without a reachable server there are simply no cassette nouns — the commands
+above this section are unaffected. Deploying and configuring cassettes is an
+operator task and is not part of this surface.
+
 ## Install
 
 ```bash
@@ -108,6 +137,8 @@ publish to `download.tapes.dev` via the `release` / `nightly` Dagger functions.
   - `start/` — the just-in-time capture proxy (the wire lane).
   - `transcript/` — the transcript lane: live tailer and `sync` sweep.
   - `api/` — the `<resource> <method>` read client.
+  - `cassette/` — the generated `<cassette> <method>` surface: discovery, the
+    spec reducer, the cache, and clap synthesis.
   - `ports/` — commands ported from the Go `tapes` CLI.
 
 Shared client-side harness knowledge lives in its own repository,

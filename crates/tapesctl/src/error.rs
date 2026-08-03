@@ -205,6 +205,12 @@ pub enum Error {
     #[snafu(display("the tapes URL cannot be used as a base for API routes"))]
     NotABase,
 
+    /// The HTTP client itself could not be constructed. Requests error out
+    /// rather than fall back to a client with different (redirect-following)
+    /// behavior.
+    #[snafu(display("could not initialize the HTTP client"))]
+    ClientInit,
+
     /// The API request itself failed.
     #[snafu(display("could not reach the tapes API"))]
     ApiSend {
@@ -231,6 +237,13 @@ pub enum Error {
         source: serde_json::Error,
     },
 
+    /// The server's response shape changed out from under this client.
+    #[snafu(display("unexpected server contract: {detail}"))]
+    ApiContract {
+        /// What changed.
+        detail: &'static str,
+    },
+
     /// A response could not be rendered for printing.
     #[snafu(display("could not render the response"))]
     RenderJson {
@@ -250,6 +263,59 @@ pub enum Error {
     InvalidPayloadDetail {
         /// What the user asked for.
         payload: String,
+    },
+
+    // --- the generated cassette surface -------------------------------------
+    /// Discovery named an OpenAPI document somewhere other than on this server.
+    /// Refused rather than followed: `Url::join` treats an absolute URL as a
+    /// replacement, so honouring it would fetch a spec from a host the user
+    /// never named.
+    #[snafu(display("cassette discovery named a non-relative OpenAPI path {path:?}"))]
+    CassetteSpecPath {
+        /// What discovery published.
+        path: String,
+    },
+
+    /// A cassette's spec described an operation with a verb that is not an HTTP
+    /// method.
+    #[snafu(display("cassette spec used an unusable HTTP method {method:?}"))]
+    CassetteMethod {
+        /// The offending verb.
+        method: String,
+    },
+
+    /// A cassette noun parsed but is not on the surface. Only reachable if the
+    /// surface changed between building the parser and dispatching.
+    #[snafu(display("no cassette named {name:?} is served here"))]
+    UnknownCassette {
+        /// The noun that was invoked.
+        name: String,
+    },
+
+    /// A cassette method parsed but is not on the cassette.
+    #[snafu(display("cassette {cassette:?} has no method {method:?}"))]
+    UnknownCassetteMethod {
+        /// The cassette that was invoked.
+        cassette: String,
+        /// The method that was invoked.
+        method: String,
+    },
+
+    /// `--body @<path>` could not be read.
+    #[snafu(display("could not read the request body at {path}"))]
+    BodyFile {
+        /// Where the read was attempted.
+        path: String,
+        /// Underlying IO failure.
+        source: std::io::Error,
+    },
+
+    /// `--body` was not JSON. Checked here so the failure names the quoting
+    /// mistake rather than arriving as a cassette's schema error.
+    #[snafu(display("--body is not valid JSON"))]
+    InvalidBody {
+        /// Underlying JSON failure.
+        source: serde_json::Error,
     },
 
     // --- ported commands ----------------------------------------------------
