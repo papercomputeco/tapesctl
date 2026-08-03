@@ -27,7 +27,7 @@ repository = "https://github.com/papercomputeco/tapesctl"
 # both tapesctl and paperd so the two capture paths cannot drift apart.
 # Pinned by revision like any other vendored contract.
 #
-tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "99ff2e767f452319384226dca23dba4395b7051e" }
+tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "f497e0b110727d031c901b4cf9c2d8be0781eede" }
 
 # --- CLI ---
 # `string` lets a Command/Arg be named by an owned String rather than only by a

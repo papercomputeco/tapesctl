@@ -381,6 +381,40 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    /// The named harness is not in the shared registry, so there is nothing
+    /// that could be installed for it.
+    ///
+    /// Distinct from [`Error::UnsupportedHarness`], which is about launching:
+    /// `plugin install` accepts every registered harness, including ones this
+    /// binary cannot yet `start`.
+    #[snafu(display("unknown harness {harness:?} (known: {known})"))]
+    UnknownHarness {
+        /// What the user asked for.
+        harness: String,
+        /// The names the registry answers to, comma-separated.
+        known: String,
+    },
+
+    /// The plugin destination resolves outside the user's home.
+    #[snafu(display(
+        "refusing the plugin destination {}: it resolves outside the home \
+         directory (a symlinked extension path is not followed)",
+        path.display()
+    ))]
+    PluginDestination {
+        /// The refused destination path.
+        path: PathBuf,
+    },
+
+    /// The plugin artifact could not be written to its destination.
+    #[snafu(display("could not install the plugin artifact to {}", path.display()))]
+    PluginWrite {
+        /// Where the write was attempted.
+        path: PathBuf,
+        /// Underlying IO failure.
+        source: std::io::Error,
+    },
+
     /// The working directory could not be read, so a `--local` destination
     /// cannot be resolved.
     #[snafu(display("could not determine the working directory"))]

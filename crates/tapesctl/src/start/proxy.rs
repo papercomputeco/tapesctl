@@ -162,6 +162,13 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
                 .and_then(|v| v.to_str().ok()),
             codex_marker: marker.as_deref(),
             codex_route: state.codex_lane,
+            // The rollout the request itself names — the only evidence that
+            // separates threads inside one Codex process. First present
+            // header wins, in the crate's declared order.
+            codex_rollout_id: tapes_harnesses::attribution::codex::CODEX_ROLLOUT_ID_HEADERS
+                .iter()
+                .find_map(|name| parts.headers.get(*name).and_then(|v| v.to_str().ok()))
+                .filter(|value| !value.trim().is_empty()),
         },
     )
     .await;
