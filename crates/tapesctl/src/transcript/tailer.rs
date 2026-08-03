@@ -296,7 +296,19 @@ impl Tailer {
         let projects_dir = self.config.projects_root.join(encode_cwd(cwd));
         let files = session_files(&projects_dir, &session.session_id);
         if files.is_empty() {
-            // Attributed on the wire before the first transcript flush.
+            if exiting {
+                // At exit this is a loss, not a timing gap: the session was
+                // attributed on the wire, the harness has stopped writing,
+                // and there is nothing to deliver. Say so with the resolved
+                // path — a wrong cwd encoding or a moved projects root looks
+                // EXACTLY like this, and silence here once hid a real bug.
+                warn!(
+                    session_id = %session.session_id,
+                    projects_dir = %projects_dir.display(),
+                    "no transcript files found at exit; the session's causal skeleton was not delivered",
+                );
+            }
+            // Before exit: attributed on the wire before the first flush.
             return;
         }
 
