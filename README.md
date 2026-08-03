@@ -32,24 +32,6 @@ subagent made but renders that work as flat dispatch text instead of nested
 rows. Pass `--no-transcripts` only when another capture client is already
 tailing the same tree.
 
-While a harness is running it owns the terminal, so `start` writes its
-diagnostics to a file instead of the screen — a stray log line lands in the
-middle of a TUI frame. The path is printed before the harness launches and
-again when it exits:
-
-```bash
-~/.tapes/logs/start-<timestamp>-<pid>.log
-```
-
-`RUST_LOG` sets the level as usual. Pass `-v` (before the subcommand) to stream
-to stderr instead of a file, accepting what that does to the display:
-
-```bash
-tapesctl -v start claude --tapes-url http://localhost:8081
-```
-
-Every other command logs to stderr as before.
-
 ```bash
 tapesctl sync    # backstop: sweep transcripts no live tailer saw
 ```
