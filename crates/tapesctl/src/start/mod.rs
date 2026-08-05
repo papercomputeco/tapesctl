@@ -394,12 +394,15 @@ fn supported_names() -> String {
 /// and the proxy refuses any inbound envelope that does not carry the echo.
 /// This is what turns "is the peer below the launched PID" — which every
 /// subprocess the harness runs satisfies — into "does the peer hold this
-/// launch's secret". It is possession, not ancestry: a forger inside the
-/// harness's subtree must now actually obtain the value, rather than merely
-/// exist. Environment does propagate to children by default, so how much the
-/// nonce narrows the subtree depends on the harness scrubbing its tool
-/// environment; what it guarantees unconditionally is that a *complete*
-/// forgery needs the secret, not just two headers and a loopback port.
+/// launch's secret". The crate's extension reads the variable once at load and
+/// deletes it from its process environment before any tool can run, so
+/// subprocesses the harness later spawns do not inherit it; the crate pins
+/// that delete in the asset. The residual exposure is exactly two channels:
+/// a same-UID process reading the harness's *original* environment via
+/// `/proc/<pid>/environ` on Linux (a snapshot taken at `exec`, unaffected by
+/// the deletion), and anything the harness itself passes along explicitly.
+/// What the nonce guarantees unconditionally is that a *complete* forgery
+/// needs the secret, not just two headers and a loopback port.
 fn pi_plan(endpoint: &ProxyEndpoint, schema: UpstreamSchema, nonce: &str) -> LaunchPlan {
     LaunchPlan {
         args: Vec::new(),

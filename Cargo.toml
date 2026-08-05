@@ -31,7 +31,7 @@ repository = "https://github.com/papercomputeco/tapesctl"
 # head (peer_trust + capture-nonce contract) and does not exist on the
 # repository's main yet. Re-point to the merged main revision before this
 # branch merges.
-tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "60d760afcd468890c5ae75c09f5686da1454d1c7" }
+tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "fb1926bbd627a5d2ce84ca831139e5ac7a9e03f5" }
 
 # --- CLI ---
 # `string` lets a Command/Arg be named by an owned String rather than only by a
