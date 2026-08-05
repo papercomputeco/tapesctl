@@ -94,6 +94,10 @@ pub struct ProxyState {
     pub codex_marker_header: Arc<String>,
     /// True when the launched harness is Codex, which selects the Codex lane.
     pub codex_lane: bool,
+    /// True when the launched harness stamps its own `X-Tapes-*` envelope, so
+    /// the request's headers — not this process's peer-PID lookup — are the
+    /// authority on which session a turn belongs to.
+    pub self_attributing: bool,
     /// Org id stamped on every captured turn.
     pub org_id: Arc<String>,
     /// Acting subject stamped on every captured turn.
@@ -180,7 +184,18 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
         state.transcript_tracker.observe(session);
     }
 
-    let envelope_attribution = attributed.envelope();
+    // Whose account of the session wins. For a redirected harness there is only
+    // one — the pipeline's. For a self-attributing harness the request carries an
+    // envelope stamped inside the harness, and that is strictly better evidence:
+    // the peer-PID path cannot see into an extension, so the pipeline's answer
+    // for those requests is always `unknown`. Taking the inbound envelope here is
+    // the ingest-side counterpart of what `stamp` already does header-side, and
+    // without it a pi session would be captured and then filed under nothing.
+    let envelope_attribution = state
+        .self_attributing
+        .then(|| inbound_envelope(&parts.headers))
+        .flatten()
+        .or_else(|| attributed.envelope());
     let session = envelope_attribution
         .as_ref()
         .map(|a| SessionEnvelope::from_attribution(a, &state.org_id, &state.auth_subject));
@@ -261,6 +276,47 @@ async fn announce_session(state: &ProxyState, session_id: &str) {
     if let Some(tx) = slot.take() {
         let _ = tx.send(session_id.to_owned());
     }
+}
+
+/// Read a session identity out of an envelope the harness stamped on itself.
+///
+/// The completeness rule — a harness id that is present and not the `unknown`
+/// sentinel, plus a non-blank session id — is the crate's, restated because it
+/// is private there. It has to be the same rule: the crate applies it when
+/// deciding whether to *preserve* an inbound envelope on the outbound request,
+/// and this decides whether to file the turn under one. Two different rules
+/// would produce a request whose headers say `pi` and whose ingest row says
+/// `unknown`.
+///
+/// Only the plain-text fields are read. `cwd`, session name, and metadata are
+/// percent-encoded or base64url on the wire, and decoding them here would be a
+/// second, drifting implementation of an encoder the crate owns — so a harness
+/// that sends them wants a `TapesAttribution::from_headers` in the crate rather
+/// than more parsing here. Nothing is lost today: pi's extension stamps exactly
+/// the two headers this reads.
+fn inbound_envelope(headers: &HeaderMap) -> Option<envelope::TapesAttribution> {
+    let harness_id = envelope_field(headers, envelope::X_TAPES_HARNESS_ID)
+        .filter(|id| id != envelope::HARNESS_ID_UNKNOWN)?;
+    let session_id = envelope_field(headers, envelope::X_TAPES_HARNESS_SESSION_ID)?;
+    Some(envelope::TapesAttribution {
+        harness_id,
+        session_id: Some(session_id),
+        version: envelope_field(headers, envelope::X_TAPES_HARNESS_VERSION),
+        cwd: None,
+        name: None,
+        parent_sid: envelope_field(headers, envelope::X_TAPES_PARENT_HARNESS_SESSION_ID),
+        metadata: serde_json::Map::new(),
+    })
+}
+
+/// One `X-Tapes-*` header, trimmed, absent when blank.
+fn envelope_field(headers: &HeaderMap, name: &'static str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
 
 fn header_string(headers: &HeaderMap, name: http::header::HeaderName) -> Option<String> {
