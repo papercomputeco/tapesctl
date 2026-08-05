@@ -23,10 +23,17 @@
 //!
 //! Every command prints the server's JSON, pretty-printed, and nothing else. See
 //! [`client`] for why the responses are not re-modelled on the way through: in
-//! short, a partial hand-written model silently eats fields the server grows,
-//! and the generated typed surface arrives in Track 4.
+//! short, a partial hand-written model silently eats fields the server grows.
+//!
+//! # Requests
+//!
+//! The routes in the table above are not hand-built: each command resolves its
+//! operation in the vendored core contract and lets [`contract`] assemble the
+//! request from it. The table names the routes because they are what a reader
+//! greps for, and the contract tests keep the two in agreement.
 
 pub mod client;
+pub mod contract;
 
 use snafu::{OptionExt, ResultExt};
 use url::Url;

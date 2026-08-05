@@ -68,6 +68,13 @@ pub struct Param {
 pub struct Method {
     /// The subcommand name.
     pub name: String,
+    /// The document's own `operationId`, verbatim, when it carried one.
+    ///
+    /// Kept beside the kebab-cased `name` because it is the identity other
+    /// artifacts use: the vendored core contract is addressed by operation id
+    /// (see [`crate::api::contract`]), and the coverage gate that keeps the
+    /// CLI honest about what it exposes is written in the document's own terms.
+    pub operation_id: Option<String>,
     /// One line of help.
     pub summary: Option<String>,
     /// The HTTP verb, uppercased.
@@ -132,6 +139,21 @@ impl Surface {
 /// error here would take out the whole CLI over one malformed cassette.
 #[must_use]
 pub fn reduce(entry_name: &str, description: Option<String>, document: &Value) -> Cassette {
+    Cassette {
+        name: entry_name.to_owned(),
+        description,
+        methods: reduce_methods(document),
+    }
+}
+
+/// Reduce any OpenAPI document to its operations.
+///
+/// This is the document-source-agnostic half of [`reduce`]: the cassette
+/// surface feeds it a runtime-discovered document, and the core surface feeds
+/// it the vendored contract (see [`crate::api::contract`]). One reducer, two
+/// document sources — so the two surfaces cannot read OpenAPI differently.
+#[must_use]
+pub fn reduce_methods(document: &Value) -> Vec<Method> {
     let mut methods: Vec<Method> = Vec::new();
     let mut taken: BTreeSet<String> = BTreeSet::new();
 
@@ -144,12 +166,7 @@ pub fn reduce(entry_name: &str, description: Option<String>, document: &Value) -
     }
 
     methods.sort_by(|a, b| a.name.cmp(&b.name));
-
-    Cassette {
-        name: entry_name.to_owned(),
-        description,
-        methods,
-    }
+    methods
 }
 
 /// Every operation on one path item.
@@ -175,15 +192,19 @@ fn methods_of(
             let mut params = shared.clone();
             params.extend(parameters_of(operation.get("parameters"), document));
 
-            let raw_name = operation
+            let operation_id = operation
                 .get("operationId")
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|id| !id.is_empty())
+                .map(ToOwned::to_owned);
+            let raw_name = operation_id
+                .as_deref()
                 .map_or_else(|| synthesize_id(verb, path), kebab_case);
 
             Some(Method {
                 name: unique(raw_name, verb, taken),
+                operation_id,
                 summary: text_of(operation.get("summary"))
                     .or_else(|| text_of(operation.get("description"))),
                 http_method: verb.to_ascii_uppercase(),

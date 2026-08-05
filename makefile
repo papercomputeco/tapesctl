@@ -7,7 +7,7 @@
 #     failing PR reproduces locally. The Dagger module lives in `.dagger/`.
 
 .PHONY: help build build-release test fmt fmt-check clippy lint check run install clean \
-	ci lint-ci test-ci dist nightly release upload-install-script
+	contracts-check ci lint-ci test-ci dist nightly release upload-install-script
 
 CARGO_TEST_FLAGS ?=
 
@@ -37,6 +37,9 @@ clippy:	## Run clippy with workspace-wide deny warnings
 lint: fmt-check clippy	## Run all lint checks (fmt + clippy)
 
 check: build clippy test	## Build + lint + test
+
+contracts-check:	## Verify the vendored tapes contracts against their recorded fingerprints (and a tapes checkout, when present)
+	./scripts/contracts-check.sh
 
 run:	## Run the tapesctl CLI (e.g. `make run ARGS="version"`)
 	cargo run -p tapesctl -- $(ARGS)

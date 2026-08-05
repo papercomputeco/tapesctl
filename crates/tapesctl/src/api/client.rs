@@ -8,16 +8,22 @@
 //!
 //! Hand-writing Rust mirrors of `SessionItem`, `TraceDetail`, `SpanItem` and
 //! their nested usage/verdict/link types would be a second, drifting copy of a
-//! contract that already has one home — and it would be thrown away when the
-//! generated client lands in Track 4. Worse, a typed client silently *drops*
+//! contract that already has one home. Worse, a typed client silently *drops*
 //! fields it does not know: a server that grows a column would return it, and a
 //! partial model would eat it before the user ever saw it. Passing the document
 //! through means `tapesctl sessions get` shows exactly what the API said, today
 //! and after the next server release.
 //!
-//! What *is* modelled here is the request side — the parameters, their names,
-//! and their defaults — because that is where a client can be wrong in a way the
-//! server cannot correct.
+//! # The request side comes from the vendored contract
+//!
+//! The request side is where a client can be wrong in a way the server cannot
+//! correct — and it is no longer hand-written either. Every core method here
+//! resolves its operation in [`crate::api::contract`] (the vendored
+//! `contracts/tapes-api.yaml`, reduced by the same reducer the cassette
+//! surface uses) and assembles a [`Call`] from the contract's verb, path
+//! template, and declared parameters. What remains modelled locally is which
+//! parameters each command *sends* and their client-side defaults; the routes
+//! themselves are the contract's.
 //!
 //! # No auth
 //!
@@ -31,6 +37,7 @@ use serde_json::Value;
 use snafu::{OptionExt, ResultExt};
 use url::Url;
 
+use crate::api::contract::{self, ops};
 use crate::error::{Error, Result, error};
 
 /// Server-side ceiling on `limit`. A larger request is silently clamped rather
@@ -43,8 +50,6 @@ pub const MAX_LIMIT: u64 = 200;
 /// There is no server-side ceiling on `top_k` — the handler passes it straight
 /// through — so this is a default, not a clamp.
 pub const DEFAULT_SEARCH_TOP_K: u64 = 5;
-/// The cassette discovery route.
-pub const CASSETTES_PATH: &str = "/v1/cassettes";
 
 /// The outcome of a conditional fetch of a cassette's OpenAPI document.
 #[derive(Debug, Clone)]
@@ -177,7 +182,38 @@ pub struct SessionListParams<'a> {
     pub auth_subject: Option<&'a str>,
 }
 
-/// One call against a cassette route, assembled from that cassette's spec.
+impl SessionListParams<'_> {
+    /// The wire pairs to send: set parameters only, under the contract's
+    /// names. An unset parameter is omitted so the server's defaults apply.
+    fn values(&self) -> Vec<(&'static str, String)> {
+        let mut values = Vec::new();
+        if let Some(limit) = self.limit {
+            values.push(("limit", limit.to_string()));
+        }
+        if let Some(cursor) = self.cursor {
+            values.push(("cursor", cursor.to_owned()));
+        }
+        if let Some(sort) = self.sort {
+            values.push(("sort", sort.to_owned()));
+        }
+        if let Some(direction) = self.direction {
+            values.push(("direction", direction.to_owned()));
+        }
+        if let Some(since) = self.since {
+            values.push(("since", since.to_owned()));
+        }
+        if let Some(until) = self.until {
+            values.push(("until", until.to_owned()));
+        }
+        if let Some(subject) = self.auth_subject {
+            values.push(("auth_subject", subject.to_owned()));
+        }
+        values
+    }
+}
+
+/// One call against an OpenAPI-described route — a runtime-discovered cassette
+/// operation, or a core operation from the vendored contract.
 #[derive(Debug, Default, Clone)]
 pub struct Call<'a> {
     /// The HTTP verb, uppercased.
@@ -263,156 +299,103 @@ impl ApiClient {
         self.base.join(path).context(error::ApiUrlSnafu)
     }
 
-    /// Build `<base>/v1/sessions/<id>[/<tail>]`.
+    /// Resolve one core operation in the vendored contract and call it.
     ///
-    /// The id goes through `path_segments_mut`, which percent-encodes it as a
-    /// single segment — a user-supplied id can never break out of the path and
-    /// address a different route.
-    fn session_url(&self, id: &str, tail: Option<&str>) -> Result<Url> {
-        let mut url = self.url("/v1/sessions")?;
-        {
-            let mut segments = url
-                .path_segments_mut()
-                .map_err(|()| error::NotABaseSnafu.build())?;
-            segments.push(id);
-            if let Some(tail) = tail {
-                segments.push(tail);
-            }
-        }
-        Ok(url)
+    /// Every hand-written URL builder this client used to carry is this line
+    /// now: the verb, the path template, and the parameter routing all come
+    /// from `contracts/tapes-api.yaml`.
+    async fn call_operation(
+        &self,
+        operation_id: &str,
+        values: Vec<(&str, String)>,
+    ) -> Result<Value> {
+        let method = contract::core()?.method(operation_id)?;
+        self.call(&contract::call_for(method, values)?).await
     }
 
-    /// Build `<base>/v1/traces/<trace_id>[/spans/<span_id>]`.
-    fn trace_url(&self, trace_id: &str, span_id: Option<&str>) -> Result<Url> {
-        let mut url = self.url("/v1/traces")?;
-        {
-            let mut segments = url
-                .path_segments_mut()
-                .map_err(|()| error::NotABaseSnafu.build())?;
-            segments.push(trace_id);
-            if let Some(span_id) = span_id {
-                segments.push("spans");
-                segments.push(span_id);
-            }
-        }
-        Ok(url)
-    }
-
-    /// The URL `list_sessions` will call. Split out so the parameter names and
-    /// the omit-when-unset rule can be asserted without a server.
-    fn sessions_list_url(&self, params: &SessionListParams<'_>) -> Result<Url> {
-        let mut url = self.url("/v1/sessions")?;
-        {
-            let mut query = url.query_pairs_mut();
-            if let Some(limit) = params.limit {
-                query.append_pair("limit", &limit.to_string());
-            }
-            if let Some(cursor) = params.cursor {
-                query.append_pair("cursor", cursor);
-            }
-            if let Some(sort) = params.sort {
-                query.append_pair("sort", sort);
-            }
-            if let Some(direction) = params.direction {
-                query.append_pair("direction", direction);
-            }
-            if let Some(since) = params.since {
-                query.append_pair("since", since);
-            }
-            if let Some(until) = params.until {
-                query.append_pair("until", until);
-            }
-            if let Some(subject) = params.auth_subject {
-                query.append_pair("auth_subject", subject);
-            }
-        }
-        drop_empty_query(&mut url);
-        Ok(url)
-    }
-
-    /// `GET /v1/sessions`
+    /// `listSessions` — `GET /v1/sessions`.
     pub async fn list_sessions(&self, params: &SessionListParams<'_>) -> Result<Value> {
-        let url = self.sessions_list_url(params)?;
-        self.get_json(url).await
+        self.call_operation(ops::LIST_SESSIONS, params.values())
+            .await
     }
 
-    /// `GET /v1/sessions/{id}`
+    /// `getSession` — `GET /v1/sessions/{id}`.
     pub async fn get_session(&self, id: &str) -> Result<Value> {
-        let url = self.session_url(id, None)?;
-        self.get_json(url).await
+        self.call_operation(ops::GET_SESSION, vec![("id", id.to_owned())])
+            .await
     }
 
-    /// `GET /v1/sessions/{id}/traces` — the derived span read model, which is
-    /// exactly what the console renders.
+    /// `getSessionTraces` — the derived span read model, which is exactly what
+    /// the console renders.
     pub async fn get_session_traces(
         &self,
         id: &str,
         payload: Option<PayloadDetail>,
     ) -> Result<Value> {
-        let mut url = self.session_url(id, Some("traces"))?;
+        let mut values = vec![("id", id.to_owned())];
         if let Some(payload) = payload {
-            url.query_pairs_mut()
-                .append_pair("payload", payload.as_str());
+            values.push(("payload", payload.as_str().to_owned()));
         }
-        self.get_json(url).await
+        self.call_operation(ops::GET_SESSION_TRACES, values).await
     }
 
-    /// `GET /v1/sessions/{id}/raw_turns` — the wire-turn metadata behind a
-    /// derivation.
+    /// `listRawTurns` — the wire-turn metadata behind a derivation.
     pub async fn list_session_raw_turns(&self, id: &str) -> Result<Value> {
-        let url = self.session_url(id, Some("raw_turns"))?;
-        self.get_json(url).await
+        self.call_operation(ops::LIST_RAW_TURNS, vec![("id", id.to_owned())])
+            .await
     }
 
-    /// `GET /v1/traces?session_id=...` — trace summaries for one session.
+    /// `listTraces` — trace summaries for one session.
     pub async fn list_traces(&self, session_id: &str) -> Result<Value> {
-        let mut url = self.url("/v1/traces")?;
-        url.query_pairs_mut().append_pair("session_id", session_id);
-        self.get_json(url).await
+        self.call_operation(
+            ops::LIST_TRACES,
+            vec![("session_id", session_id.to_owned())],
+        )
+        .await
     }
 
-    /// `GET /v1/traces/{trace_id}`
+    /// `getTrace` — one trace with its spans.
     pub async fn get_trace(&self, trace_id: &str, payload: Option<PayloadDetail>) -> Result<Value> {
-        let mut url = self.trace_url(trace_id, None)?;
+        let mut values = vec![("trace_id", trace_id.to_owned())];
         if let Some(payload) = payload {
-            url.query_pairs_mut()
-                .append_pair("payload", payload.as_str());
+            values.push(("payload", payload.as_str().to_owned()));
         }
-        self.get_json(url).await
+        self.call_operation(ops::GET_TRACE, values).await
     }
 
-    /// `GET /v1/traces/{trace_id}/spans/{span_id}`
+    /// `getSpan` — one span with full payloads.
     pub async fn get_span(&self, trace_id: &str, span_id: &str) -> Result<Value> {
-        let url = self.trace_url(trace_id, Some(span_id))?;
-        self.get_json(url).await
+        self.call_operation(
+            ops::GET_SPAN,
+            vec![
+                ("trace_id", trace_id.to_owned()),
+                ("span_id", span_id.to_owned()),
+            ],
+        )
+        .await
     }
 
-    /// The URL `search_spans` will call.
+    /// `searchSpans` — semantic search over span embeddings.
     ///
-    /// Both parameters are always sent, unlike [`Self::sessions_list_url`]'s
-    /// omit-when-unset rule: the command that calls this always has a `top_k`
-    /// (its flag carries the default), and the Go command it ports sets both
-    /// unconditionally. Sending them keeps one request spelling rather than two.
-    fn search_spans_url(&self, query: &str, top_k: u64) -> Result<Url> {
-        let mut url = self.url("/v1/search/spans")?;
-        url.query_pairs_mut()
-            .append_pair("query", query)
-            .append_pair("top_k", &top_k.to_string());
-        Ok(url)
-    }
-
-    /// `GET /v1/search/spans` — semantic search over span embeddings.
+    /// Both parameters are always sent, unlike the list's omit-when-unset
+    /// rule: the command that calls this always has a `top_k` (its flag
+    /// carries the default), and the Go command it ports sets both
+    /// unconditionally. Sending them keeps one request spelling rather than
+    /// two.
     ///
     /// Answers 503 when the deployment has no embedder or no span embedding
     /// store, and 503 again when the store exists but no embed pass has run —
     /// both surface as [`Error::ApiStatus`] carrying the server's message,
     /// which names which of the two it is.
     pub async fn search_spans(&self, query: &str, top_k: u64) -> Result<Value> {
-        let url = self.search_spans_url(query, top_k)?;
-        self.get_json(url).await
+        self.call_operation(
+            ops::SEARCH_SPANS,
+            vec![("query", query.to_owned()), ("top_k", top_k.to_string())],
+        )
+        .await
     }
 
-    /// `GET /v1/sessions/{id}/export` — the streaming export bundle.
+    /// `exportSession` — the streaming export bundle.
     ///
     /// Returns the live response rather than a buffered body: an export can be
     /// far larger than a session's working set, and there is no reason to hold
@@ -422,21 +405,21 @@ impl ApiClient {
         id: &str,
         detail: Option<ExportDetail>,
     ) -> Result<reqwest::Response> {
-        let mut url = self.session_url(id, Some("export"))?;
+        let mut values = vec![("id", id.to_owned())];
         if let Some(detail) = detail {
-            url.query_pairs_mut().append_pair("detail", detail.as_str());
+            values.push(("detail", detail.as_str().to_owned()));
         }
-        self.get_stream(url).await
+        let method = contract::core()?.method(ops::EXPORT_SESSION)?;
+        self.call_stream(&contract::call_for(method, values)?).await
     }
 
-    /// `GET /v1/cassettes` — the cassette discovery document.
+    /// `listCassettes` — the cassette discovery document.
     ///
     /// Returned raw for the same reason every other read is: discovery grows
     /// fields (`problems` and `contract_version` are both younger than the
     /// route) and a partial model would eat them.
     pub async fn list_cassettes(&self) -> Result<Value> {
-        let url = self.url(CASSETTES_PATH)?;
-        self.get_json(url).await
+        self.call_operation(ops::LIST_CASSETTES, Vec::new()).await
     }
 
     /// `GET /v1/cassettes/{name}/openapi.json` — one cassette's own document.
@@ -504,12 +487,38 @@ impl ApiClient {
         Ok(SpecFetch::Fetched { document, etag })
     }
 
-    /// Make one call described by a cassette's OpenAPI document.
+    /// Make one call described by an OpenAPI document — a cassette's, or the
+    /// vendored core contract.
     ///
-    /// The verb, path and parameter names all come from the server's own spec
-    /// rather than from anything compiled in here, which is the whole point of
-    /// the generated surface — see [`crate::cassette`].
+    /// The verb, path and parameter names all come from the document rather
+    /// than from anything hand-written here, which is the whole point of both
+    /// generated surfaces — see [`crate::cassette`] and
+    /// [`crate::api::contract`].
     pub async fn call(&self, call: &Call<'_>) -> Result<Value> {
+        let (response, url) = self.send_call(call).await?;
+        Self::decode_json(response, &url).await
+    }
+
+    /// Make one described call and hand back the live response for streaming.
+    ///
+    /// A non-success status is read and surfaced as [`Error::ApiStatus`] here,
+    /// so a caller streaming to a file can never write an error page into it.
+    pub async fn call_stream(&self, call: &Call<'_>) -> Result<reqwest::Response> {
+        let (response, url) = self.send_call(call).await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::ApiStatus {
+                status: status.as_u16(),
+                endpoint: url.to_string(),
+                body,
+            });
+        }
+        Ok(response)
+    }
+
+    /// Send one described call, without reading the response body.
+    async fn send_call(&self, call: &Call<'_>) -> Result<(reqwest::Response, Url)> {
         let url = self.call_url(call)?;
         let method = reqwest::Method::from_bytes(call.method.as_bytes()).map_err(|_| {
             error::CassetteMethodSnafu {
@@ -529,11 +538,11 @@ impl ApiClient {
         }
 
         let response = request.send().await.context(error::ApiSendSnafu)?;
-        // Cassette calls carry user-provided bodies and headers, so of all
-        // requests this client makes these are the ones a redirect must never
-        // be able to move.
+        // Described calls can carry user-provided bodies and headers, so of
+        // all requests this client makes these are the ones a redirect must
+        // never be able to move.
         self.refuse_moved(&response)?;
-        Self::decode_json(response, &url).await
+        Ok((response, url))
     }
 
     /// Build the URL for a cassette call.
@@ -563,52 +572,15 @@ impl ApiClient {
         Ok(url)
     }
 
-    /// `POST /v1/admin/seed/demo` — populate a server with demo sessions.
+    /// `seedDemo` — populate a server with demo sessions.
     pub async fn seed_demo(&self) -> Result<Value> {
-        let url = self.url("/v1/admin/seed/demo")?;
-        let response = self
-            .http()?
-            .post(url.clone())
-            .header(http::header::CONTENT_TYPE, "application/json")
-            // The server's request schema has one optional field, and the only
-            // value it ever accepted for it is now rejected. An empty object is
-            // the whole request.
-            .body("{}")
-            .send()
-            .await
-            .context(error::ApiSendSnafu)?;
-        Self::decode_json(response, &url).await
-    }
-
-    async fn get_json(&self, url: Url) -> Result<Value> {
-        let response = self
-            .http()?
-            .get(url.clone())
-            .send()
-            .await
-            .context(error::ApiSendSnafu)?;
-        self.refuse_moved(&response)?;
-        Self::decode_json(response, &url).await
-    }
-
-    async fn get_stream(&self, url: Url) -> Result<reqwest::Response> {
-        let response = self
-            .http()?
-            .get(url.clone())
-            .send()
-            .await
-            .context(error::ApiSendSnafu)?;
-        self.refuse_moved(&response)?;
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::ApiStatus {
-                status: status.as_u16(),
-                endpoint: url.to_string(),
-                body,
-            });
-        }
-        Ok(response)
+        let method = contract::core()?.method(ops::SEED_DEMO)?;
+        let mut call = contract::call_for(method, Vec::new())?;
+        // The server's request schema has one optional field, and the only
+        // value it ever accepted for it is now rejected. An empty object is
+        // the whole request.
+        call.body = Some("{}".to_owned());
+        self.call(&call).await
     }
 
     async fn decode_json(response: reqwest::Response, url: &Url) -> Result<Value> {
@@ -646,6 +618,13 @@ mod tests {
 
     fn base(raw: &str) -> ApiClient {
         ApiClient::new(Url::parse(raw).unwrap())
+    }
+
+    /// A [`Call`] assembled the way the client methods assemble theirs: from
+    /// the vendored contract's reduction of the named operation.
+    fn core_call(operation: &str, values: Vec<(&str, String)>) -> Call<'static> {
+        let method = contract::core().unwrap().method(operation).unwrap();
+        contract::call_for(method, values).unwrap()
     }
 
     #[tokio::test]
@@ -712,21 +691,20 @@ mod tests {
         // pin this client to a value the server is free to change. The bare `?`
         // goes too: `query_pairs_mut` leaves one behind, and it would give the
         // same request two spellings.
-        let url = base("http://127.0.0.1:8081")
-            .sessions_list_url(&SessionListParams::default())
-            .unwrap();
+        let call = core_call(ops::LIST_SESSIONS, SessionListParams::default().values());
+        let url = base("http://127.0.0.1:8081").call_url(&call).unwrap();
         assert_eq!(url.as_str(), "http://127.0.0.1:8081/v1/sessions");
     }
 
     #[test]
     fn set_parameters_are_appended_under_their_documented_names() {
-        let url = base("http://127.0.0.1:8081")
-            .sessions_list_url(&SessionListParams {
-                limit: Some(25),
-                since: Some("2026-07-01T00:00:00Z"),
-                ..Default::default()
-            })
-            .unwrap();
+        let params = SessionListParams {
+            limit: Some(25),
+            since: Some("2026-07-01T00:00:00Z"),
+            ..Default::default()
+        };
+        let call = core_call(ops::LIST_SESSIONS, params.values());
+        let url = base("http://127.0.0.1:8081").call_url(&call).unwrap();
         let query = url.query().unwrap();
         assert!(query.contains("limit=25"), "got: {query}");
         assert!(
@@ -739,10 +717,11 @@ mod tests {
     #[test]
     fn a_session_id_is_encoded_as_one_path_segment() {
         // A raw join would let `../` in an id address a different route.
-        let client = base("http://127.0.0.1:8081");
-        let url = client
-            .session_url("../admin/seed/demo", Some("traces"))
-            .unwrap();
+        let call = core_call(
+            ops::GET_SESSION_TRACES,
+            vec![("id", "../admin/seed/demo".to_owned())],
+        );
+        let url = base("http://127.0.0.1:8081").call_url(&call).unwrap();
         assert!(
             url.as_str()
                 .starts_with("http://127.0.0.1:8081/v1/sessions/"),
@@ -758,13 +737,28 @@ mod tests {
             client.url("/v1/sessions").unwrap().as_str(),
             "http://127.0.0.1:8081/v1/sessions",
         );
+        // The described-call path drops the prefix the same way.
+        let call = core_call(ops::LIST_SESSIONS, Vec::new());
+        assert_eq!(
+            client.call_url(&call).unwrap().as_str(),
+            "http://127.0.0.1:8081/v1/sessions",
+        );
     }
 
     #[test]
     fn the_span_route_is_nested_under_its_trace() {
-        let client = base("http://127.0.0.1:8081");
+        let call = core_call(
+            ops::GET_SPAN,
+            vec![
+                ("trace_id", "t-1".to_owned()),
+                ("span_id", "s-1".to_owned()),
+            ],
+        );
         assert_eq!(
-            client.trace_url("t-1", Some("s-1")).unwrap().as_str(),
+            base("http://127.0.0.1:8081")
+                .call_url(&call)
+                .unwrap()
+                .as_str(),
             "http://127.0.0.1:8081/v1/traces/t-1/spans/s-1",
         );
     }
@@ -891,9 +885,14 @@ mod tests {
 
     #[test]
     fn a_search_sends_both_parameters_under_the_servers_names() {
-        let url = base("http://127.0.0.1:8081")
-            .search_spans_url("gum glow charm", 10)
-            .unwrap();
+        let call = core_call(
+            ops::SEARCH_SPANS,
+            vec![
+                ("query", "gum glow charm".to_owned()),
+                ("top_k", "10".to_owned()),
+            ],
+        );
+        let url = base("http://127.0.0.1:8081").call_url(&call).unwrap();
         assert_eq!(url.path(), "/v1/search/spans");
         let query = url.query().unwrap();
         assert!(

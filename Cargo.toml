@@ -64,6 +64,11 @@ url = { version = "2", features = ["serde"] }
 # --- config / serde ---
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# serde_yaml is archived upstream, but it is the workspace-standard YAML reader
+# (`platform/paper` pins the same 0.9), and it parses exactly one kind of input
+# here: the vendored tapes contract documents, which are compile-time constants
+# embedded with `include_str!` — never untrusted data.
+serde_yaml = "0.9"
 toml = "0.8"
 
 # --- errors ---
