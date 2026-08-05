@@ -1,107 +1,29 @@
 //! Synthesizing clap commands from a cassette surface, and dispatching them.
 //!
-//! Every generated command is built here rather than derived, because the set
-//! is not known until a server has been asked. The shape deliberately matches
-//! the hand-written core surface — `<noun> <method>`, a `--tapes-url` that falls
-//! back to `TAPES_URL`, and the server's JSON printed verbatim — so a cassette
+//! The synthesis itself lives in [`tapes_cassette_client::command`] since the
+//! PCC-1104 split. What stays here is what makes a generated command a
+//! *tapesctl* command: the `--tapes-url` flag (with its `TAPES_URL` fallback)
+//! decorated onto every generated method — mirroring [`crate::cli::ApiArgs`]
+//! — and the dispatch that builds this CLI's client from it, executes the
+//! resolved call, and prints the server's JSON verbatim, so a cassette
 //! command is not visibly a second-class citizen next to `sessions list`.
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use snafu::{OptionExt, ResultExt};
 use url::Url;
 
-use crate::api::client::{ApiClient, Call};
+use crate::api::client::ApiClient;
 use crate::api::print_json;
-use crate::cassette::spec::{Cassette, Location, Method, Surface};
+use crate::cassette::spec::Surface;
 use crate::error::{Result, error};
+use tapes_cassette_client::command::resolve_invocation;
 
 /// The flag every generated method carries, mirroring [`crate::cli::ApiArgs`].
 const TAPES_URL: &str = "tapes-url";
 
-/// The flag a request body is supplied through.
-const BODY: &str = "body";
-
-/// Add a subcommand for every cassette on the surface.
-///
-/// Cassette nouns are appended to the static ones rather than replacing them,
-/// and a cassette whose name collides with a built-in command is skipped: a
-/// server must not be able to redefine what `tapesctl sessions` means on
-/// someone's machine.
-#[must_use]
-pub fn augment(mut base: Command, surface: &Surface) -> Command {
-    let built_in: Vec<String> = base
-        .get_subcommands()
-        .map(|sub| sub.get_name().to_owned())
-        .collect();
-
-    for cassette in &surface.cassettes {
-        if built_in.iter().any(|name| name == &cassette.name) {
-            tracing::debug!(
-                cassette = %cassette.name,
-                "a cassette shares its name with a built-in command and was not generated",
-            );
-            continue;
-        }
-        base = base.subcommand(cassette_command(cassette));
-    }
-    base
-}
-
-/// The subcommand for one cassette.
-fn cassette_command(cassette: &Cassette) -> Command {
-    let about = cassette
-        .description
-        .clone()
-        .unwrap_or_else(|| format!("Methods served by the {} cassette", cassette.name));
-
-    let mut command = Command::new(cassette.name.clone())
-        .about(about)
-        // Without a method there is nothing to call, and the help that lists
-        // them is the more useful answer than an error.
-        .arg_required_else_help(true)
-        .subcommand_required(true);
-
-    for method in &cassette.methods {
-        command = command.subcommand(method_command(method));
-    }
-    command
-}
-
-/// The subcommand for one method.
-fn method_command(method: &Method) -> Command {
-    let mut command = Command::new(method.name.clone());
-    if let Some(summary) = &method.summary {
-        command = command.about(summary.clone());
-    }
-    // The route is the one piece of context a user cannot recover from the
-    // command name, and it is what makes a generated surface auditable.
-    command = command.after_help(format!("Calls {} {}", method.http_method, method.path));
-
-    for param in &method.params {
-        let mut arg = Arg::new(param.flag.clone());
-        if let Some(description) = &param.description {
-            arg = arg.help(description.clone());
-        }
-        arg = match param.location {
-            Location::Path => arg.required(true).value_name(param.flag.to_uppercase()),
-            Location::Query | Location::Header => arg
-                .long(param.flag.clone())
-                .required(param.required)
-                .value_name("VALUE"),
-        };
-        command = command.arg(arg);
-    }
-
-    if let Some(required) = method.body {
-        command = command.arg(
-            Arg::new(BODY)
-                .long(BODY)
-                .required(required)
-                .value_name("JSON")
-                .help("Request body as JSON, or @<path> to read it from a file"),
-        );
-    }
-
+/// The decorator applied to every generated method command: tapesctl's server
+/// flag, exactly as the pre-extraction synthesis hard-coded it.
+fn with_tapes_url(command: Command) -> Command {
     command.arg(
         Arg::new(TAPES_URL)
             .long(TAPES_URL)
@@ -112,82 +34,36 @@ fn method_command(method: &Method) -> Command {
     )
 }
 
+/// Add a subcommand for every cassette on the surface.
+///
+/// Cassette nouns are appended to the static ones rather than replacing them,
+/// and a cassette whose name collides with a built-in command is skipped: a
+/// server must not be able to redefine what `tapesctl sessions` means on
+/// someone's machine.
+#[must_use]
+pub fn augment(base: Command, surface: &Surface) -> Command {
+    tapes_cassette_client::command::augment(base, surface, with_tapes_url)
+}
+
 /// Run a matched cassette invocation.
 ///
 /// `matches` is the cassette-level match; its own subcommand names the method.
+/// The crate resolves the invocation back to a call; executing it against the
+/// server `--tapes-url` names, and printing the response, happen here.
 pub async fn dispatch(surface: &Surface, name: &str, matches: &ArgMatches) -> Result<()> {
-    let cassette = surface
-        .cassette(name)
-        .context(error::UnknownCassetteSnafu { name })?;
-    let (method_name, method_matches) =
-        matches
-            .subcommand()
-            .context(error::UnknownCassetteMethodSnafu {
-                cassette: name,
-                method: "",
-            })?;
-    let method = cassette
-        .methods
-        .iter()
-        .find(|candidate| candidate.name == method_name)
-        .context(error::UnknownCassetteMethodSnafu {
-            cassette: name,
-            method: method_name,
-        })?;
+    let (_method, call) = resolve_invocation(surface, name, matches)?;
 
-    let raw = method_matches
-        .get_one::<String>(TAPES_URL)
+    // `resolve_invocation` only succeeds when the method subcommand parsed,
+    // so the matches carry it; `--tapes-url` is this module's own flag,
+    // added through the decorator, and is read back off the method's matches.
+    let raw = matches
+        .subcommand()
+        .and_then(|(_, method_matches)| method_matches.get_one::<String>(TAPES_URL))
         .context(error::MissingTapesUrlSnafu)?;
     let client = ApiClient::new(Url::parse(raw).context(error::TapesUrlSnafu)?);
 
-    let value = client.call(&call_for(method, method_matches)?).await?;
+    let value = client.call(&call).await?;
     print_json(&value)
-}
-
-/// Assemble the request for a matched method.
-fn call_for<'a>(method: &'a Method, matches: &ArgMatches) -> Result<Call<'a>> {
-    let mut call = Call {
-        method: &method.http_method,
-        path: &method.path,
-        ..Default::default()
-    };
-
-    for param in &method.params {
-        let Some(value) = matches.get_one::<String>(&param.flag) else {
-            continue;
-        };
-        let pair = (param.wire.clone(), value.clone());
-        match param.location {
-            Location::Path => call.path_params.push(pair),
-            Location::Query => call.query.push(pair),
-            Location::Header => call.headers.push(pair),
-        }
-    }
-
-    // Only ask for `--body` when the operation declared one. clap panics on a
-    // lookup of an argument id the command does not define, so an unconditional
-    // read would crash every method that takes no body.
-    if method.body.is_some() {
-        if let Some(raw) = matches.get_one::<String>(BODY) {
-            call.body = Some(read_body(raw)?);
-        }
-    }
-
-    Ok(call)
-}
-
-/// Resolve a `--body` value, which is either JSON or `@<path>`.
-///
-/// The body is parsed before it is sent, not passed through: a typo in a JSON
-/// literal is otherwise reported by the cassette as a 400 whose message is about
-/// the cassette's schema rather than about the quoting mistake that caused it.
-fn read_body(raw: &str) -> Result<String> {
-    let text = match raw.strip_prefix('@') {
-        Some(path) => std::fs::read_to_string(path).context(error::BodyFileSnafu { path })?,
-        None => raw.to_owned(),
-    };
-    let parsed: serde_json::Value = serde_json::from_str(&text).context(error::InvalidBodySnafu)?;
-    serde_json::to_string(&parsed).context(error::RenderJsonSnafu)
 }
 
 #[cfg(test)]
@@ -196,6 +72,7 @@ mod tests {
     use super::*;
     use crate::cassette::spec;
     use serde_json::json;
+    use tapes_cassette_client::command::{call_for, read_body};
 
     fn surface_from(name: &str, document: &serde_json::Value) -> Surface {
         Surface {
