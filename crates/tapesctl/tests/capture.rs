@@ -32,6 +32,11 @@ const SSE_BODY: &str = "event: message_start\ndata: {\"type\":\"message_start\"}
 event: content_block_delta\ndata: {\"delta\":{\"text\":\"hi\"}}\n\n\
 event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
 
+/// The per-launch capture secret these proxies are configured with. A real
+/// `start` generates a fresh UUID per launch; the fixed value here is what the
+/// tests below present (or deliberately withhold) as the echo.
+const TEST_NONCE: &str = "test-launch-nonce-1234";
+
 struct Harness {
     proxy: SocketAddr,
     ingest: MockServer,
@@ -96,6 +101,7 @@ async fn start_harness_as(
         codex_lane: false,
         self_attributing,
         launched_pid: Arc::new(std::sync::atomic::AtomicI32::new(launched_pid)),
+        gateway_nonce: Arc::new(TEST_NONCE.to_owned()),
         org_id: Arc::new(String::new()),
         auth_subject: Arc::new("local:test".to_owned()),
         session_seen: Arc::new(tokio::sync::Mutex::new(None)),
@@ -433,10 +439,13 @@ async fn a_non_json_request_body_is_forwarded_but_not_captured() {
 }
 
 /// A request shaped like one pi's gateway extension makes: its own envelope,
-/// stamped from inside the harness, and a User-Agent no lane here claims.
-async fn post_as_self_attributing_harness(
+/// stamped from inside the harness, the echoed launch nonce, and a User-Agent
+/// no lane here claims. `nonce` is a parameter because withholding or
+/// falsifying the echo is exactly what several tests below do.
+async fn post_as_self_attributing_harness_with_nonce(
     proxy: SocketAddr,
     session_id: Option<&str>,
+    nonce: Option<&str>,
 ) -> reqwest::Response {
     let mut request = reqwest::Client::new()
         .post(format!("http://{proxy}/v1/messages"))
@@ -446,11 +455,22 @@ async fn post_as_self_attributing_harness(
     if let Some(session_id) = session_id {
         request = request.header("x-tapes-harness-session-id", session_id);
     }
+    if let Some(nonce) = nonce {
+        request = request.header("x-tapes-gateway-nonce", nonce);
+    }
     request
         .body(r#"{"model":"claude-sonnet-4"}"#)
         .send()
         .await
         .unwrap()
+}
+
+/// The well-behaved shape: envelope plus the correct nonce echo.
+async fn post_as_self_attributing_harness(
+    proxy: SocketAddr,
+    session_id: Option<&str>,
+) -> reqwest::Response {
+    post_as_self_attributing_harness_with_nonce(proxy, session_id, Some(TEST_NONCE)).await
 }
 
 #[tokio::test]
@@ -459,6 +479,10 @@ async fn a_self_attributing_harness_is_filed_under_the_session_it_named() {
     // this session — there is no PID-indexed session file to read — so if the
     // proxy did not carry the inbound envelope into the payload, every pi turn
     // would land under `unknown` and no session would ever appear.
+    //
+    // This is also the acceptance half of the nonce contract: the request
+    // carries the correct echo and comes from the launched harness's subtree,
+    // and only that combination is believed.
     let harness = start_harness_as(
         ResponseTemplate::new(200)
             .set_body_string("ok")
@@ -566,4 +590,98 @@ async fn a_process_outside_the_launched_harness_cannot_claim_a_session() {
 
     let _ = impostor_target.kill();
     let _ = impostor_target.wait();
+}
+
+#[tokio::test]
+async fn a_forged_envelope_with_correct_ancestry_but_no_nonce_is_refused() {
+    // The forgery the ancestry check alone cannot refuse. A command the
+    // harness runs in a shell tool is a descendant of the launched PID, so its
+    // socket walks up to the harness exactly like the extension's does — here
+    // the test process itself plays that descendant, with a peer check that
+    // genuinely passes. What it does not have is the echo of the launch nonce,
+    // and without it the envelope must not be believed.
+    let harness = start_harness_as(
+        ResponseTemplate::new(200)
+            .set_body_string("ok")
+            .insert_header("content-type", "application/json"),
+        true,
+        own_pid(),
+    )
+    .await;
+
+    let _ =
+        post_as_self_attributing_harness_with_nonce(harness.proxy, Some("stolen-session"), None)
+            .await
+            .text()
+            .await;
+
+    let turn = await_captured_turn(&harness.ingest).await;
+    assert_eq!(
+        turn["session"]["harness_id"], "unknown",
+        "ancestry alone must not be enough to have an envelope believed",
+    );
+    assert_ne!(turn["session"]["harness_session_id"], "stolen-session");
+}
+
+#[tokio::test]
+async fn a_forged_envelope_with_correct_ancestry_but_a_wrong_nonce_is_refused() {
+    // As above, but guessing rather than omitting: a wrong value must fail the
+    // same way a missing one does.
+    let harness = start_harness_as(
+        ResponseTemplate::new(200)
+            .set_body_string("ok")
+            .insert_header("content-type", "application/json"),
+        true,
+        own_pid(),
+    )
+    .await;
+
+    let _ = post_as_self_attributing_harness_with_nonce(
+        harness.proxy,
+        Some("stolen-session"),
+        Some("not-the-launch-nonce"),
+    )
+    .await
+    .text()
+    .await;
+
+    let turn = await_captured_turn(&harness.ingest).await;
+    assert_eq!(turn["session"]["harness_id"], "unknown");
+    assert_ne!(turn["session"]["harness_session_id"], "stolen-session");
+}
+
+#[tokio::test]
+async fn the_nonce_echo_never_travels_upstream() {
+    // The nonce is the secret that authenticates a session's envelope, and the
+    // upstream is outside the trust boundary — a forwarded echo would hand the
+    // value to every hop past this proxy and could land in recorded traffic.
+    let harness = start_harness_as(
+        ResponseTemplate::new(200)
+            .set_body_string("ok")
+            .insert_header("content-type", "application/json"),
+        true,
+        own_pid(),
+    )
+    .await;
+
+    let _ = post_as_self_attributing_harness(harness.proxy, Some("pi-session-7"))
+        .await
+        .text()
+        .await;
+
+    let seen: Request = harness
+        .upstream
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    assert!(
+        seen.headers.get("x-tapes-gateway-nonce").is_none(),
+        "the nonce echo is a secret between the harness and its own proxy",
+    );
+    // And the strip must not have cost the envelope: this was a believed
+    // request, so its identity still travels.
+    assert_eq!(seen.headers.get("x-tapes-harness-id").unwrap(), "pi");
 }
