@@ -188,9 +188,11 @@ fn run_in(args: &PluginInstallArgs, home: &Path) -> Result<()> {
     let harness = resolve(&args.harness)?;
     let artifacts = harness.plugin_artifacts();
 
-    // Not an error. "This harness needs no plugin" is the ordinary answer for
-    // three of the four registered harnesses, and a non-zero exit would make a
-    // correct setup script look broken.
+    // Not an error. "This harness needs no plugin" is the ordinary answer —
+    // capture by redirection is the norm and an in-harness extension the
+    // exception — and a non-zero exit would make a correct setup script look
+    // broken. No count is given: the registry grows, and a number here would
+    // become a lie without anything failing.
     if artifacts.is_empty() {
         println!(
             "tapesctl: {} needs no capture plugin — its traffic is captured by \
