@@ -1647,7 +1647,7 @@ dependencies = [
 [[package]]
 name = "tapes-cassette-client"
 version = "0.1.0"
-source = "git+https://github.com/papercomputeco/tapes-harnesses?rev=f7057237c9514267407a9966b0d69a53b403a2f4#f7057237c9514267407a9966b0d69a53b403a2f4"
+source = "git+https://github.com/papercomputeco/tapes-harnesses?rev=73b555339dd8416360db377ef7fa37a1106dbc0f#73b555339dd8416360db377ef7fa37a1106dbc0f"
 dependencies = [
  "clap",
  "dirs",
@@ -1663,7 +1663,7 @@ dependencies = [
 [[package]]
 name = "tapes-harnesses"
 version = "0.1.0"
-source = "git+https://github.com/papercomputeco/tapes-harnesses?rev=23b5aaef51d20d089772402303f71441b14b4f48#23b5aaef51d20d089772402303f71441b14b4f48"
+source = "git+https://github.com/papercomputeco/tapes-harnesses?rev=73b555339dd8416360db377ef7fa37a1106dbc0f#73b555339dd8416360db377ef7fa37a1106dbc0f"
 dependencies = [
  "arc-swap",
  "base64",
@@ -1677,6 +1677,7 @@ dependencies = [
  "snafu",
  "time",
  "tokio",
+ "toml_edit",
  "tracing",
 ]
 
@@ -1912,6 +1913,23 @@ dependencies = [
  "libc",
  "pin-project-lite",
  "tokio",
+]
+
+[[package]]
+name = "toml_datetime"
+version = "0.6.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22cddaf88f4fbc13c51aebbf5f8eceb5c7c5a9da2ac40a13519eb5b0a0e8f11c"
+
+[[package]]
+name = "toml_edit"
+version = "0.20.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70f427fce4d84c72b5b732388bf4a9f4531b53f74e2887e3ecb2481f68f66d81"
+dependencies = [
+ "indexmap",
+ "toml_datetime",
+ "winnow",
 ]
 
 [[package]]
@@ -2365,6 +2383,15 @@ name = "windows_x86_64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
+
+[[package]]
+name = "winnow"
+version = "0.5.40"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f593a95398737aeed53e489c785df13f3618e41dbcd6718c6addbf1395aa6876"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "wiremock"

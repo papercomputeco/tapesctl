@@ -27,15 +27,22 @@ repository = "https://github.com/papercomputeco/tapesctl"
 # both tapesctl and paperd so the two capture paths cannot drift apart.
 # Pinned by revision like any other vendored contract.
 #
-tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "23b5aaef51d20d089772402303f71441b14b4f48" }
+# Both entries below are the same repository and are now deliberately the SAME
+# rev. They had drifted apart — `tapes-harnesses` sat several commits behind the
+# `tapes-cassette-client` pin — which meant one repository was vendored twice at
+# two different points in its history. That is worth avoiding on its own, and it
+# had a concrete cost here: the peer-socket rescan fix (harnesses #13) was in the
+# newer rev only, so tapesctl's proxy still failed closed on a first-scan miss
+# and the capture suite flaked under parallel load. Keep them equal.
+tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "73b555339dd8416360db377ef7fa37a1106dbc0f" }
 
 # The generated cassette-surface machinery (discovery decode, OpenAPI
 # reduction, the on-disk surface cache, clap command synthesis, and the
 # no-auth transport) lives in the tapes-cassette-client package of the same
 # repository since the PCC-1104 split, so every capture client generates the
-# same surface the same way. Pinned by revision like the crate above.
-#
-tapes-cassette-client = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "f7057237c9514267407a9966b0d69a53b403a2f4" }
+# same surface the same way. Pinned by revision like the crate above — and at
+# the same rev as it, for the reasons given there.
+tapes-cassette-client = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "73b555339dd8416360db377ef7fa37a1106dbc0f" }
 
 # --- CLI ---
 # `string` lets a Command/Arg be named by an owned String rather than only by a
