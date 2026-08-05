@@ -37,7 +37,16 @@
                 "libproc-0.14.11" = "sha256-B4mZIbjn1FOsTJXqyv3DRXAE3FFwT/4Gl+GDP4r9+9M=";
                 # The shared harness crate, consumed by git pin since the
                 # repo split. Recompute when the pin rev bumps.
-                "tapes-harnesses-0.1.0" = "sha256-ZR2v03zINC9WCGgIZvtCMmeQ1mFuRU+bgSPLVPPzuKI=";
+                # Verified against the pinned rev with nix-prefetch-git; the
+                # previous value was stale — two pin bumps landed without a
+                # recompute, which `nix build` fails on even though the
+                # cargo-native targets never notice.
+                "tapes-harnesses-0.1.0" = "sha256-d4VChT4PrIMsESnjjdSJ5ZYxsQo7elv3/AGapkMAAEI=";
+                # The generated cassette-surface machinery, split out of this
+                # repo under PCC-1104; a sibling package in the tapes-harnesses
+                # repository. Recompute when the TEMPORARY-PIN in Cargo.toml
+                # re-points to the merged main revision.
+                "tapes-cassette-client-0.1.0" = "sha256-oLtqcYwi2r+Q1Ur0dzvuBR6CRf1BW3LoavulURJJbBc=";
               };
             };
             cargoBuildFlags = [ "-p" "tapesctl" ];

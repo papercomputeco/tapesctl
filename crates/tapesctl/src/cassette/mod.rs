@@ -33,6 +33,13 @@
 //! the server owns the shape, and a second hand-maintained copy only drifts.
 //! This module applies the same rule to the request side.
 //!
+//! Since the PCC-1104 split the machinery itself — discovery decode, the
+//! reducer, the surface cache, and command synthesis — lives in the shared
+//! `tapes-cassette-client` crate, consumed by every capture client. The
+//! submodules here are tapesctl's parameterization of it: the reserved flag
+//! names, the cache's on-disk identity, and the `--tapes-url` decoration and
+//! dispatch that make a generated command a tapesctl command.
+//!
 //! # What the server hands us
 //!
 //! Core republishes a fetched cassette document onto the paths a client can

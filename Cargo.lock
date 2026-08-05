@@ -1645,6 +1645,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "tapes-cassette-client"
+version = "0.1.0"
+source = "git+https://github.com/papercomputeco/tapes-harnesses?rev=a880f6e567d9ab91a320f3d83cfc6177c4212822#a880f6e567d9ab91a320f3d83cfc6177c4212822"
+dependencies = [
+ "clap",
+ "dirs",
+ "http",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "snafu",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "tapes-harnesses"
 version = "0.1.0"
 source = "git+https://github.com/papercomputeco/tapes-harnesses?rev=23b5aaef51d20d089772402303f71441b14b4f48#23b5aaef51d20d089772402303f71441b14b4f48"
@@ -1683,6 +1699,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "snafu",
+ "tapes-cassette-client",
  "tapes-harnesses",
  "tempfile",
  "test-case",

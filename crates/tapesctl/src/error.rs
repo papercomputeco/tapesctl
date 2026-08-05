@@ -645,3 +645,40 @@ pub enum Error {
         provider: &'static str,
     },
 }
+
+/// Map the shared cassette machinery's errors onto the variants this CLI
+/// surfaced before the PCC-1104 extraction, one to one, so every user-facing
+/// message is byte-identical to what the in-tree implementation printed.
+impl From<tapes_cassette_client::Error> for Error {
+    fn from(error: tapes_cassette_client::Error) -> Self {
+        use tapes_cassette_client::Error as Cassette;
+        match error {
+            Cassette::Url { source } => Self::ApiUrl { source },
+            Cassette::NotABase => Self::NotABase,
+            Cassette::ClientInit => Self::ClientInit,
+            Cassette::Send { source } => Self::ApiSend { source },
+            Cassette::Status {
+                status,
+                endpoint,
+                body,
+            } => Self::ApiStatus {
+                status,
+                endpoint,
+                body,
+            },
+            Cassette::Decode { source } => Self::ApiDecode { source },
+            Cassette::Contract { detail } => Self::ApiContract { detail },
+            Cassette::SpecPath { path } => Self::CassetteSpecPath { path },
+            Cassette::Method { method } => Self::CassetteMethod { method },
+            Cassette::UnknownCassette { name } => Self::UnknownCassette { name },
+            Cassette::UnknownMethod { cassette, method } => {
+                Self::UnknownCassetteMethod { cassette, method }
+            }
+            Cassette::BodyFile { path, source } => Self::BodyFile { path, source },
+            Cassette::InvalidBody { source } => Self::InvalidBody { source },
+            // `read_body`'s re-render used the shared RenderJson variant
+            // before the split; keep that message for the same failure.
+            Cassette::RenderBody { source } => Self::RenderJson { source },
+        }
+    }
+}

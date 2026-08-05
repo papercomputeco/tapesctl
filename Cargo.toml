@@ -29,6 +29,18 @@ repository = "https://github.com/papercomputeco/tapesctl"
 #
 tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "23b5aaef51d20d089772402303f71441b14b4f48" }
 
+# The generated cassette-surface machinery (discovery decode, OpenAPI
+# reduction, the on-disk surface cache, clap command synthesis, and the
+# no-auth transport) lives in the tapes-cassette-client package of the same
+# repository since the PCC-1104 split, so every capture client generates the
+# same surface the same way. Pinned by revision like the crate above.
+#
+# TEMPORARY-PIN (PCC-1104): this rev is the head of the extraction branch
+# `jason/pcc-1104-cassette-client` and does not exist on the tapes-harnesses
+# repository's main yet. RE-POINT TO THE MERGED MAIN REVISION (and recompute
+# the flake.nix outputHash) BEFORE THIS BRANCH MERGES.
+tapes-cassette-client = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "a880f6e567d9ab91a320f3d83cfc6177c4212822" }
+
 # --- CLI ---
 # `string` lets a Command/Arg be named by an owned String rather than only by a
 # `&'static str`. The generated cassette surface is built from a document fetched

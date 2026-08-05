@@ -34,11 +34,15 @@
 //! gateway adds its own on the way through.
 
 use serde_json::Value;
-use snafu::{OptionExt, ResultExt};
+use tapes_cassette_client::DirectHttp;
 use url::Url;
 
 use crate::api::contract::{self, ops};
-use crate::error::{Error, Result, error};
+use crate::error::{Result, error};
+// Re-exported from the shared cassette crate since the PCC-1104 split, so
+// the call sites across ports/ and start/ read exactly as they did when the
+// types were defined here.
+pub use tapes_cassette_client::{Call, SpecFetch};
 
 /// Server-side ceiling on `limit`. A larger request is silently clamped rather
 /// than rejected, so a caller asking for more must still follow `next_cursor`.
@@ -50,47 +54,6 @@ pub const MAX_LIMIT: u64 = 200;
 /// There is no server-side ceiling on `top_k` — the handler passes it straight
 /// through — so this is a default, not a clamp.
 pub const DEFAULT_SEARCH_TOP_K: u64 = 5;
-
-/// The outcome of a conditional fetch of a cassette's OpenAPI document.
-#[derive(Debug, Clone)]
-pub enum SpecFetch {
-    /// The server matched our `If-None-Match` and sent no body; the cached copy
-    /// is still current.
-    Unchanged,
-    /// A document, and the validator to revalidate it with next time.
-    Fetched {
-        /// The OpenAPI document, verbatim.
-        document: Value,
-        /// The response `ETag`, when the server sent one.
-        etag: Option<String>,
-    },
-}
-
-/// Remove the empty query `query_pairs_mut` leaves behind when no pair was
-/// appended.
-///
-/// `url.query_pairs_mut()` sets the query to `Some("")` the moment it is called,
-/// so a request with every parameter unset would go out as `/v1/sessions?`.
-/// Servers ignore it, but it means the same request has two spellings — which
-/// shows up in logs, in cached URLs, and in any test that compares them.
-/// Replace the `{name}` placeholders in one path segment.
-///
-/// The result is pushed through `path_segments_mut`, which percent-encodes the
-/// whole segment — so a value containing a slash stays one segment rather than
-/// addressing a different route.
-fn substitute(segment: &str, path_params: &[(String, String)]) -> String {
-    let mut rendered = segment.to_owned();
-    for (name, value) in path_params {
-        rendered = rendered.replace(&format!("{{{name}}}"), value);
-    }
-    rendered
-}
-
-fn drop_empty_query(url: &mut Url) {
-    if url.query() == Some("") {
-        url.set_query(None);
-    }
-}
 
 /// Which grain a session export is written at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -212,91 +175,49 @@ impl SessionListParams<'_> {
     }
 }
 
-/// One call against an OpenAPI-described route — a runtime-discovered cassette
-/// operation, or a core operation from the vendored contract.
-#[derive(Debug, Default, Clone)]
-pub struct Call<'a> {
-    /// The HTTP verb, uppercased.
-    pub method: &'a str,
-    /// The public path template, `{name}` placeholders included.
-    pub path: &'a str,
-    /// Values for those placeholders, by placeholder name.
-    pub path_params: Vec<(String, String)>,
-    /// Query parameters, under their wire names.
-    pub query: Vec<(String, String)>,
-    /// Header parameters, under their wire names.
-    pub headers: Vec<(String, String)>,
-    /// A JSON request body, when the operation takes one.
-    pub body: Option<String>,
-}
-
 /// A client for one tapes API server.
 ///
-/// `http` is `None` only if the no-redirect client could not be built at all —
-/// in which case every request errors, rather than any fallback silently
-/// following redirects.
+/// The transport half — the no-redirect HTTP client, the spec-path guards,
+/// URL building, and JSON decoding — lives in
+/// [`tapes_cassette_client::DirectHttp`] since the PCC-1104 split; this type
+/// wraps it and keeps the contract-driven core methods and the CLI's error
+/// type. Behaviour is the extraction's, which is to say the pre-extraction
+/// behaviour, verbatim.
 #[derive(Debug, Clone)]
 pub struct ApiClient {
-    http: Option<reqwest::Client>,
-    base: Url,
+    direct: DirectHttp,
 }
 
 impl ApiClient {
     /// Build a client against `base`.
+    ///
+    /// Redirects are refused, not followed: this client speaks to exactly the
+    /// server the user configured. See [`DirectHttp::new`] for the policy and
+    /// its rationale.
     #[must_use]
     pub fn new(base: Url) -> Self {
-        // Redirects are refused, not followed: this client speaks to exactly
-        // the server the user configured, and both the discovery document and
-        // a cassette's own spec are data that must not be able to steer a
-        // request — least of all one carrying a user-provided body — onto
-        // another host. The tapes API never redirects, so a 3xx here is
-        // always either a misconfiguration or an attempt to move the client.
-        // There is deliberately NO fallback client: if this build fails
-        // (which a redirect policy alone cannot cause in practice), every
-        // request errors instead of any default client quietly following
-        // redirects.
-        let http = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .ok();
-        Self { http, base }
-    }
-
-    /// The one HTTP client, or a hard error — never a redirect-following one.
-    fn http(&self) -> Result<&reqwest::Client> {
-        self.http.as_ref().context(error::ClientInitSnafu)
-    }
-
-    /// Refuse a response that is a redirect or that a redirect produced.
-    ///
-    /// The primary defence is the client's `Policy::none`; this backstop makes
-    /// the property visible per-response: any 3xx errors out, and the origin
-    /// that answered must be the origin the user configured.
-    fn refuse_moved(&self, response: &reqwest::Response) -> Result<()> {
-        snafu::ensure!(
-            !response.status().is_redirection(),
-            error::ApiContractSnafu {
-                detail: "the server answered with a redirect; this client does not follow them",
-            }
-        );
-        snafu::ensure!(
-            response.url().origin() == self.base.origin(),
-            error::ApiContractSnafu {
-                detail: "the response came from a different origin than the configured server",
-            }
-        );
-        Ok(())
+        Self {
+            direct: DirectHttp::new(base),
+        }
     }
 
     /// The base URL, for logging.
     #[must_use]
     pub fn base(&self) -> &Url {
-        &self.base
+        self.direct.base()
     }
 
     /// Join an absolute API path onto the base.
+    ///
+    /// Only the tests exercise this directly any more — request URLs are
+    /// built inside the shared transport — but it pins the join behaviour a
+    /// prefix-carrying base URL relies on.
+    #[cfg(test)]
     fn url(&self, path: &str) -> Result<Url> {
-        self.base.join(path).context(error::ApiUrlSnafu)
+        use snafu::ResultExt;
+        self.base()
+            .join(path)
+            .context(crate::error::error::ApiUrlSnafu)
     }
 
     /// Resolve one core operation in the vendored contract and call it.
@@ -434,57 +355,7 @@ impl ApiClient {
     /// matching `If-None-Match` with 304 and an empty body, which is what makes
     /// revalidating a cached surface cheap.
     pub async fn fetch_cassette_spec(&self, path: &str, etag: Option<&str>) -> Result<SpecFetch> {
-        // Discovery is data, not authority. A single leading slash keeps the
-        // request on the server that served discovery; `//host/path` is a
-        // protocol-RELATIVE reference that Url::join resolves onto a
-        // different host entirely, so it is rejected up front — and the
-        // built URL's origin is checked against the base as the backstop for
-        // any other authority-changing join.
-        if !path.starts_with('/') || path.starts_with("//") {
-            return error::CassetteSpecPathSnafu {
-                path: path.to_owned(),
-            }
-            .fail();
-        }
-        let url = self.url(path)?;
-        if url.origin() != self.base.origin() {
-            return error::CassetteSpecPathSnafu {
-                path: path.to_owned(),
-            }
-            .fail();
-        }
-
-        let mut request = self.http()?.get(url.clone());
-        if let Some(etag) = etag {
-            request = request.header(http::header::IF_NONE_MATCH, etag);
-        }
-        let response = request.send().await.context(error::ApiSendSnafu)?;
-        self.refuse_moved(&response)?;
-
-        // The pre-flight guards validate the URL this client BUILT; a 30x
-        // from the server can still walk the request elsewhere, and reqwest
-        // follows redirects by default. The origin that ultimately answered
-        // must be the origin the user configured — a spec served from
-        // anywhere else is refused unread. (Nothing sensitive left with the
-        // redirected request: this fetch carries no credentials.)
-        if response.url().origin() != self.base.origin() {
-            return error::CassetteSpecPathSnafu {
-                path: path.to_owned(),
-            }
-            .fail();
-        }
-
-        if response.status() == http::StatusCode::NOT_MODIFIED {
-            return Ok(SpecFetch::Unchanged);
-        }
-        let etag = response
-            .headers()
-            .get(http::header::ETAG)
-            .and_then(|value| value.to_str().ok())
-            .map(ToOwned::to_owned);
-        let document = Self::decode_json(response, &url).await?;
-
-        Ok(SpecFetch::Fetched { document, etag })
+        Ok(self.direct.fetch_spec(path, etag).await?)
     }
 
     /// Make one call described by an OpenAPI document — a cassette's, or the
@@ -495,81 +366,28 @@ impl ApiClient {
     /// generated surfaces — see [`crate::cassette`] and
     /// [`crate::api::contract`].
     pub async fn call(&self, call: &Call<'_>) -> Result<Value> {
-        let (response, url) = self.send_call(call).await?;
-        Self::decode_json(response, &url).await
+        Ok(self.direct.execute(call).await?)
     }
 
     /// Make one described call and hand back the live response for streaming.
     ///
-    /// A non-success status is read and surfaced as [`Error::ApiStatus`] here,
-    /// so a caller streaming to a file can never write an error page into it.
+    /// A non-success status is read and surfaced as
+    /// [`crate::error::Error::ApiStatus`], so a caller streaming to a file can
+    /// never write an error page into it.
     pub async fn call_stream(&self, call: &Call<'_>) -> Result<reqwest::Response> {
-        let (response, url) = self.send_call(call).await?;
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::ApiStatus {
-                status: status.as_u16(),
-                endpoint: url.to_string(),
-                body,
-            });
-        }
-        Ok(response)
-    }
-
-    /// Send one described call, without reading the response body.
-    async fn send_call(&self, call: &Call<'_>) -> Result<(reqwest::Response, Url)> {
-        let url = self.call_url(call)?;
-        let method = reqwest::Method::from_bytes(call.method.as_bytes()).map_err(|_| {
-            error::CassetteMethodSnafu {
-                method: call.method,
-            }
-            .build()
-        })?;
-
-        let mut request = self.http()?.request(method, url.clone());
-        for (name, value) in &call.headers {
-            request = request.header(name, value);
-        }
-        if let Some(body) = &call.body {
-            request = request
-                .header(http::header::CONTENT_TYPE, "application/json")
-                .body(body.clone());
-        }
-
-        let response = request.send().await.context(error::ApiSendSnafu)?;
-        // Described calls can carry user-provided bodies and headers, so of
-        // all requests this client makes these are the ones a redirect must
-        // never be able to move.
-        self.refuse_moved(&response)?;
-        Ok((response, url))
+        Ok(self.direct.execute_stream(call).await?)
     }
 
     /// Build the URL for a cassette call.
     ///
-    /// Path parameters are substituted into their segment and the segment is
-    /// then pushed through `path_segments_mut`, which percent-encodes it whole.
-    /// A value containing a slash therefore stays one segment instead of
-    /// addressing a different route.
+    /// Delegates to the shared builder, which substitutes path parameters
+    /// into their segment and pushes the segment through `path_segments_mut`
+    /// so it is percent-encoded whole. Only the tests exercise this directly
+    /// any more — the shared transport builds its own request URLs — but it
+    /// pins the encoding behaviour in this crate's own suite.
+    #[cfg(test)]
     fn call_url(&self, call: &Call<'_>) -> Result<Url> {
-        let mut url = self.url("/")?;
-        {
-            let mut segments = url
-                .path_segments_mut()
-                .map_err(|()| error::NotABaseSnafu.build())?;
-            segments.clear();
-            for segment in call.path.split('/').filter(|s| !s.is_empty()) {
-                segments.push(&substitute(segment, &call.path_params));
-            }
-        }
-        {
-            let mut query = url.query_pairs_mut();
-            for (name, value) in &call.query {
-                query.append_pair(name, value);
-            }
-        }
-        drop_empty_query(&mut url);
-        Ok(url)
+        Ok(tapes_cassette_client::invoke::call_url(self.base(), call)?)
     }
 
     /// `seedDemo` — populate a server with demo sessions.
@@ -582,26 +400,25 @@ impl ApiClient {
         call.body = Some("{}".to_owned());
         self.call(&call).await
     }
+}
 
-    async fn decode_json(response: reqwest::Response, url: &Url) -> Result<Value> {
-        let status = response.status();
-        let body = response.bytes().await.context(error::ApiSendSnafu)?;
-        if !status.is_success() {
-            // Every tapes error body is `{"error": "..."}`; surfacing it beats
-            // the bare status, which never names the offending parameter.
-            return Err(Error::ApiStatus {
-                status: status.as_u16(),
-                endpoint: url.to_string(),
-                body: String::from_utf8_lossy(&body).into_owned(),
-            });
-        }
-        // A successful response with no body is a real answer, not a decode
-        // failure: cassette routes are free to return 204, and the core seed
-        // route is simply the only one today that never does.
-        if body.iter().all(u8::is_ascii_whitespace) {
-            return Ok(Value::Null);
-        }
-        serde_json::from_slice(&body).context(error::ApiDecodeSnafu)
+/// The shared surface cache fetches through this seam. Discovery still goes
+/// through the vendored contract's `listCassettes` operation — the same
+/// request the pre-extraction cache made — and every failure maps onto the
+/// CLI's own error type for display.
+impl tapes_cassette_client::SpecTransport for ApiClient {
+    type Error = crate::error::Error;
+
+    async fn fetch_discovery(&self) -> Result<Value> {
+        self.list_cassettes().await
+    }
+
+    async fn fetch_spec(&self, path: &str, etag: Option<&str>) -> Result<SpecFetch> {
+        self.fetch_cassette_spec(path, etag).await
+    }
+
+    async fn execute(&self, call: &Call<'_>) -> Result<Value> {
+        self.call(call).await
     }
 }
 
