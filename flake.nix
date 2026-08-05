@@ -46,7 +46,7 @@
                 # repo under PCC-1104; a sibling package in the tapes-harnesses
                 # repository. Recompute when the TEMPORARY-PIN in Cargo.toml
                 # re-points to the merged main revision.
-                "tapes-cassette-client-0.1.0" = "sha256-oLtqcYwi2r+Q1Ur0dzvuBR6CRf1BW3LoavulURJJbBc=";
+                "tapes-cassette-client-0.1.0" = "sha256-XJsNBQzOLrr8JS7dEfxvbMwoJfo+JPmUkJP7M20TrAY=";
               };
             };
             cargoBuildFlags = [ "-p" "tapesctl" ];
