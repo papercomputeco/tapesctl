@@ -24,11 +24,59 @@ pub enum Error {
         what: &'static str,
     },
 
-    /// The named harness has no launch recipe here.
-    #[snafu(display("unsupported harness {harness:?} (supported: claude, codex)"))]
+    /// The named harness has no launch arm here.
+    ///
+    /// The list is passed in rather than spelled in the message: it is derived
+    /// from the arms this binary actually has, so a harness gained or lost
+    /// cannot leave the error advertising the wrong set.
+    #[snafu(display("unsupported harness {harness:?} (supported: {supported})"))]
     UnsupportedHarness {
         /// What the user asked for.
         harness: String,
+        /// The harnesses `start` can launch, comma-separated.
+        supported: String,
+    },
+
+    /// `--schema` named something no upstream schema is known by.
+    #[snafu(display("invalid --schema {schema:?} (valid values: anthropic, openai)"))]
+    InvalidSchema {
+        /// What the user asked for.
+        schema: String,
+    },
+
+    /// `--schema` was passed for a harness that speaks exactly one schema.
+    ///
+    /// Refused rather than ignored: a flag that silently does nothing reads,
+    /// from the outside, exactly like a flag that worked — and the user would
+    /// have every reason to believe the capture was routed somewhere it was not.
+    #[snafu(display(
+        "--schema does not apply to {harness}, which speaks {provider} only \
+         (it is for a harness that redirects several providers to one endpoint, \
+         such as pi)"
+    ))]
+    SchemaNotApplicable {
+        /// The harness being launched.
+        harness: &'static str,
+        /// The one schema that harness speaks.
+        provider: &'static str,
+    },
+
+    /// A harness whose capture needs an in-harness plugin was launched before
+    /// that plugin was installed.
+    ///
+    /// Fatal rather than a warning, for the same reason a missing tapes URL is:
+    /// the session would run to completion and capture nothing, and the user
+    /// would discover it from an empty session list rather than from here.
+    #[snafu(display(
+        "{harness} cannot be captured until its capture plugin is installed: \
+         no plugin at {}. Run `tapesctl plugin install {harness}` first.",
+        path.display()
+    ))]
+    PluginNotInstalled {
+        /// The harness being launched.
+        harness: &'static str,
+        /// Where the missing artifact was looked for.
+        path: PathBuf,
     },
 
     /// No server was named. On the capture side there would be nowhere to send

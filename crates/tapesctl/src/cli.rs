@@ -181,7 +181,7 @@ pub struct ApiArgs {
 /// Arguments for `tapesctl start`.
 #[derive(Debug, Args)]
 pub struct StartArgs {
-    /// The harness to launch (e.g. `claude`, `codex`).
+    /// The harness to launch (e.g. `claude`, `codex`, `pi`).
     pub harness: String,
 
     /// Arguments passed through verbatim to the harness.
@@ -196,6 +196,17 @@ pub struct StartArgs {
     /// own provider API, so the harness behaves exactly as it would unproxied.
     #[arg(long, env = "TAPES_UPSTREAM")]
     pub upstream: Option<String>,
+
+    /// Which upstream API schema the proxy fronts: `anthropic` (the default) or
+    /// `openai`.
+    ///
+    /// Only meaningful for a harness that speaks several — `pi` redirects all of
+    /// its providers to one endpoint, so this is what picks the upstream, the
+    /// wire format ingest reduces, and the schema the extension reports. A
+    /// harness that speaks exactly one schema takes it from the harness instead,
+    /// and passing this there is an error rather than a silent no-op.
+    #[arg(long)]
+    pub schema: Option<String>,
 
     /// Base URL of the web console, used to print a link to the captured
     /// session. Without it the session id is printed on its own.
@@ -644,6 +655,32 @@ mod tests {
             Some(Command::Start(args)) => {
                 assert_eq!(args.harness, "claude");
                 assert_eq!(args.harness_args, vec!["--verbose", "-p", "hi"]);
+            }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_schema_flag_is_tapesctls_and_the_harnesss_own_args_still_pass_through() {
+        // `--schema` picks which upstream this capture fronts, so it must be
+        // read here — while anything after `--` still belongs to pi.
+        let cli = parse(&[
+            "tapesctl",
+            "start",
+            "pi",
+            "--tapes-url",
+            "http://x",
+            "--schema",
+            "openai",
+            "--",
+            "--model",
+            "gpt-5",
+        ]);
+        match cli.command {
+            Some(Command::Start(args)) => {
+                assert_eq!(args.harness, "pi");
+                assert_eq!(args.schema.as_deref(), Some("openai"));
+                assert_eq!(args.harness_args, vec!["--model", "gpt-5"]);
             }
             other => panic!("got: {other:?}"),
         }
