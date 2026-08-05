@@ -35,18 +35,22 @@
               # crate, same rev, same hash as `platform/paper`.
               outputHashes = {
                 "libproc-0.14.11" = "sha256-B4mZIbjn1FOsTJXqyv3DRXAE3FFwT/4Gl+GDP4r9+9M=";
-                # The shared harness crate, consumed by git pin since the
-                # repo split. Recompute when the pin rev bumps.
-                # Verified against the pinned rev with nix-prefetch-git; the
-                # previous value was stale — two pin bumps landed without a
-                # recompute, which `nix build` fails on even though the
-                # cargo-native targets never notice.
-                "tapes-harnesses-0.1.0" = "sha256-d4VChT4PrIMsESnjjdSJ5ZYxsQo7elv3/AGapkMAAEI=";
-                # The generated cassette-surface machinery, split out of this
-                # repo under PCC-1104; a sibling package in the tapes-harnesses
-                # repository. Recompute when the TEMPORARY-PIN in Cargo.toml
-                # re-points to the merged main revision.
-                "tapes-cassette-client-0.1.0" = "sha256-XJsNBQzOLrr8JS7dEfxvbMwoJfo+JPmUkJP7M20TrAY=";
+                # The shared harness crate and the generated cassette-surface
+                # machinery split out of this repo under PCC-1104. They are two
+                # packages in ONE repository, and Cargo.toml now pins both at the
+                # same revision — so these two hashes are the hash of that single
+                # revision's tree, and are expected to be equal. A future diff
+                # where they differ means the two pins have drifted apart again.
+                #
+                # Recompute when the TEMPORARY-PIN in Cargo.toml re-points to the
+                # merged main revision:
+                #   nix shell nixpkgs#nix-prefetch-git -c nix-prefetch-git \
+                #     https://github.com/papercomputeco/tapes-harnesses --rev <sha>
+                # `nix build` fails on a stale value even though the cargo-native
+                # targets never notice, which is how two earlier pin bumps landed
+                # without a recompute.
+                "tapes-harnesses-0.1.0" = "sha256-BvKJ18vJn6apZ+xbyXijqGy9QSWcTMCw8VVNEW3FdA0=";
+                "tapes-cassette-client-0.1.0" = "sha256-BvKJ18vJn6apZ+xbyXijqGy9QSWcTMCw8VVNEW3FdA0=";
               };
             };
             cargoBuildFlags = [ "-p" "tapesctl" ];

@@ -21,18 +21,25 @@
 //! # Two ways a harness reaches the proxy
 //!
 //! Claude and codex are *redirected*: they have a base-URL knob, a recipe sets
-//! it, and nothing has to be installed. pi has no such knob, so it is captured
-//! from the inside by an extension — `tapes-harnesses` owns the asset,
-//! [`crate::plugin`] installs it, and this module's job is only to point an
+//! it, and nothing has to be installed. pi and opencode are captured from the
+//! inside by an extension instead — `tapes-harnesses` owns the assets,
+//! [`crate::plugin`] installs them, and this module's job is only to point an
 //! already-installed extension at this proxy through the crate's environment
-//! contract. That split is why `start pi` refuses to launch when the extension
-//! is absent instead of running an uncaptured session.
+//! contract. That split is why `start pi` and `start opencode` refuse to launch
+//! when the extension is absent instead of running an uncaptured session.
+//!
+//! pi is that way by necessity — it has no base-URL knob at all. opencode is
+//! that way by choice: the crate does ship an `OpenCodeRecipe` that redirects it
+//! through a config document, but a config document cannot name the session it
+//! belongs to, and opencode publishes no PID-indexed session file for the peer
+//! lookup to read. Taking the plugin road gets the redirect and the identity
+//! from one artifact, and makes this arm identical to pi's.
 //!
 //! The consequence for attribution is the interesting one. A redirected harness
-//! is identified from the outside, by peer PID; pi cannot be, so it stamps its
-//! own `X-Tapes-*` envelope from within. For those harnesses the request's own
-//! headers are the better evidence, and the proxy files the turn under them
-//! rather than under this process's failure to recognise the peer — but only
+//! is identified from the outside, by peer PID; these two cannot be, so they
+//! stamp their own `X-Tapes-*` envelope from within. For those harnesses the
+//! request's own headers are the better evidence, and the proxy files the turn
+//! under them rather than under its failure to recognise the peer — but only
 //! once the peer socket is shown to belong to the harness this process launched
 //! *and* the request echoes the per-launch nonce this process generated. An
 //! envelope is a claim, and a loopback port is reachable by everything on the
@@ -67,7 +74,9 @@ use tapes_harnesses::attribution::{
     AttributionConfig, AttributionState, CodexProviderFilter, claude_session, codex_session,
     spawn_codex_watcher, spawn_watcher,
 };
-use tapes_harnesses::envelope::{HARNESS_ID_CLAUDE, HARNESS_ID_CODEX, HARNESS_ID_PI};
+use tapes_harnesses::envelope::{
+    HARNESS_ID_CLAUDE, HARNESS_ID_CODEX, HARNESS_ID_OPENCODE, HARNESS_ID_PI,
+};
 use tapes_harnesses::harness as registry;
 use tapes_harnesses::launch::{
     ClaudeRecipe, CodexAuth, CodexRecipe, LaunchPlan, LaunchRecipe, ProxyEndpoint,
@@ -167,6 +176,13 @@ impl UpstreamSchema {
 /// captures the default session.
 pub const DEFAULT_PI_SCHEMA: UpstreamSchema = UpstreamSchema::Anthropic;
 
+/// The schema an opencode capture fronts when the user names none.
+///
+/// Anthropic for the same reason as pi's, and a separate constant rather than a
+/// shared one because it is a separate judgement about a separate harness: which
+/// provider opencode ships selected can move without pi's having moved.
+pub const DEFAULT_OPENCODE_SCHEMA: UpstreamSchema = UpstreamSchema::Anthropic;
+
 /// Which harness is being launched, and everything that differs between them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Harness {
@@ -174,6 +190,8 @@ pub enum Harness {
     Claude,
     /// Codex, over the OpenAI Responses API.
     Codex,
+    /// opencode, captured from inside by the crate's gateway plugin.
+    OpenCode,
     /// pi, captured from inside by the crate's gateway extension.
     Pi,
 }
@@ -181,10 +199,16 @@ pub enum Harness {
 /// Every harness `start` has an arm for, in the order they should be offered.
 ///
 /// The registry is deliberately the wider set: it lists every harness the shared
-/// crate knows, including ones no arm here launches yet (opencode). This is the
-/// narrower claim — what this binary can actually do — and the error message for
-/// an unsupported name is derived from it so the two cannot drift.
-pub const SUPPORTED: &[Harness] = &[Harness::Claude, Harness::Codex, Harness::Pi];
+/// crate knows, including ones no arm here launches (the Codex desktop app,
+/// which is configured rather than launched at all). This is the narrower claim
+/// — what this binary can actually do — and the error message for an unsupported
+/// name is derived from it so the two cannot drift.
+pub const SUPPORTED: &[Harness] = &[
+    Harness::Claude,
+    Harness::Codex,
+    Harness::OpenCode,
+    Harness::Pi,
+];
 
 impl Harness {
     /// Resolve a user-typed harness name.
@@ -198,6 +222,7 @@ impl Harness {
         let resolved = registry::find(name).and_then(|harness| match harness.id() {
             HARNESS_ID_CLAUDE => Some(Self::Claude),
             HARNESS_ID_CODEX => Some(Self::Codex),
+            HARNESS_ID_OPENCODE => Some(Self::OpenCode),
             HARNESS_ID_PI => Some(Self::Pi),
             _ => None,
         });
@@ -213,6 +238,7 @@ impl Harness {
         match self {
             Self::Claude => HARNESS_ID_CLAUDE,
             Self::Codex => HARNESS_ID_CODEX,
+            Self::OpenCode => HARNESS_ID_OPENCODE,
             Self::Pi => HARNESS_ID_PI,
         }
     }
@@ -223,7 +249,24 @@ impl Harness {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::OpenCode => "opencode",
             Self::Pi => "pi",
+        }
+    }
+
+    /// The schema this capture fronts when the user names none, for a harness
+    /// that speaks more than one — and `None` for a harness whose schema follows
+    /// from the harness itself.
+    ///
+    /// That `None` is load-bearing twice over: it is what makes `--schema`
+    /// refusable for Claude and Codex, and it is what
+    /// [`StartConfig::schema`] carries as "this question does not arise".
+    #[must_use]
+    pub fn default_schema(self) -> Option<UpstreamSchema> {
+        match self {
+            Self::Claude | Self::Codex => None,
+            Self::OpenCode => Some(DEFAULT_OPENCODE_SCHEMA),
+            Self::Pi => Some(DEFAULT_PI_SCHEMA),
         }
     }
 
@@ -231,13 +274,14 @@ impl Harness {
     /// its server-side reducer on this, so it must name the wire format of the
     /// bytes actually captured — not the vendor of the harness.
     ///
-    /// pi speaks whichever schema this capture fronts, so it is the one harness
-    /// whose provider is not fixed by the harness.
+    /// pi and opencode speak whichever schema this capture fronts, so they are
+    /// the harnesses whose provider is not fixed by the harness.
     #[must_use]
     pub fn provider(self, schema: Option<UpstreamSchema>) -> &'static str {
         match self {
             Self::Claude => "anthropic",
             Self::Codex => "openai",
+            Self::OpenCode => schema.unwrap_or(DEFAULT_OPENCODE_SCHEMA).as_str(),
             Self::Pi => schema.unwrap_or(DEFAULT_PI_SCHEMA).as_str(),
         }
     }
@@ -245,8 +289,8 @@ impl Harness {
     /// Default upstream when none is supplied.
     ///
     /// Codex's default depends on how it will authenticate, because the two
-    /// credential kinds are accepted by different hosts; pi's depends on the
-    /// schema being captured.
+    /// credential kinds are accepted by different hosts; pi's and opencode's
+    /// depend on the schema being captured.
     #[must_use]
     pub fn default_upstream(
         self,
@@ -257,6 +301,7 @@ impl Harness {
             (Self::Claude, _) => DEFAULT_ANTHROPIC_UPSTREAM,
             (Self::Codex, Some(CodexAuth::ChatGpt)) => DEFAULT_CHATGPT_UPSTREAM,
             (Self::Codex, _) => DEFAULT_OPENAI_UPSTREAM,
+            (Self::OpenCode, _) => schema.unwrap_or(DEFAULT_OPENCODE_SCHEMA).default_upstream(),
             (Self::Pi, _) => schema.unwrap_or(DEFAULT_PI_SCHEMA).default_upstream(),
         }
     }
@@ -296,10 +341,20 @@ impl Harness {
     /// while the ChatGPT backend has no `/v1` component and its endpoint ends
     /// at the backend segment. Claude appends `/v1/messages` itself and needs
     /// no suffix at all, and pi's providers each append their own full path.
+    ///
+    /// opencode is bare for a subtler reason than pi's. Its AI SDK adapters do
+    /// *not* append a version component — they append only `/messages` or
+    /// `/responses` — so something has to supply the `/v1`. That something is
+    /// the plugin, not this function: it is knowledge about opencode's HTTP
+    /// client rather than about this deployment's routes, and putting it here
+    /// would make [`tapes_harnesses::plugin::GATEWAY_URL_ENV`] mean a different
+    /// thing for opencode than it means for pi. The variable stays "the proxy's
+    /// origin" for every harness that reads it.
     #[must_use]
     pub fn endpoint_for(self, addr: SocketAddr, auth: Option<CodexAuth>) -> ProxyEndpoint {
         match (self, auth) {
-            (Self::Claude | Self::Pi, _) | (Self::Codex, Some(CodexAuth::ChatGpt)) => {
+            (Self::Claude | Self::OpenCode | Self::Pi, _)
+            | (Self::Codex, Some(CodexAuth::ChatGpt)) => {
                 ProxyEndpoint::new(&format!("http://{addr}"))
             }
             (Self::Codex, _) => ProxyEndpoint::new(&format!("http://{addr}/v1")),
@@ -329,10 +384,18 @@ impl Harness {
                     .with_attribution_header(CODEX_MARKER_HEADER)
                     .plan()
             }
-            // Not a crate recipe: pi is `LaunchSupport::ConsumerOwned`, so the
-            // plan is built here. See [`pi_plan`].
+            // No recipe is used for either of these: what points them at the
+            // proxy is an installed extension reading the environment. See
+            // [`gateway_plan`].
+            Self::OpenCode => {
+                return Ok(gateway_plan(
+                    &endpoint,
+                    schema.unwrap_or(DEFAULT_OPENCODE_SCHEMA),
+                    nonce,
+                ));
+            }
             Self::Pi => {
-                return Ok(pi_plan(
+                return Ok(gateway_plan(
                     &endpoint,
                     schema.unwrap_or(DEFAULT_PI_SCHEMA),
                     nonce,
@@ -368,16 +431,25 @@ fn supported_names() -> String {
         .join(", ")
 }
 
-/// The launch plan for pi: no arguments, two environment variables.
+/// The launch plan for a harness captured by an installed extension: no
+/// arguments, three environment variables.
 ///
-/// This is what [`registry::LaunchSupport::ConsumerOwned`] means in practice.
-/// The crate ships pi's extension but no recipe for launching it, because the
-/// two consumers point pi at that extension differently — one materialises an
-/// ephemeral copy and passes `--extension`, while tapesctl relies on the copy
-/// `tapesctl plugin install pi` wrote into pi's global auto-discovery directory.
-/// So there is no argv here at all: the extension is already loaded for every pi
-/// session on this machine, and what a launch adds is only the environment that
+/// Shared by pi and opencode, and identical for both — which is the point of the
+/// crate's environment contract. There is no argv here at all: the extension is
+/// already loaded for every session of that harness on this machine, because
+/// `tapesctl plugin install <harness>` wrote it into the harness's own
+/// auto-discovery directory. What a launch adds is only the environment that
 /// wakes it up.
+///
+/// For pi this is also what [`registry::LaunchSupport::ConsumerOwned`] means in
+/// practice: the crate ships the asset but no recipe, because the two consumers
+/// point pi at it differently — one materialises an ephemeral copy and passes
+/// `--extension`, while tapesctl relies on the installed one. opencode does have
+/// a crate recipe ([`tapes_harnesses::launch::OpenCodeRecipe`]) and this arm
+/// deliberately does not use it: the recipe relocates `XDG_CONFIG_HOME` for the
+/// whole process tree to place one config file, and it cannot attribute the
+/// session it redirects. The plugin does both jobs and touches nothing outside
+/// the harness.
 ///
 /// Both names come from [`tapes_harnesses::plugin`], which is also where the
 /// asset reads them — the constant and the TypeScript literal are two spellings
@@ -403,7 +475,7 @@ fn supported_names() -> String {
 /// the deletion), and anything the harness itself passes along explicitly.
 /// What the nonce guarantees unconditionally is that a *complete* forgery
 /// needs the secret, not just two headers and a loopback port.
-fn pi_plan(endpoint: &ProxyEndpoint, schema: UpstreamSchema, nonce: &str) -> LaunchPlan {
+fn gateway_plan(endpoint: &ProxyEndpoint, schema: UpstreamSchema, nonce: &str) -> LaunchPlan {
     LaunchPlan {
         args: Vec::new(),
         env: vec![
@@ -521,10 +593,13 @@ impl StartConfig {
 /// power over.
 fn resolve_schema(harness: Harness, schema: Option<&str>) -> Result<Option<UpstreamSchema>> {
     let Some(schema) = schema else {
-        return Ok(matches!(harness, Harness::Pi).then_some(DEFAULT_PI_SCHEMA));
+        return Ok(harness.default_schema());
     };
+    // A harness with no default schema is one that speaks exactly one, so
+    // `--schema` has nothing to choose between and is refused rather than
+    // silently ignored.
     snafu::ensure!(
-        matches!(harness, Harness::Pi),
+        harness.default_schema().is_some(),
         error::SchemaNotApplicableSnafu {
             harness: harness.id(),
             provider: harness.provider(None),
@@ -683,11 +758,13 @@ pub async fn run(args: StartArgs) -> Result<()> {
 /// Start the transcript tailer for this session, when the harness has one.
 ///
 /// `None` covers the two cases where the lane cannot or should not run: the user
-/// opted out, or the harness is Codex — whose transcripts do not live in the
-/// Claude project tree the shared crate's discovery walks. Returning `None`
-/// rather than failing is deliberate: a Codex capture is still a good wire
-/// capture, and refusing to start it over a lane that does not apply would be a
-/// regression against PR 5.
+/// opted out, or the harness is not Claude — no other harness writes into the
+/// Claude project tree the shared crate's discovery walks (Codex keeps rollout
+/// files of its own; opencode keeps sessions in a SQLite database, which is not
+/// a tree a transcript sweep can walk at all). Returning `None` rather than
+/// failing is deliberate: those are still good wire captures, and refusing to
+/// start one over a lane that does not apply would be a regression against PR
+/// 5.
 fn spawn_tailer(
     config: &StartConfig,
     tracker: SessionTracker,
@@ -852,8 +929,8 @@ mod tests {
 
     #[test]
     fn an_unsupported_harness_is_rejected_by_name() {
-        let err = Harness::parse("opencode").unwrap_err();
-        assert!(format!("{err}").contains("opencode"), "got: {err}");
+        let err = Harness::parse("gemini").unwrap_err();
+        assert!(format!("{err}").contains("gemini"), "got: {err}");
     }
 
     #[test]
@@ -1037,14 +1114,18 @@ mod tests {
 
     #[test]
     fn a_registered_harness_with_no_arm_here_is_still_unsupported() {
-        // opencode is in the shared registry and has a crate recipe, but no arm
-        // in this binary. Resolving through the registry must not make it look
-        // launchable.
-        let err = Harness::parse("opencode").unwrap_err();
+        // The Codex desktop app is in the shared registry — it is capturable,
+        // and the crate ships its hook templates — but it is configured rather
+        // than launched, so this binary has no arm for it. Resolving through the
+        // registry must not make it look launchable.
+        let err = Harness::parse("codex-app").unwrap_err();
         let message = format!("{err}");
-        assert!(message.contains("opencode"), "got: {message}");
+        assert!(message.contains("codex-app"), "got: {message}");
         // And the message advertises exactly the arms that exist.
-        assert!(message.contains("claude, codex, pi"), "got: {message}");
+        assert!(
+            message.contains("claude, codex, opencode, pi"),
+            "got: {message}"
+        );
     }
 
     #[test]
@@ -1151,9 +1232,13 @@ mod tests {
     }
 
     #[test]
-    fn pi_is_the_self_attributing_harness_and_the_others_are_not() {
+    fn the_extension_captured_harnesses_self_attribute_and_the_others_do_not() {
         // Drives the proxy's choice of whose session id to file a turn under.
+        // Neither arm spells this out: it is read from the shared registry, so a
+        // harness that gains an in-harness extension takes the lane without this
+        // file changing — which is exactly how opencode joined it.
         assert!(Harness::Pi.is_self_attributing());
+        assert!(Harness::OpenCode.is_self_attributing());
         assert!(!Harness::Claude.is_self_attributing());
         assert!(!Harness::Codex.is_self_attributing());
     }
@@ -1192,5 +1277,158 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         assert!(Harness::Claude.required_plugin_artifacts().is_empty());
         ensure_plugin_installed(Harness::Claude, home.path()).unwrap();
+    }
+
+    // --- opencode -------------------------------------------------------------
+    //
+    // opencode takes pi's lane, so these mirror pi's tests rather than inventing
+    // a shape. What is asserted below is precisely the places the two harnesses
+    // are *not* interchangeable.
+
+    #[test]
+    fn opencode_resolves_through_the_shared_registry() {
+        assert_eq!(Harness::parse("opencode").unwrap(), Harness::OpenCode);
+        assert_eq!(Harness::parse("  OpenCode ").unwrap(), Harness::OpenCode);
+        assert_eq!(Harness::OpenCode.program(), "opencode");
+        assert_eq!(Harness::OpenCode.id(), "opencode");
+    }
+
+    #[test]
+    fn the_opencode_plan_carries_the_crates_environment_contract_and_no_argv() {
+        // Byte-for-byte the pi contract: the crate's plugin reads these three
+        // names, and nothing else points opencode at this proxy.
+        let plan = Harness::OpenCode
+            .plan(
+                Harness::OpenCode.endpoint_for(addr(), None),
+                "unused",
+                None,
+                Some(UpstreamSchema::Anthropic),
+                "per-launch-secret",
+            )
+            .unwrap();
+        let env = plan_env(&plan);
+        assert_eq!(
+            env.get(GATEWAY_URL_ENV).map(String::as_str),
+            Some("http://127.0.0.1:51000"),
+        );
+        assert_eq!(
+            env.get(GATEWAY_SCHEMA_ENV).map(String::as_str),
+            Some("anthropic"),
+        );
+        assert_eq!(
+            env.get(GATEWAY_NONCE_ENV).map(String::as_str),
+            Some("per-launch-secret"),
+        );
+        assert!(plan.args.is_empty(), "got: {:?}", plan.args);
+        // And in particular: no config document. The crate's OpenCodeRecipe
+        // would emit one and relocate XDG_CONFIG_HOME for the whole process
+        // tree; this arm deliberately takes the plugin road instead, so there
+        // is nothing to materialise and nothing to clean up.
+        assert!(plan.config_files.is_empty(), "got: {:?}", plan.config_files,);
+    }
+
+    #[test]
+    fn the_opencode_endpoint_is_the_bare_proxy_origin() {
+        // The `/v1` opencode's AI SDK adapters need is added by the plugin, not
+        // here — so GATEWAY_URL_ENV means the same thing for opencode as for pi.
+        // A suffix here would double it.
+        assert_eq!(
+            Harness::OpenCode.endpoint_for(addr(), None).as_str(),
+            "http://127.0.0.1:51000",
+        );
+    }
+
+    #[test]
+    fn opencode_defaults_to_the_anthropic_schema() {
+        let config = StartConfig::resolve(args("opencode")).unwrap();
+        assert_eq!(config.schema, Some(DEFAULT_OPENCODE_SCHEMA));
+        assert_eq!(config.upstream.as_str(), "https://api.anthropic.com/");
+        assert_eq!(config.harness.provider(config.schema), "anthropic");
+    }
+
+    #[test]
+    fn the_opencode_schema_selects_the_upstream_the_provider_and_the_hint_together() {
+        let mut args = args("opencode");
+        args.schema = Some("openai".to_owned());
+        let config = StartConfig::resolve(args).unwrap();
+        assert_eq!(config.schema, Some(UpstreamSchema::OpenAi));
+        assert_eq!(config.upstream.as_str(), "https://api.openai.com/");
+        assert_eq!(config.harness.provider(config.schema), "openai");
+    }
+
+    #[test]
+    fn the_schema_spellings_are_ones_the_opencode_plugin_recognises() {
+        // Same pin as the pi asset's, against opencode's own copy: these
+        // strings are simultaneously this client's schema names, opencode's
+        // provider ids, and the names ingest keys its reducer on. A spelling
+        // this client invented would redirect a provider opencode does not have.
+        let asset = tapes_harnesses::plugin::OPENCODE_GATEWAY_EXTENSION.contents();
+        for schema in [UpstreamSchema::Anthropic, UpstreamSchema::OpenAi] {
+            assert!(
+                asset.contains(&format!("\"{}\"", schema.as_str())),
+                "the opencode plugin does not know the schema {:?}",
+                schema.as_str(),
+            );
+        }
+    }
+
+    #[test]
+    fn launching_opencode_without_its_plugin_names_the_installer() {
+        let home = tempfile::tempdir().unwrap();
+        let err = ensure_plugin_installed(Harness::OpenCode, home.path()).unwrap_err();
+        let message = format!("{err}");
+        assert!(
+            message.contains("tapesctl plugin install opencode"),
+            "got: {message}",
+        );
+        assert!(message.contains("tapes-gateway.ts"), "got: {message}");
+    }
+
+    #[test]
+    fn launching_opencode_with_its_plugin_installed_proceeds() {
+        let home = tempfile::tempdir().unwrap();
+        for artifact in Harness::OpenCode.required_plugin_artifacts() {
+            let path = artifact.install_path(home.path());
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, artifact.contents()).unwrap();
+        }
+        ensure_plugin_installed(Harness::OpenCode, home.path()).unwrap();
+    }
+
+    #[test]
+    fn opencode_and_pi_install_to_different_places() {
+        // Two harnesses on one lane, but each auto-discovers from its own
+        // directory. A shared destination would mean installing one silently
+        // disabled the other.
+        let home = Path::new("/home/u");
+        let paths = |harness: Harness| {
+            harness
+                .required_plugin_artifacts()
+                .iter()
+                .map(|artifact| artifact.install_path(home))
+                .collect::<Vec<_>>()
+        };
+        let opencode = paths(Harness::OpenCode);
+        let pi = paths(Harness::Pi);
+        assert_eq!(opencode.len(), 1);
+        assert_eq!(pi.len(), 1);
+        assert_ne!(opencode, pi);
+        assert!(
+            opencode[0].starts_with("/home/u/.config/opencode"),
+            "got: {:?}",
+            opencode[0],
+        );
+    }
+
+    #[test]
+    fn opencode_gets_no_transcript_tailer() {
+        // opencode keeps sessions in a SQLite database, not a tree the shared
+        // crate's discovery can walk, so the wire lane is the whole capture.
+        // Asserted through the registry rather than the tailer, which needs a
+        // home directory to start.
+        assert_eq!(
+            registry::find("opencode").map(tapes_harnesses::harness::Harness::transcripts),
+            Some(registry::TranscriptSource::None),
+        );
     }
 }
