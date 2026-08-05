@@ -62,14 +62,19 @@ Prose-stripped contract seals (the values in tapes `api/CONTRACT` and
    curl -fsSL -o tapes-ingest.yaml "${base}/tapes-ingest-${tag}.yaml"
    ```
 
-2. Copy the two YAMLs here verbatim — never hand-edit them.
+2. Copy the two YAMLs here verbatim — never hand-edit them. To confirm the
+   copies match the release before touching this file, run
+   `TAPES_CONTRACT_TAG=<tag> make contracts-check` now: while the override
+   names a tag other than the recorded pin, the fingerprint gate reports its
+   expected mismatches informationally and only the release-asset byte diff
+   decides.
 3. Update the pin above (tag, commit, asset URLs) and every fingerprint:
    the file-byte sha256s (`shasum -a 256`), the prose-included fingerprints
    (printed by `tapes dev openapi`, or served as the ETag), and the seals
    (tapes `api/CONTRACT` / `ingest/CONTRACT` at the tag).
-4. Run `TAPES_CONTRACT_TAG=<tag> make contracts-check` and `cargo test` — the
-   operation coverage gate will list any operation the new contract added so
-   it can be mapped or deliberately allow-listed.
+4. Run `make contracts-check` (strict again now that the pin matches) and
+   `cargo test` — the operation coverage gate will list any operation the new
+   contract added so it can be mapped or deliberately allow-listed.
 
 For offline work, or when developing against an unreleased tapes commit,
 `scripts/contracts-check.sh` can instead re-emit the contracts from a local

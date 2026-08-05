@@ -16,19 +16,38 @@
 #   https://github.com/papercomputeco/tapes/releases/download/<tag>/tapes-ingest-<tag>.yaml
 #
 # The tag defaults to the pin recorded in PROVENANCE.md; override with
-# TAPES_CONTRACT_TAG when checking a bump before the docs are updated.
+# TAPES_CONTRACT_TAG when checking a bump before the docs are updated. While
+# the override names a tag other than the recorded pin — a refresh in
+# progress — gate 1's mismatches are reported as expected rather than
+# latched as failures, and gate 2 (against the override tag's assets) is
+# the authoritative verdict.
 #
 # Fallback for offline work or development against an unreleased tapes commit:
 # set TAPES_REPO=/path/to/tapes to re-emit both contracts from that checkout
 # (needs its Go toolchain) and diff the emission instead. When the fetch fails
 # and no checkout is available, gate 2 is skipped with a notice so gate 1
-# still runs everywhere.
+# still runs everywhere — except mid-refresh, where a skipped gate 2 is a
+# failure because nothing authoritative ran.
 
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
 vendored="${here}/crates/tapesctl/contracts"
 provenance="${vendored}/PROVENANCE.md"
+
+# The tag the recorded fingerprints belong to, per PROVENANCE.md.
+pinned_tag="$(grep -oE 'Release tag: \*\*v[0-9]+\.[0-9]+\.[0-9]+\*\*' "${provenance}" \
+  | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' || true)"
+
+# A TAPES_CONTRACT_TAG naming a different tag than the recorded pin means a
+# refresh is in progress: the vendored bytes are (or are about to be) the new
+# tag's, while PROVENANCE.md still records the old one.
+refresh=0
+if [ -n "${TAPES_CONTRACT_TAG:-}" ] && [ "${TAPES_CONTRACT_TAG}" != "${pinned_tag}" ]; then
+  refresh=1
+  echo "notice: TAPES_CONTRACT_TAG=${TAPES_CONTRACT_TAG} differs from the recorded pin (${pinned_tag:-none});"
+  echo "        treating this as a refresh in progress — gate 1 is informational, gate 2 decides"
+fi
 
 fail=0
 
@@ -38,10 +57,17 @@ for name in tapes-api.yaml tapes-ingest.yaml; do
     | grep -oE '[0-9a-f]{64}')"
   actual="$(shasum -a 256 "${vendored}/${name}" | awk '{print $1}')"
   if [ "${recorded}" != "${actual}" ]; then
-    echo "FAIL: ${name} does not match the fingerprint recorded in PROVENANCE.md" >&2
-    echo "  recorded: ${recorded}" >&2
-    echo "  actual:   ${actual}" >&2
-    fail=1
+    if [ "${refresh}" = 1 ]; then
+      echo "notice: ${name} does not match the fingerprint recorded in PROVENANCE.md" >&2
+      echo "  recorded: ${recorded}" >&2
+      echo "  actual:   ${actual}" >&2
+      echo "  expected during a refresh to ${TAPES_CONTRACT_TAG}; update PROVENANCE.md before landing" >&2
+    else
+      echo "FAIL: ${name} does not match the fingerprint recorded in PROVENANCE.md" >&2
+      echo "  recorded: ${recorded}" >&2
+      echo "  actual:   ${actual}" >&2
+      fail=1
+    fi
   else
     echo "ok: ${name} matches its recorded fingerprint"
   fi
@@ -98,8 +124,6 @@ if [ -n "${TAPES_REPO:-}" ]; then
 fi
 
 # --- gate 2 (preferred): fetch the pinned release assets ---------------------
-pinned_tag="$(grep -oE 'Release tag: \*\*v[0-9]+\.[0-9]+\.[0-9]+\*\*' "${provenance}" \
-  | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' || true)"
 tag="${TAPES_CONTRACT_TAG:-${pinned_tag}}"
 if [ -z "${tag}" ]; then
   echo "FAIL: could not determine the pinned release tag from PROVENANCE.md (set TAPES_CONTRACT_TAG)" >&2
@@ -134,6 +158,10 @@ fallback_repo="${here}/../tapes"
 if [ -f "${fallback_repo}/cli/tapes/main.go" ]; then
   echo "notice: could not fetch the ${tag} release assets; falling back to re-emission from ${fallback_repo}"
   emit_and_diff "${fallback_repo}"
+elif [ "${refresh}" = 1 ]; then
+  echo "FAIL: mid-refresh, but the ${tag} release assets could not be fetched and no tapes" >&2
+  echo "      checkout exists at ${fallback_repo} (set TAPES_REPO) — nothing authoritative ran" >&2
+  fail=1
 else
   echo "notice: could not fetch the ${tag} release assets and no tapes checkout at ${fallback_repo} (set TAPES_REPO); skipping the byte diff"
 fi
