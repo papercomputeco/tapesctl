@@ -27,11 +27,6 @@ repository = "https://github.com/papercomputeco/tapesctl"
 # both tapesctl and paperd so the two capture paths cannot drift apart.
 # Pinned by revision like any other vendored contract.
 #
-# TEMPORARY-PIN: this rev is the head of the unmerged branch
-# `jason/pcc-1105-opencode-extension`, which is where opencode's capture plugin
-# and its `SelfAttributing` registry entry live. It MUST be re-pointed at a
-# merged `main` rev before this branch merges.
-#
 # Both entries below are the same repository and are now deliberately the SAME
 # rev. They had drifted apart — `tapes-harnesses` sat several commits behind the
 # `tapes-cassette-client` pin — which meant one repository was vendored twice at
@@ -39,7 +34,7 @@ repository = "https://github.com/papercomputeco/tapesctl"
 # had a concrete cost here: the peer-socket rescan fix (harnesses #13) was in the
 # newer rev only, so tapesctl's proxy still failed closed on a first-scan miss
 # and the capture suite flaked under parallel load. Keep them equal.
-tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "aa70979b8f3b8ac46d1c4a89a433cfcbe48568c2" }
+tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "73b555339dd8416360db377ef7fa37a1106dbc0f" }
 
 # The generated cassette-surface machinery (discovery decode, OpenAPI
 # reduction, the on-disk surface cache, clap command synthesis, and the
@@ -47,9 +42,7 @@ tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", r
 # repository since the PCC-1104 split, so every capture client generates the
 # same surface the same way. Pinned by revision like the crate above — and at
 # the same rev as it, for the reasons given there.
-#
-# TEMPORARY-PIN: unmerged branch rev; re-point at merged `main` before merge.
-tapes-cassette-client = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "aa70979b8f3b8ac46d1c4a89a433cfcbe48568c2" }
+tapes-cassette-client = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "73b555339dd8416360db377ef7fa37a1106dbc0f" }
 
 # --- CLI ---
 # `string` lets a Command/Arg be named by an owned String rather than only by a
