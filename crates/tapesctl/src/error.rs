@@ -292,6 +292,49 @@ pub enum Error {
         detail: &'static str,
     },
 
+    /// The vendored contract embedded in this binary did not parse. Only
+    /// reachable from a build whose vendored document is corrupt — the
+    /// contract tests fail before such a build ships.
+    #[snafu(display("the vendored {surface} contract embedded in this build did not parse"))]
+    VendoredContract {
+        /// Which contract failed.
+        surface: &'static str,
+    },
+
+    /// A core command named an operation the vendored contract does not have.
+    /// Like [`Error::VendoredContract`], a build defect: the operation
+    /// coverage tests pin every id the client uses to the vendored document.
+    #[snafu(display("the vendored tapes-api contract has no operation {operation:?}"))]
+    ContractOperation {
+        /// The operation id that failed to resolve.
+        operation: String,
+    },
+
+    /// A core command tried to send a parameter the vendored contract does not
+    /// declare on that operation. Refused rather than sent: an undeclared
+    /// parameter is exactly the drift the vendored contract exists to catch.
+    #[snafu(display(
+        "the vendored tapes-api contract does not declare parameter {parameter:?} on {operation:?}"
+    ))]
+    ContractParameter {
+        /// The operation being called.
+        operation: String,
+        /// The undeclared wire name.
+        parameter: String,
+    },
+
+    /// A core command had no value for a path parameter the operation
+    /// requires, so no URL can be built.
+    #[snafu(display(
+        "operation {operation:?} requires path parameter {parameter:?} and none was supplied"
+    ))]
+    ContractPathParameter {
+        /// The operation being called.
+        operation: String,
+        /// The missing path parameter.
+        parameter: String,
+    },
+
     /// A response could not be rendered for printing.
     #[snafu(display("could not render the response"))]
     RenderJson {
