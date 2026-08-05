@@ -65,6 +65,7 @@ use super::ingest::{
     IngestClient, SessionEnvelope, TurnMeta, TurnPayload, encode_raw_response, status_class,
 };
 use super::peek::BoundedPeek;
+use super::peer_trust;
 use crate::error::{Result, error};
 use crate::transcript::tailer::SessionTracker;
 
@@ -97,7 +98,16 @@ pub struct ProxyState {
     /// True when the launched harness stamps its own `X-Tapes-*` envelope, so
     /// the request's headers — not this process's peer-PID lookup — are the
     /// authority on which session a turn belongs to.
+    ///
+    /// Necessary but not sufficient: an envelope is believed only when the peer
+    /// also proves to be that harness. See [`launched_pid`](Self::launched_pid).
     pub self_attributing: bool,
+    /// PID of the launched harness, or [`super::NO_LAUNCHED_PID`] before it has
+    /// been spawned.
+    ///
+    /// Shared rather than copied because the listener is open before the harness
+    /// exists: the proxy is built first, the PID is filled in at spawn.
+    pub launched_pid: Arc<std::sync::atomic::AtomicI32>,
     /// Org id stamped on every captured turn.
     pub org_id: Arc<String>,
     /// Acting subject stamped on every captured turn.
@@ -191,11 +201,8 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
     // for those requests is always `unknown`. Taking the inbound envelope here is
     // the ingest-side counterpart of what `stamp` already does header-side, and
     // without it a pi session would be captured and then filed under nothing.
-    let envelope_attribution = state
-        .self_attributing
-        .then(|| inbound_envelope(&parts.headers))
-        .flatten()
-        .or_else(|| attributed.envelope());
+    let envelope_attribution =
+        trusted_inbound_envelope(&state, peer, &parts.headers).or_else(|| attributed.envelope());
     let session = envelope_attribution
         .as_ref()
         .map(|a| SessionEnvelope::from_attribution(a, &state.org_id, &state.auth_subject));
@@ -276,6 +283,54 @@ async fn announce_session(state: &ProxyState, session_id: &str) {
     if let Some(tx) = slot.take() {
         let _ = tx.send(session_id.to_owned());
     }
+}
+
+/// The inbound envelope, if this request is entitled to supply one.
+///
+/// Two conditions, in the order that costs least. The launched harness must be
+/// one that attributes itself — otherwise no request on this proxy has any
+/// business naming a session — and the request must actually carry an envelope,
+/// both of which are header reads and integer comparisons. Only then is the peer
+/// resolved to a process, which is a scan of the kernel's socket table.
+///
+/// The peer check is the security boundary. A loopback listener accepts
+/// connections from every process on the machine, so without it the two header
+/// values would be enough for any of them to have a turn persisted — and a
+/// session link printed — under a session id it picked. Trusting the envelope
+/// only from the launched harness's own subtree makes the claim as hard to forge
+/// as the process tree itself.
+///
+/// A refusal is logged rather than passed over in silence. It is either an
+/// attempt at exactly the above, or the peer lookup failing on a machine where
+/// capture is now quietly filing pi turns under `unknown` — and both are things
+/// whoever reads the log needs to be able to see.
+fn trusted_inbound_envelope(
+    state: &ProxyState,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+) -> Option<envelope::TapesAttribution> {
+    if !state.self_attributing {
+        return None;
+    }
+    let claimed = inbound_envelope(headers)?;
+    let launched = match state
+        .launched_pid
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        super::NO_LAUNCHED_PID => None,
+        pid => Some(pid),
+    };
+    if peer_trust::peer_is_launched_harness(peer, launched) {
+        return Some(claimed);
+    }
+    warn!(
+        %peer,
+        harness_id = %claimed.harness_id,
+        launched_pid = ?launched,
+        "a request carrying a session envelope did not come from the launched \
+         harness; filing the turn as unattributed",
+    );
+    None
 }
 
 /// Read a session identity out of an envelope the harness stamped on itself.

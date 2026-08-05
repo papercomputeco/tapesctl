@@ -32,7 +32,10 @@
 //! is identified from the outside, by peer PID; pi cannot be, so it stamps its
 //! own `X-Tapes-*` envelope from within. For those harnesses the request's own
 //! headers are the better evidence, and the proxy files the turn under them
-//! rather than under this process's failure to recognise the peer.
+//! rather than under this process's failure to recognise the peer — but only
+//! once the peer socket is shown to belong to the harness this process launched.
+//! An envelope is a claim, and a loopback port is reachable by everything on the
+//! machine; see [`peer_trust`] for what makes the claim trustworthy.
 //!
 //! # The terminal is not ours
 //!
@@ -46,12 +49,14 @@
 
 pub mod ingest;
 pub mod peek;
+pub mod peer_trust;
 pub mod proxy;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, Ordering};
 
 use snafu::{OptionExt, ResultExt};
 use tapes_harnesses::attribution::{
@@ -539,6 +544,12 @@ pub async fn run(args: StartArgs) -> Result<()> {
     );
     let (session_tx, mut session_rx) = unbounded_channel::<String>();
 
+    // Written once, immediately after the harness is spawned, and read on every
+    // request that arrives carrying an envelope. It starts at the "no harness
+    // yet" sentinel so a request that beats the spawn is refused rather than
+    // trusted — the listener is open from `bind`, which is strictly earlier.
+    let launched_pid = Arc::new(AtomicI32::new(NO_LAUNCHED_PID));
+
     let tracker = SessionTracker::new();
     let state = ProxyState {
         upstream: config.upstream.clone(),
@@ -552,6 +563,7 @@ pub async fn run(args: StartArgs) -> Result<()> {
         codex_marker_header: Arc::new(CODEX_MARKER_HEADER.to_ascii_lowercase()),
         codex_lane: config.harness.is_codex(),
         self_attributing: config.harness.is_self_attributing(),
+        launched_pid: Arc::clone(&launched_pid),
         org_id: Arc::new(config.org_id.clone()),
         auth_subject: Arc::new(config.auth_subject.clone()),
         session_seen: Arc::new(tokio::sync::Mutex::new(Some(session_tx))),
@@ -590,7 +602,7 @@ pub async fn run(args: StartArgs) -> Result<()> {
     // gives it back.
     announce_capture();
 
-    let status = spawn_harness(&config, &plan).await;
+    let status = spawn_harness(&config, &plan, &launched_pid).await;
 
     // Dying with the session: stop accepting, then clean up whatever the recipe
     // asked to have on disk. Cleanup is the consumer's job precisely because
@@ -694,9 +706,22 @@ fn print_session_link(web_url: Option<&Url>, session_id: &str) {
     }
 }
 
+/// Sentinel for "no harness has been spawned yet". PIDs are positive, and 0 is
+/// not a PID any process can have.
+pub const NO_LAUNCHED_PID: i32 = 0;
+
+/// Launch the harness, publishing its PID before waiting on it.
+///
+/// Spawned and awaited in two steps rather than through `status()`, which never
+/// exposes the child. The PID is what
+/// [`peer_trust::peer_is_launched_harness`] compares a request's peer against,
+/// so it has to be published while the process is running, not returned after it
+/// exits. Stdio is inherited either way, which is what keeps the harness's TUI
+/// attached to the terminal.
 async fn spawn_harness(
     config: &StartConfig,
     plan: &LaunchPlan,
+    launched_pid: &AtomicI32,
 ) -> Result<std::process::ExitStatus> {
     let mut command = tokio::process::Command::new(config.harness.program());
     command.args(&plan.args);
@@ -704,7 +729,15 @@ async fn spawn_harness(
     for (key, value) in &plan.env {
         command.env(key, value);
     }
-    command.status().await.context(error::SpawnHarnessSnafu {
+    let mut child = command.spawn().context(error::SpawnHarnessSnafu {
+        harness: config.harness.program(),
+    })?;
+    // Published before the first await, so the harness cannot have issued a
+    // request that races the store.
+    if let Some(pid) = child.id().and_then(|pid| i32::try_from(pid).ok()) {
+        launched_pid.store(pid, Ordering::Relaxed);
+    }
+    child.wait().await.context(error::SpawnHarnessSnafu {
         harness: config.harness.program(),
     })
 }

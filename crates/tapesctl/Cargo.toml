@@ -38,6 +38,12 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 
+# Only macOS needs it, and only to read a PID's parent: there is no `/proc` to
+# parse, and `proc_pidinfo` is the supported query. The shared crate reaches for
+# the same call, at the same pinned version, for its own per-PID lookups.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { workspace = true }
+
 [dev-dependencies]
 test-case = { workspace = true }
 tempfile = { workspace = true }
