@@ -33,9 +33,14 @@
 //! own `X-Tapes-*` envelope from within. For those harnesses the request's own
 //! headers are the better evidence, and the proxy files the turn under them
 //! rather than under this process's failure to recognise the peer — but only
-//! once the peer socket is shown to belong to the harness this process launched.
-//! An envelope is a claim, and a loopback port is reachable by everything on the
-//! machine; see [`peer_trust`] for what makes the claim trustworthy.
+//! once the peer socket is shown to belong to the harness this process launched
+//! *and* the request echoes the per-launch nonce this process generated. An
+//! envelope is a claim, and a loopback port is reachable by everything on the
+//! machine; see [`tapes_harnesses::attribution::peer_trust`] for the ancestry
+//! half of what makes the claim trustworthy, and
+//! [`tapes_harnesses::plugin::GATEWAY_NONCE_ENV`] for the nonce half — which is
+//! what excludes the harness's own subprocesses, descendants that the ancestry
+//! walk alone would vouch for.
 //!
 //! # The terminal is not ours
 //!
@@ -49,7 +54,6 @@
 
 pub mod ingest;
 pub mod peek;
-pub mod peer_trust;
 pub mod proxy;
 
 use std::collections::HashMap;
@@ -69,7 +73,7 @@ use tapes_harnesses::launch::{
     ClaudeRecipe, CodexAuth, CodexRecipe, LaunchPlan, LaunchRecipe, ProxyEndpoint,
     resolve_codex_auth,
 };
-use tapes_harnesses::plugin::{GATEWAY_SCHEMA_ENV, GATEWAY_URL_ENV};
+use tapes_harnesses::plugin::{GATEWAY_NONCE_ENV, GATEWAY_SCHEMA_ENV, GATEWAY_URL_ENV};
 use tokio::sync::mpsc::unbounded_channel;
 use tracing::{info, warn};
 use url::Url;
@@ -303,12 +307,19 @@ impl Harness {
     }
 
     /// Build the launch plan that points this harness at `endpoint`.
+    ///
+    /// `nonce` is the per-launch capture secret. Only a self-attributing
+    /// harness's plan carries it — a redirected harness never names its own
+    /// session, so it has nothing to prove — but it is a parameter rather than
+    /// generated inside so the same value ends up in the launched environment
+    /// and in the proxy that validates the echo.
     pub fn plan(
         self,
         endpoint: ProxyEndpoint,
         provider_id: &str,
         auth: Option<CodexAuth>,
         schema: Option<UpstreamSchema>,
+        nonce: &str,
     ) -> Result<LaunchPlan> {
         match self {
             Self::Claude => ClaudeRecipe::new(endpoint).plan(),
@@ -320,7 +331,13 @@ impl Harness {
             }
             // Not a crate recipe: pi is `LaunchSupport::ConsumerOwned`, so the
             // plan is built here. See [`pi_plan`].
-            Self::Pi => return Ok(pi_plan(&endpoint, schema.unwrap_or(DEFAULT_PI_SCHEMA))),
+            Self::Pi => {
+                return Ok(pi_plan(
+                    &endpoint,
+                    schema.unwrap_or(DEFAULT_PI_SCHEMA),
+                    nonce,
+                ));
+            }
         }
         .context(error::LaunchPlanSnafu)
     }
@@ -371,12 +388,25 @@ fn supported_names() -> String {
 /// regardless, and uses this only to warn a user who picks a model the proxy is
 /// not fronting. It is still always set, because a warning that never fires is
 /// indistinguishable from one that cannot.
-fn pi_plan(endpoint: &ProxyEndpoint, schema: UpstreamSchema) -> LaunchPlan {
+///
+/// The nonce variable is the opposite of a hint: the extension echoes it in
+/// [`tapes_harnesses::plugin::GATEWAY_NONCE_HEADER`] on every captured request,
+/// and the proxy refuses any inbound envelope that does not carry the echo.
+/// This is what turns "is the peer below the launched PID" — which every
+/// subprocess the harness runs satisfies — into "does the peer hold this
+/// launch's secret". It is possession, not ancestry: a forger inside the
+/// harness's subtree must now actually obtain the value, rather than merely
+/// exist. Environment does propagate to children by default, so how much the
+/// nonce narrows the subtree depends on the harness scrubbing its tool
+/// environment; what it guarantees unconditionally is that a *complete*
+/// forgery needs the secret, not just two headers and a loopback port.
+fn pi_plan(endpoint: &ProxyEndpoint, schema: UpstreamSchema, nonce: &str) -> LaunchPlan {
     LaunchPlan {
         args: Vec::new(),
         env: vec![
             (GATEWAY_URL_ENV.to_owned(), endpoint.as_str().to_owned()),
             (GATEWAY_SCHEMA_ENV.to_owned(), schema.as_str().to_owned()),
+            (GATEWAY_NONCE_ENV.to_owned(), nonce.to_owned()),
         ],
         config_files: Vec::new(),
     }
@@ -530,12 +560,19 @@ pub async fn run(args: StartArgs) -> Result<()> {
     // is how the attribution pipeline tells two concurrent Codex processes
     // apart on one loopback endpoint.
     let provider_id = format!("{CODEX_PROVIDER_PREFIX}-{}", uuid::Uuid::new_v4());
+    // The per-launch capture secret. Generated for every launch and handed only
+    // to a self-attributing harness's environment; the proxy refuses any
+    // inbound envelope whose request does not echo it. A v4 UUID is 122 bits
+    // from the OS RNG — a secret, not a tag, so it must never be logged and
+    // never leave this process except through the launched environment.
+    let gateway_nonce = uuid::Uuid::new_v4().to_string();
     let endpoint = config.harness.endpoint_for(addr, config.codex_auth);
     let plan = config.harness.plan(
         endpoint.clone(),
         &provider_id,
         config.codex_auth,
         config.schema,
+        &gateway_nonce,
     )?;
 
     let attribution = AttributionState::new(
@@ -564,6 +601,7 @@ pub async fn run(args: StartArgs) -> Result<()> {
         codex_lane: config.harness.is_codex(),
         self_attributing: config.harness.is_self_attributing(),
         launched_pid: Arc::clone(&launched_pid),
+        gateway_nonce: Arc::new(gateway_nonce),
         org_id: Arc::new(config.org_id.clone()),
         auth_subject: Arc::new(config.auth_subject.clone()),
         session_seen: Arc::new(tokio::sync::Mutex::new(Some(session_tx))),
@@ -714,10 +752,10 @@ pub const NO_LAUNCHED_PID: i32 = 0;
 ///
 /// Spawned and awaited in two steps rather than through `status()`, which never
 /// exposes the child. The PID is what
-/// [`peer_trust::peer_is_launched_harness`] compares a request's peer against,
-/// so it has to be published while the process is running, not returned after it
-/// exits. Stdio is inherited either way, which is what keeps the harness's TUI
-/// attached to the terminal.
+/// [`tapes_harnesses::attribution::peer_trust::peer_is_launched_harness`]
+/// compares a request's peer against, so it has to be published while the
+/// process is running, not returned after it exits. Stdio is inherited either
+/// way, which is what keeps the harness's TUI attached to the terminal.
 async fn spawn_harness(
     config: &StartConfig,
     plan: &LaunchPlan,
@@ -881,12 +919,20 @@ mod tests {
                 "unused",
                 None,
                 None,
+                "unused-nonce",
             )
             .unwrap();
         let env = plan_env(&plan);
         assert_eq!(
             env.get("ANTHROPIC_BASE_URL").map(String::as_str),
             Some("http://127.0.0.1:51000"),
+        );
+        // The nonce is the self-attribution secret, and Claude never names its
+        // own session — handing the value to a harness that has no use for it
+        // would only widen where the secret lives.
+        assert!(
+            !env.contains_key(GATEWAY_NONCE_ENV),
+            "a redirected harness's environment must not carry the capture nonce",
         );
     }
 
@@ -899,6 +945,7 @@ mod tests {
                 &provider_id,
                 Some(CodexAuth::ApiKey),
                 None,
+                "unused-nonce",
             )
             .unwrap();
         let joined = plan.args.join(" ");
@@ -1007,6 +1054,7 @@ mod tests {
                 "unused",
                 None,
                 Some(UpstreamSchema::Anthropic),
+                "per-launch-secret",
             )
             .unwrap();
         let env = plan_env(&plan);
@@ -1017,6 +1065,13 @@ mod tests {
         assert_eq!(
             env.get(GATEWAY_SCHEMA_ENV).map(String::as_str),
             Some("anthropic"),
+        );
+        // The nonce the proxy will demand echoed. Without it in the launched
+        // environment, every pi envelope would be refused and every turn would
+        // file under `unknown`.
+        assert_eq!(
+            env.get(GATEWAY_NONCE_ENV).map(String::as_str),
+            Some("per-launch-secret"),
         );
         assert!(
             plan.args.is_empty(),

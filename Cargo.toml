@@ -27,7 +27,11 @@ repository = "https://github.com/papercomputeco/tapesctl"
 # both tapesctl and paperd so the two capture paths cannot drift apart.
 # Pinned by revision like any other vendored contract.
 #
-tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "f497e0b110727d031c901b4cf9c2d8be0781eede" }
+# TEMPORARY PIN — this rev is the jason/pcc-1056-peer-trust-and-nonce branch
+# head (peer_trust + capture-nonce contract) and does not exist on the
+# repository's main yet. Re-point to the merged main revision before this
+# branch merges.
+tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "60d760afcd468890c5ae75c09f5686da1454d1c7" }
 
 # --- CLI ---
 # `string` lets a Command/Arg be named by an owned String rather than only by a

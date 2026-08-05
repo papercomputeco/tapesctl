@@ -1634,7 +1634,7 @@ dependencies = [
 [[package]]
 name = "tapes-harnesses"
 version = "0.1.0"
-source = "git+https://github.com/papercomputeco/tapes-harnesses?rev=f497e0b110727d031c901b4cf9c2d8be0781eede#f497e0b110727d031c901b4cf9c2d8be0781eede"
+source = "git+https://github.com/papercomputeco/tapes-harnesses?rev=60d760afcd468890c5ae75c09f5686da1454d1c7#60d760afcd468890c5ae75c09f5686da1454d1c7"
 dependencies = [
  "arc-swap",
  "base64",
@@ -1665,7 +1665,6 @@ dependencies = [
  "http",
  "http-body",
  "http-body-util",
- "libc",
  "reqwest",
  "serde",
  "serde_json",

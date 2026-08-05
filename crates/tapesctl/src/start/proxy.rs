@@ -55,8 +55,11 @@ use http::{HeaderMap, StatusCode};
 use http_body_util::BodyDataStream;
 use serde_json::value::RawValue;
 use snafu::ResultExt;
-use tapes_harnesses::attribution::{AttributionConfig, AttributionState, RequestFacts, attribute};
+use tapes_harnesses::attribution::{
+    AttributionConfig, AttributionState, RequestFacts, attribute, peer_trust,
+};
 use tapes_harnesses::envelope;
+use tapes_harnesses::plugin::{GATEWAY_NONCE_HEADER, nonce_matches};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tracing::{debug, warn};
 use url::Url;
@@ -65,7 +68,6 @@ use super::ingest::{
     IngestClient, SessionEnvelope, TurnMeta, TurnPayload, encode_raw_response, status_class,
 };
 use super::peek::BoundedPeek;
-use super::peer_trust;
 use crate::error::{Result, error};
 use crate::transcript::tailer::SessionTracker;
 
@@ -108,6 +110,15 @@ pub struct ProxyState {
     /// Shared rather than copied because the listener is open before the harness
     /// exists: the proxy is built first, the PID is filled in at spawn.
     pub launched_pid: Arc<std::sync::atomic::AtomicI32>,
+    /// The per-launch capture secret a self-attributing harness must echo in
+    /// [`GATEWAY_NONCE_HEADER`] before its envelope is believed.
+    ///
+    /// The peer-PID ancestry check cannot tell the launched harness apart from
+    /// the harness's own subprocesses — a shell tool's child is a descendant
+    /// too — so possession of this value is the second required proof. The
+    /// value is compared, stripped from the outbound request, and never logged;
+    /// it must not appear in captured or forwarded bytes anywhere.
+    pub gateway_nonce: Arc<String>,
     /// Org id stamped on every captured turn.
     pub org_id: Arc<String>,
     /// Acting subject stamped on every captured turn.
@@ -162,6 +173,13 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
         .filter(|value| !value.trim().is_empty())
         .map(str::to_owned);
     out_headers.remove(state.codex_marker_header.as_str());
+
+    // The nonce echo is likewise between the harness and this proxy alone, and
+    // it is a *secret*: forwarding it upstream would hand every hop past this
+    // process the value that authenticates the session's envelope. Stripped
+    // unconditionally — before any capture or forwarding decision — so no code
+    // path can leak it, not even on a lane that never validates it.
+    out_headers.remove(GATEWAY_NONCE_HEADER);
 
     // Attribution comes from the shared crate, so a tapesctl turn and a paperd
     // turn resolve identity through the same code.
@@ -287,23 +305,29 @@ async fn announce_session(state: &ProxyState, session_id: &str) {
 
 /// The inbound envelope, if this request is entitled to supply one.
 ///
-/// Two conditions, in the order that costs least. The launched harness must be
-/// one that attributes itself — otherwise no request on this proxy has any
-/// business naming a session — and the request must actually carry an envelope,
-/// both of which are header reads and integer comparisons. Only then is the peer
-/// resolved to a process, which is a scan of the kernel's socket table.
+/// Three conditions, in the order that costs least. The launched harness must
+/// be one that attributes itself — otherwise no request on this proxy has any
+/// business naming a session — the request must actually carry an envelope, and
+/// the request must echo the per-launch nonce, all of which are header reads
+/// and byte comparisons. Only then is the peer resolved to a process, which is
+/// a scan of the kernel's socket table.
 ///
-/// The peer check is the security boundary. A loopback listener accepts
-/// connections from every process on the machine, so without it the two header
-/// values would be enough for any of them to have a turn persisted — and a
-/// session link printed — under a session id it picked. Trusting the envelope
-/// only from the launched harness's own subtree makes the claim as hard to forge
-/// as the process tree itself.
+/// The nonce and the peer check are jointly the security boundary, and each
+/// covers the other's blind spot. A loopback listener accepts connections from
+/// every process on the machine, so without the peer check two header values
+/// would be enough for any of them to have a turn persisted — and a session
+/// link printed — under a session id it picked. But the peer check trusts the
+/// launched harness's whole subtree, and the harness runs arbitrary
+/// subprocesses on request: a command in a shell tool is a descendant with a
+/// clean ancestry walk. The nonce is what it lacks — the secret this process
+/// generated and handed only to the harness's own environment at spawn. An
+/// envelope is believed only with both: the echoed secret and the ancestry.
 ///
-/// A refusal is logged rather than passed over in silence. It is either an
-/// attempt at exactly the above, or the peer lookup failing on a machine where
-/// capture is now quietly filing pi turns under `unknown` — and both are things
-/// whoever reads the log needs to be able to see.
+/// A refusal is logged rather than passed over in silence — but never with the
+/// nonce value, in either its expected or presented form. It is either an
+/// attempt at exactly the above, or a misconfiguration now quietly filing pi
+/// turns under `unknown` — and both are things whoever reads the log needs to
+/// be able to see.
 fn trusted_inbound_envelope(
     state: &ProxyState,
     peer: SocketAddr,
@@ -313,6 +337,19 @@ fn trusted_inbound_envelope(
         return None;
     }
     let claimed = inbound_envelope(headers)?;
+    let presented_nonce = headers
+        .get(GATEWAY_NONCE_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if !nonce_matches(&state.gateway_nonce, presented_nonce) {
+        warn!(
+            %peer,
+            harness_id = %claimed.harness_id,
+            "a request carrying a session envelope did not echo this launch's \
+             nonce; filing the turn as unattributed",
+        );
+        return None;
+    }
     let launched = match state
         .launched_pid
         .load(std::sync::atomic::Ordering::Relaxed)

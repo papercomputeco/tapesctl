@@ -81,6 +81,7 @@ async fn proxy_against(upstream: &MockServer, ingest: &MockServer) -> SocketAddr
         codex_lane: false,
         self_attributing: false,
         launched_pid: Arc::new(std::sync::atomic::AtomicI32::new(0)),
+        gateway_nonce: Arc::new("test-launch-nonce".to_owned()),
         org_id: Arc::new(String::new()),
         auth_subject: Arc::new("local:test".to_owned()),
         session_seen: Arc::new(tokio::sync::Mutex::new(None)),
