@@ -319,6 +319,27 @@ fn uninstall_in(args: &PluginUninstallArgs, home: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use tapes_harnesses::plugin::PI_GATEWAY_EXTENSION;
+    use tapes_harnesses::plugin::pi;
+
+    /// The branding tapesctl's pi extension carries.
+    ///
+    /// The crate ships pi's extension as a template with slots for the strings a
+    /// product owns, and [`tapes_harnesses::plugin::PI_GATEWAY_EXTENSION`] is that
+    /// template rendered with the crate's own vendor-neutral values. tapesctl is
+    /// the consumer for whom those values are already right — it *is* tapes, it
+    /// runs no daemon at a fixed address, and the environment variable is what it
+    /// would tell a user to set anyway.
+    ///
+    /// Stating the branding here regardless, and asserting the artifact renders to
+    /// it, is what keeps "already right" from becoming "whatever the crate happens
+    /// to say". These four strings are user-visible surface of this CLI; a crate
+    /// revision that renamed the status entry or gave the extension a default
+    /// endpoint would otherwise change what `tapesctl plugin install` writes with
+    /// nothing here to notice.
+    const PI_BRANDING: pi::ExtensionBranding<'static> = pi::ExtensionBranding::new(
+        "tapes",
+        "Point TAPES_GATEWAY_URL at a proxy serving that provider, or switch that proxy's active schema, if requests fail.",
+    );
 
     /// The command's whole reason to exist: the bytes the crate owns land where
     /// the harness looks for them. A regression that wrote an empty file, or
@@ -342,6 +363,40 @@ mod tests {
             std::fs::read_to_string(&written).unwrap(),
             PI_GATEWAY_EXTENSION.contents(),
             "the installed file must be the crate's asset byte for byte",
+        );
+    }
+
+    /// **The golden test.** What this command installs is the crate's pi
+    /// extension template rendered with [`PI_BRANDING`] — byte for byte, in
+    /// this repository's own CI, against the crate revision it actually pins.
+    ///
+    /// Two failures it catches that nothing else here would. A crate revision
+    /// whose shipped asset drifted from its template would install bytes no
+    /// template produced; and a crate revision that changed the neutral
+    /// branding would quietly change this CLI's user-visible strings — the
+    /// status entry a user sees in pi, or, far worse, a default endpoint that
+    /// would redirect every pi session on the machine.
+    #[test]
+    fn what_this_command_installs_is_the_template_rendered_with_our_branding() {
+        assert_eq!(
+            PI_GATEWAY_EXTENSION.contents(),
+            pi::render_extension(&PI_BRANDING),
+            "the crate's pi artifact is not its template rendered with the \
+             branding tapesctl declares",
+        );
+    }
+
+    /// tapesctl leaves uncaptured pi sessions alone. The extension installs
+    /// into pi's *global* auto-discovery directory, so it loads for every pi
+    /// session on the machine; a default endpoint would redirect all of them
+    /// at a port tapesctl does not even keep open between runs.
+    #[test]
+    fn the_installed_extension_points_nowhere_until_a_launch_configures_it() {
+        assert!(PI_BRANDING.default_gateway_url.is_empty());
+        assert!(
+            PI_GATEWAY_EXTENSION
+                .contents()
+                .contains("const DEFAULT_GATEWAY_URL = \"\";"),
         );
     }
 

@@ -1647,7 +1647,7 @@ dependencies = [
 [[package]]
 name = "tapes-cassette-client"
 version = "0.1.0"
-source = "git+https://github.com/papercomputeco/tapes-harnesses?rev=884a197db3306f091e74aa21d4c36a9d8319448b#884a197db3306f091e74aa21d4c36a9d8319448b"
+source = "git+https://github.com/papercomputeco/tapes-harnesses?rev=3cfda3ba7dba48da25d00582018170a86c917710#3cfda3ba7dba48da25d00582018170a86c917710"
 dependencies = [
  "clap",
  "dirs",
@@ -1663,7 +1663,7 @@ dependencies = [
 [[package]]
 name = "tapes-harnesses"
 version = "0.1.0"
-source = "git+https://github.com/papercomputeco/tapes-harnesses?rev=884a197db3306f091e74aa21d4c36a9d8319448b#884a197db3306f091e74aa21d4c36a9d8319448b"
+source = "git+https://github.com/papercomputeco/tapes-harnesses?rev=3cfda3ba7dba48da25d00582018170a86c917710#3cfda3ba7dba48da25d00582018170a86c917710"
 dependencies = [
  "arc-swap",
  "base64",

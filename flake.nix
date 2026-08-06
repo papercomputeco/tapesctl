@@ -49,8 +49,12 @@
                 # `nix build` fails on a stale value even though the cargo-native
                 # targets never notice, which is how two earlier pin bumps landed
                 # without a recompute.
-                "tapes-harnesses-0.1.0" = "sha256-uhvxu6QyWFaKbLUUQ1922d1FNuVzQnISwdys92MM3I0=";
-                "tapes-cassette-client-0.1.0" = "sha256-uhvxu6QyWFaKbLUUQ1922d1FNuVzQnISwdys92MM3I0=";
+                # TEMPORARY-PIN: hash of a lane branch, not merged `main`.
+                # Recompute when the pins are re-pointed at the merged commit.
+                "tapes-harnesses-0.1.0" = "sha256-UhNHYSXc+6IEMrORI4B97MObr/9P5WgsUAVYerJ/+3M=";
+                # TEMPORARY-PIN: hash of a lane branch, not merged `main`.
+                # Recompute when the pins are re-pointed at the merged commit.
+                "tapes-cassette-client-0.1.0" = "sha256-UhNHYSXc+6IEMrORI4B97MObr/9P5WgsUAVYerJ/+3M=";
               };
             };
             cargoBuildFlags = [ "-p" "tapesctl" ];
