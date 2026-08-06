@@ -59,6 +59,7 @@
 //! said on either side of it: the log path before the launch, the session link
 //! after the exit.
 
+pub mod content_encoding;
 pub mod ingest;
 pub mod peek;
 pub mod proxy;

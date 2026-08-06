@@ -240,6 +240,130 @@ async fn the_request_body_reaches_ingest_verbatim() {
     );
 }
 
+/// Post `body` with an explicit `Content-Encoding`, the way a harness that
+/// compresses its requests does. `reqwest` is built without any compression
+/// feature, so the bytes go out exactly as given — the header is a statement
+/// about them, not an instruction to the client.
+async fn post_encoded_through_proxy(
+    proxy: SocketAddr,
+    body: Vec<u8>,
+    encoding: &str,
+) -> reqwest::Response {
+    reqwest::Client::new()
+        .post(format!("http://{proxy}/v1/messages"))
+        .header("content-type", "application/json")
+        .header("content-encoding", encoding)
+        .header("user-agent", "claude-cli/2.1.145")
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+}
+
+/// The request body of the captured turn, as posted bytes and as a value.
+async fn captured_request(ingest: &MockServer) -> (String, serde_json::Value) {
+    let posted = String::from_utf8(await_captured_turn_bytes(ingest).await).unwrap();
+    let turn: serde_json::Value = serde_json::from_str(&posted).unwrap();
+    (posted, turn["request"].clone())
+}
+
+/// The body every encoding test round-trips. Deliberately un-alphabetical, so
+/// an assertion on the posted bytes catches a re-serialization as well as a
+/// failure to decode.
+const ENCODED_BODY: &str = r#"{"zeta":1,"model":"gpt-5.1-codex","alpha":[1,2,3]}"#;
+
+#[tokio::test]
+async fn a_zstd_request_body_is_decoded_before_it_is_captured() {
+    // pi's `openai-codex` provider compresses with zstd. Without a decode step
+    // the proxy handed these bytes to a JSON parser, logged "not JSON", and
+    // dropped every turn of the session while the cloud capture route stored
+    // the same traffic decoded (PCC-1126).
+    let harness = start_harness(
+        ResponseTemplate::new(200)
+            .set_body_string(r#"{"ok":true}"#)
+            .insert_header("content-type", "application/json"),
+    )
+    .await;
+
+    let compressed = zstd::encode_all(ENCODED_BODY.as_bytes(), 3).unwrap();
+    assert_ne!(
+        compressed.as_slice(),
+        ENCODED_BODY.as_bytes(),
+        "the fixture must actually be compressed, or this test proves nothing",
+    );
+    let response = post_encoded_through_proxy(harness.proxy, compressed.clone(), "zstd").await;
+    assert_eq!(response.status(), 200);
+    let _ = response.text().await;
+
+    // The upstream must have received the bytes still encoded: decoding is for
+    // the capture copy, and re-encoding is not byte-identical.
+    let forwarded = &harness.upstream.received_requests().await.unwrap()[0];
+    assert_eq!(
+        forwarded.body, compressed,
+        "the forwarded body must be the verbatim encoded bytes",
+    );
+
+    let (posted, request) = captured_request(&harness.ingest).await;
+    assert_eq!(request["model"], "gpt-5.1-codex", "posted: {posted}");
+    assert!(
+        posted.contains(&format!(r#""request":{ENCODED_BODY}"#)),
+        "the stored request must be the decoded JSON, key order included: {posted}",
+    );
+}
+
+#[tokio::test]
+async fn a_gzip_request_body_is_decoded_before_it_is_captured() {
+    use std::io::Write;
+
+    let harness = start_harness(
+        ResponseTemplate::new(200)
+            .set_body_string(r#"{"ok":true}"#)
+            .insert_header("content-type", "application/json"),
+    )
+    .await;
+
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(ENCODED_BODY.as_bytes()).unwrap();
+    let compressed = encoder.finish().unwrap();
+
+    let _ = post_encoded_through_proxy(harness.proxy, compressed, "gzip")
+        .await
+        .text()
+        .await;
+
+    let (posted, request) = captured_request(&harness.ingest).await;
+    assert_eq!(request["model"], "gpt-5.1-codex", "posted: {posted}");
+    assert!(
+        posted.contains(&format!(r#""request":{ENCODED_BODY}"#)),
+        "the stored request must be the decoded JSON: {posted}",
+    );
+}
+
+#[tokio::test]
+async fn an_identity_encoded_request_body_is_captured_unchanged() {
+    // The overwhelmingly common case, and the one a decode step could most
+    // easily break: an explicit `identity` and an absent header must both mean
+    // "these bytes are already what they claim to be".
+    let harness = start_harness(
+        ResponseTemplate::new(200)
+            .set_body_string(r#"{"ok":true}"#)
+            .insert_header("content-type", "application/json"),
+    )
+    .await;
+
+    let _ = post_encoded_through_proxy(harness.proxy, ENCODED_BODY.as_bytes().to_vec(), "identity")
+        .await
+        .text()
+        .await;
+
+    let (posted, request) = captured_request(&harness.ingest).await;
+    assert_eq!(request["model"], "gpt-5.1-codex", "posted: {posted}");
+    assert!(
+        posted.contains(&format!(r#""request":{ENCODED_BODY}"#)),
+        "an identity body must reach ingest verbatim: {posted}",
+    );
+}
+
 #[tokio::test]
 async fn a_turn_is_captured_even_when_the_client_never_reads_the_body() {
     let harness = start_harness(
