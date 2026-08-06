@@ -689,6 +689,11 @@ pub async fn run(args: StartArgs) -> Result<()> {
         org_id: Arc::new(config.org_id.clone()),
         auth_subject: Arc::new(config.auth_subject.clone()),
         session_seen: Arc::new(tokio::sync::Mutex::new(Some(session_tx))),
+        // Every harness `start` launches names its session either through the
+        // pipeline or through its own envelope. The desktop registry is filled
+        // by a route this command does not serve, so leaving it empty here
+        // would only add a lane that always misses.
+        desktop_sessions: None,
     };
 
     let app = axum::Router::new()
