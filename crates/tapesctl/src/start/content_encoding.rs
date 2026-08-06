@@ -22,6 +22,15 @@
 //! green, so where this cannot match Go it says so out loud rather than quietly
 //! choosing differently.
 //!
+//! Saying so is no longer only in prose. The policy has a written specification
+//! — the shared fixture corpus authored in tapes at `fixtures/content-encoding/`
+//! — which both implementations table-test against, and which is vendored here
+//! at `vendor/tapes-content-encoding-fixtures/` and run by
+//! `tests/content_encoding_corpus.rs`. The unit tests below are still the
+//! readable statement of intent; the corpus is what makes a rule changed on one
+//! side turn the other side red. A behaviour change here belongs upstream in
+//! the corpus first.
+//!
 //! Decoding is for *capture only*. The proxy forwards the request body exactly
 //! as it arrived, encoding header included; nothing here touches the bytes that
 //! go upstream.

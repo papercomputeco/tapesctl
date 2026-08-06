@@ -120,6 +120,10 @@ time = { version = "0.3", features = ["formatting", "parsing", "serde", "macros"
 uuid = { version = "1", features = ["v4", "serde"] }
 
 # --- test ---
+# Recomputing the vendored fixture corpora's DIGEST seals, which is how a stale
+# or hand-edited vendored copy fails in this repo's CI rather than silently
+# testing cases nobody upstream still has. Test-only: nothing shipped hashes.
+sha2 = "0.10"
 tempfile = "3"
 test-case = "3"
 wiremock = "0.6"
