@@ -270,6 +270,27 @@ pub fn run_at(args: &PluginInstallArgs, home: &Path, config_path: PathBuf) -> Re
         write_private(&plan.plugin_root.join(relative), contents.as_bytes(), home)?;
     }
 
+    println!(
+        "tapesctl: packaged the hook plugin at {}",
+        plan.plugin_root.display(),
+    );
+
+    // `config.toml` is patched before the handoff is replaced, and the two
+    // together are the installation: the hook authenticates with the handoff's
+    // secret while the app reaches the address the config names, so a state
+    // where one is new and the other is old captures nothing and reports
+    // nothing. Parsing and rewriting someone else's TOML is much the likelier
+    // of the two to fail, so it runs while rollback is still free — a failure
+    // here has touched nothing but the plugin tree, whose contents are a pure
+    // function of the plan.
+    //
+    // A reinstall is what makes the order load-bearing. It rotates the secret,
+    // so committing the handoff first and then failing would leave a running
+    // capture unable to authenticate any report and, if the address moved, a
+    // config pointing at a port nothing will serve.
+    let restore = ConfigRestore::capture(&plan.config_path)?;
+    patch_config(&plan)?;
+
     let handoff = Handoff {
         version: super::HANDOFF_VERSION,
         harness_id: harness.id().to_owned(),
@@ -281,23 +302,22 @@ pub fn run_at(args: &PluginInstallArgs, home: &Path, config_path: PathBuf) -> Re
         provider_id: PROVIDER_ID.to_owned(),
         installed_at: now_rfc3339(),
     };
-    let serialized =
-        serde_json::to_vec_pretty(&handoff).context(error::CodexAppHandoffWriteSnafu {
+    let write = serde_json::to_vec_pretty(&handoff)
+        .context(error::CodexAppHandoffWriteSnafu {
             path: plan.handoff_path.clone(),
-        })?;
-    write_private(&plan.handoff_path, &serialized, home)?;
-    println!(
-        "tapesctl: packaged the hook plugin at {}",
-        plan.plugin_root.display(),
-    );
+        })
+        .and_then(|serialized| write_private(&plan.handoff_path, &serialized, home));
+    if let Err(error) = write {
+        // The config now names an address whose secret was never written.
+        // Putting it back is what keeps a failed reinstall a no-op instead of
+        // a half-install that silently captures nothing.
+        restore.rollback();
+        return Err(error);
+    }
     println!(
         "tapesctl: wrote the handoff at {}",
         plan.handoff_path.display(),
     );
-
-    // Last, because it is the change that activates the rest: everything the
-    // patched provider points at now exists.
-    patch_config(&plan)?;
 
     info!(
         harness = harness.id(),
@@ -448,6 +468,51 @@ pub fn expected_base_url(addr: SocketAddr, auth: CodexAuth) -> String {
 /// Absence is not a failure: the patch grammar takes an empty document as a
 /// fresh one, which is what a machine that has run the app but never edited
 /// its config looks like.
+/// The `config.toml` bytes from before the installer touched them, so a later
+/// step's failure can put the file back.
+///
+/// Restoring is best-effort and deliberately quiet about its own failure: it
+/// runs only while an error is already on its way to the user, and a second
+/// error reported over the first would replace the cause with a consequence.
+/// The user is told which file may need attention instead.
+struct ConfigRestore {
+    path: PathBuf,
+    /// `None` when the installer created the file, in which case putting it
+    /// back means removing it.
+    previous: Option<String>,
+}
+
+impl ConfigRestore {
+    fn capture(path: &Path) -> Result<Self> {
+        Ok(Self {
+            path: path.to_path_buf(),
+            previous: read_config(path)?,
+        })
+    }
+
+    fn rollback(self) {
+        let restored = match &self.previous {
+            Some(previous) => write_config(&self.path, previous),
+            None => std::fs::remove_file(&self.path).or_else(|err| {
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    Ok(())
+                } else {
+                    Err(err).context(error::CodexConfigWriteSnafu {
+                        path: self.path.clone(),
+                    })
+                }
+            }),
+        };
+        if restored.is_err() {
+            eprintln!(
+                "tapesctl: could not restore {} — it may name a capture address \
+                 that was never activated; re-run `tapesctl plugin install codex-app`",
+                self.path.display(),
+            );
+        }
+    }
+}
+
 fn read_config(path: &Path) -> Result<Option<String>> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
@@ -804,6 +869,57 @@ mod tests {
             std::fs::read_to_string(config_path(home.path())).unwrap(),
             config_after_first,
             "the same install must not keep rewriting config.toml",
+        );
+    }
+
+    /// The failure the ordering exists for: `config.toml` is someone else's
+    /// file and may not parse. If the secret had already been rotated by then,
+    /// a capture already running would authenticate nothing — every report
+    /// refused, every turn filed as `unknown` — while the config still named
+    /// the old address, so nothing would announce the breakage.
+    #[test]
+    fn a_config_that_cannot_be_parsed_does_not_rotate_the_secret() {
+        let home = tempfile::tempdir().unwrap();
+        install_at(&install_args(false), home.path()).unwrap();
+        let working = Handoff::read(&Handoff::path(home.path())).unwrap();
+
+        std::fs::write(config_path(home.path()), "this is not = = valid toml\n").unwrap();
+
+        install_at(&install_args(false), home.path()).unwrap_err();
+
+        assert_eq!(
+            Handoff::read(&Handoff::path(home.path())).unwrap().secret,
+            working.secret,
+            "a failed install must leave a running capture's secret alone",
+        );
+    }
+
+    /// A reinstall rotates the secret, so a failure between patching the config
+    /// and writing the handoff would leave the app dialling an address whose
+    /// secret was never written — a capture that authenticates nothing and
+    /// files every turn as `unknown`. The config must go back instead.
+    #[test]
+    fn a_failed_reinstall_leaves_the_working_install_alone() {
+        let home = tempfile::tempdir().unwrap();
+        install_at(&install_args(false), home.path()).unwrap();
+        let working_config = std::fs::read_to_string(config_path(home.path())).unwrap();
+
+        // Make the handoff unwritable by putting a directory in its place, so
+        // the second install fails *after* the config has been patched.
+        let handoff_path = Handoff::path(home.path());
+        std::fs::remove_file(&handoff_path).unwrap();
+        std::fs::create_dir(&handoff_path).unwrap();
+
+        let moved = PluginInstallArgs {
+            port: Some(51521),
+            ..install_args(false)
+        };
+        install_at(&moved, home.path()).unwrap_err();
+
+        assert_eq!(
+            std::fs::read_to_string(config_path(home.path())).unwrap(),
+            working_config,
+            "a failed install must not leave config.toml naming the new address",
         );
     }
 
