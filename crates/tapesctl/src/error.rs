@@ -668,6 +668,26 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    /// An install failed, and putting `config.toml` back failed too.
+    ///
+    /// Distinct from the failure that started it because the machine is now in
+    /// a state neither error describes: the config names a capture address
+    /// whose secret was never written, so the app will dial a port nothing is
+    /// serving. The original cause is recoverable by retrying; this is not
+    /// self-evident from it, which is why it replaces rather than nests it.
+    #[snafu(display(
+        "the install failed and {} could not be put back: it now names a capture \
+         address that was never activated, so run `tapesctl plugin install \
+         codex-app` to complete it (the install failed because: {cause})",
+        path.display(),
+    ))]
+    CodexAppInstallNotRolledBack {
+        /// The config left naming the new address.
+        path: PathBuf,
+        /// What the install failed with before the rollback was attempted.
+        cause: String,
+    },
+
     /// Codex's `config.toml` could not be written.
     #[snafu(display("could not write the codex config at {}", path.display()))]
     CodexConfigWrite {

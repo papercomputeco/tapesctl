@@ -311,8 +311,20 @@ pub fn run_at(args: &PluginInstallArgs, home: &Path, config_path: PathBuf) -> Re
         // The config now names an address whose secret was never written.
         // Putting it back is what keeps a failed reinstall a no-op instead of
         // a half-install that silently captures nothing.
-        restore.rollback();
-        return Err(error);
+        //
+        // When the rollback itself fails the reported error changes, because
+        // what the user needs to know changes. The write failure alone is
+        // recoverable by retrying and says so; a machine whose config and
+        // handoff disagree is not something either error implies, and the app
+        // will dial a port nothing serves.
+        return Err(match restore.rollback() {
+            Ok(()) => error,
+            Err(config_path) => error::CodexAppInstallNotRolledBackSnafu {
+                path: config_path,
+                cause: error.to_string(),
+            }
+            .build(),
+        });
     }
     println!(
         "tapesctl: wrote the handoff at {}",
@@ -471,10 +483,10 @@ pub fn expected_base_url(addr: SocketAddr, auth: CodexAuth) -> String {
 /// The `config.toml` bytes from before the installer touched them, so a later
 /// step's failure can put the file back.
 ///
-/// Restoring is best-effort and deliberately quiet about its own failure: it
-/// runs only while an error is already on its way to the user, and a second
-/// error reported over the first would replace the cause with a consequence.
-/// The user is told which file may need attention instead.
+/// Restoring reports its own failure to the caller rather than handling it:
+/// a rollback that worked leaves nothing to say, so the original error stands
+/// alone, while a rollback that failed leaves the machine in a state that
+/// error does not describe.
 struct ConfigRestore {
     path: PathBuf,
     /// `None` when the installer created the file, in which case putting it
@@ -490,7 +502,9 @@ impl ConfigRestore {
         })
     }
 
-    fn rollback(self) {
+    /// `Err(path)` when the file could not be put back, naming it so the
+    /// caller can say what is now inconsistent.
+    fn rollback(self) -> std::result::Result<(), PathBuf> {
         let restored = match &self.previous {
             Some(previous) => write_config(&self.path, previous),
             None => std::fs::remove_file(&self.path).or_else(|err| {
@@ -504,12 +518,9 @@ impl ConfigRestore {
             }),
         };
         if restored.is_err() {
-            eprintln!(
-                "tapesctl: could not restore {} — it may name a capture address \
-                 that was never activated; re-run `tapesctl plugin install codex-app`",
-                self.path.display(),
-            );
+            return Err(self.path);
         }
+        Ok(())
     }
 }
 
@@ -870,6 +881,58 @@ mod tests {
             config_after_first,
             "the same install must not keep rewriting config.toml",
         );
+    }
+
+    /// A rollback that cannot put the file back has to say so, because the
+    /// caller's error changes when it happens: the config keeps naming an
+    /// address whose secret was never written, which is not something the
+    /// original write failure implies.
+    #[test]
+    fn a_rollback_that_cannot_write_reports_the_file_it_left() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join("codex");
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("config.toml");
+        std::fs::write(&config, "model = \"gpt-5-codex\"\n").unwrap();
+
+        let restore = ConfigRestore::capture(&config).unwrap();
+        // Deny writes to the directory, so replacing the file (written to a
+        // sibling temp path and renamed) cannot succeed.
+        let mut perms = std::fs::metadata(&dir).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&dir, perms).unwrap();
+
+        let left = restore.rollback().expect_err("the rollback cannot succeed");
+
+        assert_eq!(left, config);
+
+        // Leave the directory writable so the tempdir can be cleaned up.
+        let mut perms = std::fs::metadata(&dir).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        std::fs::set_permissions(&dir, perms).unwrap();
+    }
+
+    /// The message a user is left with has to name both the file and the way
+    /// out; a double failure is the one case where neither is guessable.
+    #[test]
+    fn the_double_failure_names_the_file_and_the_recovery() {
+        let rendered = error::CodexAppInstallNotRolledBackSnafu {
+            path: PathBuf::from("/home/someone/.codex/config.toml"),
+            cause: "no space left on device".to_owned(),
+        }
+        .build()
+        .to_string();
+
+        assert!(
+            rendered.contains("/home/someone/.codex/config.toml"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("tapesctl plugin install codex-app"),
+            "{rendered}",
+        );
+        assert!(rendered.contains("no space left on device"), "{rendered}");
     }
 
     /// The failure the ordering exists for: `config.toml` is someone else's
