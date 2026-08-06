@@ -155,6 +155,14 @@ async fn await_session_block(ingest: &MockServer) -> serde_json::Value {
         let requests = ingest.received_requests().await.unwrap_or_default();
         if let Some(request) = requests.first() {
             let turn: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            // `session` is skipped when serialising a turn that carries no
+            // envelope, so a missing block reads as `Null` at every call site
+            // and compares unequal to whatever was expected. Saying so here
+            // keeps that failure from looking like a wrong harness id.
+            assert!(
+                !turn["session"].is_null(),
+                "the turn carries no session block at all: {turn}",
+            );
             return turn["session"].clone();
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -231,6 +239,22 @@ async fn a_session_no_report_named_files_as_unknown_even_beside_a_known_one() {
         await_session_block(&harness.ingest).await["harness_id"],
         "unknown",
     );
+}
+
+/// The property the three `unknown` cases above each show once: on a desktop
+/// capture every turn carries a session block. A turn posted without one is
+/// not an unattributed turn — it is an invisible one, indistinguishable
+/// downstream from traffic nobody was asked to attribute, so a whole broken
+/// install could report nothing rather than a stream of `unknown`.
+#[tokio::test]
+async fn every_desktop_turn_carries_a_session_block_even_when_unattributed() {
+    let harness = start_harness().await;
+
+    turn(harness.proxy, "never-reported", "never-reported").await;
+
+    let session = await_session_block(&harness.ingest).await;
+    assert_eq!(session["harness_id"], "unknown");
+    assert!(session["harness_session_id"].is_null(), "got: {session}");
 }
 
 /// A subagent's request names its own thread; the report that announced the

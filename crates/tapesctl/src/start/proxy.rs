@@ -235,7 +235,21 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
     let from_desktop = desktop.is_some();
     let envelope_attribution = desktop
         .or_else(|| trusted_inbound_envelope(&state, peer, &parts.headers))
-        .or_else(|| attributed.envelope());
+        .or_else(|| attributed.envelope())
+        // A desktop capture serves one app, so every request reaching it is
+        // that app's — and the pipeline has no lane for a harness this process
+        // did not launch, so its answer here is legitimately "no envelope".
+        // Left at that, the turn would be posted with no session block at all,
+        // which reads downstream as a turn nobody asked about rather than one
+        // nothing could attribute. `unknown` is what makes an unattributed
+        // desktop turn countable, and counting them is how a broken install
+        // gets noticed at all.
+        .or_else(|| {
+            state
+                .desktop_sessions
+                .is_some()
+                .then(envelope::TapesAttribution::unknown)
+        });
     let session = envelope_attribution
         .as_ref()
         .map(|a| SessionEnvelope::from_attribution(a, &state.org_id, &state.auth_subject));
