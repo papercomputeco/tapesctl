@@ -33,6 +33,7 @@
 use serde::Deserialize;
 use serde_json::value::RawValue;
 use snafu::ResultExt;
+use std::time::Duration;
 use tapes_harnesses::transcript::{
     INGEST_PATH, TranscriptFile, TranscriptPayload, TranscriptSession, build_payload,
     jsonl_to_records,
@@ -73,12 +74,29 @@ pub struct TranscriptClient {
     endpoint: Url,
 }
 
+/// How long one transcript POST may take before it counts as failed.
+///
+/// A server that accepts the connection and then never answers is
+/// indistinguishable from one that is merely slow, so the wait has to be
+/// bounded by a clock rather than by the peer. Without this the lanes built on
+/// this client inherit reqwest's default of no deadline at all, and a stalled
+/// ingest stops being a delivery failure that retries and becomes a task that
+/// never finishes — which is how it reaches the user: `tapesctl start` holding
+/// the terminal after the harness has already exited.
+///
+/// Generous, because the cost of giving up early is a retry and the cost of
+/// giving up late is only latency at shutdown.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
 impl TranscriptClient {
     /// Build a client posting to `base` + [`INGEST_PATH`].
     pub fn new(base: &Url) -> Result<Self> {
         let endpoint = base.join(INGEST_PATH).context(error::TranscriptUrlSnafu)?;
         Ok(Self {
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .timeout(REQUEST_TIMEOUT)
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
             endpoint,
         })
     }

@@ -85,6 +85,9 @@ pub struct AnchorLaneConfig {
     pub backoff_initial: Duration,
     /// Ceiling on the backoff.
     pub backoff_cap: Duration,
+    /// How long the shutdown pass may run before the terminal is handed back
+    /// regardless. See [`FINAL_PASS_DEADLINE`].
+    pub final_pass_deadline: Duration,
 }
 
 impl AnchorLaneConfig {
@@ -96,6 +99,7 @@ impl AnchorLaneConfig {
             tick: DEFAULT_TICK,
             backoff_initial: BACKOFF_INITIAL,
             backoff_cap: BACKOFF_CAP,
+            final_pass_deadline: FINAL_PASS_DEADLINE,
         }
     }
 }
@@ -119,6 +123,14 @@ pub struct CodexAnchorLane {
     scanner: CodexAnchorScanner,
     delivery: HashMap<PathBuf, DeliveryState>,
 }
+
+/// How long the shutdown pass may run before the terminal is handed back
+/// regardless.
+///
+/// Sized against the work rather than the clock: a session's undelivered
+/// anchors are few, and each push is separately bounded, so reaching this
+/// means something is wrong rather than merely slow.
+const FINAL_PASS_DEADLINE: Duration = Duration::from_secs(30);
 
 impl CodexAnchorLane {
     /// Build a lane over the proxy's Codex watcher snapshot.
@@ -160,7 +172,24 @@ impl CodexAnchorLane {
                 _ = ticker.tick() => self.tick(false).await,
             }
         }
-        self.tick(true).await;
+        // The caller awaits this future to get its terminal back, so the last
+        // pass answers to a clock as well as to the work. Each push is already
+        // bounded by the client's request timeout; this bounds the pass, whose
+        // length is otherwise the number of undelivered anchors times that.
+        // Giving up here costs the anchors this pass had not reached yet —
+        // strictly better than a session that has ended and a shell that has
+        // not come back.
+        let deadline = self.config.final_pass_deadline;
+        if tokio::time::timeout(deadline, self.tick(true))
+            .await
+            .is_err()
+        {
+            warn!(
+                deadline_secs = deadline.as_secs(),
+                "codex anchor lane ran out of time on its final pass; \
+                 some spawn anchors were not delivered",
+            );
+        }
     }
 
     /// One scan across the current watcher snapshot.
@@ -592,5 +621,39 @@ mod tests {
             .expect("the anchor lane task must not panic");
 
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    /// An ingest that accepts the connection and then says nothing is the one
+    /// failure a delivery lane cannot distinguish from slowness, so the final
+    /// pass answers to a clock too. Without the bound this test hangs, which
+    /// is exactly what the user would experience: the harness has exited and
+    /// the shell has not come back.
+    #[tokio::test]
+    async fn a_silent_ingest_does_not_hold_the_terminal() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/ingest/transcript"))
+            // Longer than any deadline this test allows, so the response never
+            // arrives within the window under test.
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(60)))
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let rollout = write_rollout(dir.path(), &format!("{}\n", fixtures::STARTED_LINE));
+        let client = TranscriptClient::new(&Url::parse(&server.uri()).unwrap()).unwrap();
+        let (shutdown, handle) = spawn(
+            client,
+            snapshot_of(vec![rollout_at(&rollout)]),
+            AnchorLaneConfig {
+                final_pass_deadline: Duration::from_millis(200),
+                ..AnchorLaneConfig::new(PROVIDER)
+            },
+        );
+
+        shutdown.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), handle)
+            .await
+            .expect("a silent ingest must not keep the lane running")
+            .expect("the anchor lane task must not panic");
     }
 }
