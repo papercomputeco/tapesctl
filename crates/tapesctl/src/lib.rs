@@ -4,6 +4,7 @@
 pub mod api;
 pub mod cassette;
 pub mod cli;
+pub mod codex_app;
 pub mod error;
 pub mod logging;
 pub mod plugin;
@@ -156,6 +157,8 @@ pub async fn run(cli: Cli) -> Result<()> {
         Some(Command::Skill(SkillCommand::List(args))) => ports::skill_list::run(args),
         Some(Command::Skill(SkillCommand::Sync(args))) => ports::skill::run(args),
         Some(Command::Plugin(PluginCommand::Install(args))) => plugin::run(args),
+        Some(Command::Plugin(PluginCommand::Uninstall(args))) => plugin::uninstall(args),
+        Some(Command::Plugin(PluginCommand::Hook(args))) => codex_app::hook::run(&args).await,
     }
 }
 
@@ -207,6 +210,8 @@ mod tests {
                 // reports, without writing to the runner's home.
                 harness: "claude".to_owned(),
                 dry_run: false,
+                port: None,
+                codex_auth: None,
             }))),
         };
         assert!(!matches!(run(cli).await, Err(Error::NotImplemented { .. })));

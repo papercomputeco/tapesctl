@@ -576,19 +576,73 @@ pub struct SkillSyncArgs {
 pub enum PluginCommand {
     /// Install the capture plugin for a harness.
     Install(PluginInstallArgs),
+
+    /// Remove a harness's capture plugin and any configuration it wrote.
+    Uninstall(PluginUninstallArgs),
+
+    /// Report one lifecycle event to a running capture proxy.
+    ///
+    /// Invoked by an installed hook plugin, never by a person: the harness
+    /// writes the event payload to this process's stdin. Hidden because a user
+    /// typing it has nothing to pipe in.
+    #[command(hide = true)]
+    Hook(PluginHookArgs),
 }
 
 /// Arguments for `tapesctl plugin install`.
 #[derive(Debug, Args)]
 pub struct PluginInstallArgs {
-    /// The harness to install capture support for (e.g. `pi`, `opencode`).
-    /// Harnesses
+    /// The harness to install capture support for (e.g. `pi`, `opencode`,
+    /// `codex-app`). Harnesses
     /// captured by redirection alone need no plugin and report so.
     pub harness: String,
 
     /// Report what would be installed, and where, without writing anything.
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Loopback port the capture proxy for this harness will bind.
+    ///
+    /// Only meaningful for a harness that is configured once and captured many
+    /// times: its endpoint is written into a config file that outlives any one
+    /// capture, so the port cannot be ephemeral the way `start`'s is. Omitted,
+    /// a free port is chosen at install time and recorded. Re-run with an
+    /// explicit port to move off one something else has since taken.
+    #[arg(long)]
+    pub port: Option<u16>,
+
+    /// Which credential the harness will present upstream: `chatgpt` (the
+    /// default, what the desktop app uses after a plan login) or `api-key`.
+    #[arg(long)]
+    pub codex_auth: Option<String>,
+}
+
+/// Arguments for `tapesctl plugin uninstall`.
+#[derive(Debug, Args)]
+pub struct PluginUninstallArgs {
+    /// The harness to remove capture support for.
+    pub harness: String,
+
+    /// Report what would be removed, without removing anything.
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+/// Arguments for `tapesctl plugin hook`.
+#[derive(Debug, Args)]
+pub struct PluginHookArgs {
+    /// The harness whose hook surface this event came from.
+    pub harness: String,
+
+    /// The handoff file naming the capture proxy, and carrying the secret that
+    /// authenticates a report to it.
+    ///
+    /// Passed explicitly rather than derived from the environment: this command
+    /// line is written by the installer, which knows where it put the file,
+    /// while a hook runs under whatever environment the harness happens to
+    /// have.
+    #[arg(long)]
+    pub handoff: PathBuf,
 }
 
 #[cfg(test)]

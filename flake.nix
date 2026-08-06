@@ -49,8 +49,8 @@
                 # `nix build` fails on a stale value even though the cargo-native
                 # targets never notice, which is how two earlier pin bumps landed
                 # without a recompute.
-                "tapes-harnesses-0.1.0" = "sha256-RQ1Lzf9j+4V2tiDpRJDcHH5jLiPr1wkbE6O1C6ehcwE=";
-                "tapes-cassette-client-0.1.0" = "sha256-RQ1Lzf9j+4V2tiDpRJDcHH5jLiPr1wkbE6O1C6ehcwE=";
+                "tapes-harnesses-0.1.0" = "sha256-VZYeabaHUyZzgFokqGC0cqyaV7+9NyJAUlpUmgnL7eM=";
+                "tapes-cassette-client-0.1.0" = "sha256-VZYeabaHUyZzgFokqGC0cqyaV7+9NyJAUlpUmgnL7eM=";
               };
             };
             cargoBuildFlags = [ "-p" "tapesctl" ];
