@@ -20,6 +20,10 @@
 //! * [`tailer`] — the live lane, running for the duration of a
 //!   `tapesctl start` session on the shared trigger state machine.
 //! * [`sync`] — the backstop, sweeping transcripts that no live tailer saw.
+//! * [`codex_anchors`] — Codex's counterpart. Codex writes no transcript tree;
+//!   its causal skeleton is one `sub_agent_activity` record per spawn, buried
+//!   in the parent's append-only rollout file, and this lane ships those as
+//!   anchor rows down the same endpoint.
 //!
 //! Discovery, packaging, and the *decision* to push all come from
 //! `tapes_harnesses::transcript`, which paperd also consumes — so the two
@@ -27,5 +31,6 @@
 //! implementations of one spec.
 
 pub mod client;
+pub mod codex_anchors;
 pub mod sync;
 pub mod tailer;

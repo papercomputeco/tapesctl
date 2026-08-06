@@ -91,6 +91,7 @@ use crate::cli::StartArgs;
 use crate::error::{Result, error};
 use crate::logging;
 use crate::transcript::client::TranscriptClient;
+use crate::transcript::codex_anchors;
 use crate::transcript::tailer::{self, SessionTracker};
 use ingest::IngestClient;
 use proxy::ProxyState;
@@ -653,9 +654,14 @@ pub async fn run(args: StartArgs) -> Result<()> {
         &gateway_nonce,
     )?;
 
+    // Published once and read by two consumers: the attribution pipeline, and
+    // the Codex anchor lane. A second watcher would be a second answer to
+    // "which rollouts exist right now", and the two could disagree about a
+    // file that appeared mid-tick.
+    let codex_snapshot = spawn_codex_watcher(codex_sessions_dir()?);
     let attribution = AttributionState::new(
         spawn_watcher(claude_sessions_dir()?),
-        spawn_codex_watcher(codex_sessions_dir()?),
+        codex_snapshot.clone(),
     );
     let (session_tx, mut session_rx) = unbounded_channel::<String>();
 
@@ -716,6 +722,7 @@ pub async fn run(args: StartArgs) -> Result<()> {
     );
 
     let tailer = spawn_tailer(&config, tracker)?;
+    let anchors = spawn_codex_anchor_lane(&config, codex_snapshot)?;
 
     let written = materialise_config_files(&plan)?;
 
@@ -744,6 +751,15 @@ pub async fn run(args: StartArgs) -> Result<()> {
         }
     }
 
+    // Same contract for Codex, and the same reason: a subagent spawned in the
+    // last seconds of a session has its anchor pushed only by the final pass.
+    if let Some((shutdown, handle)) = anchors {
+        let _ = shutdown.send(());
+        if let Err(err) = handle.await {
+            warn!(error = %err, "codex anchor lane did not finish cleanly");
+        }
+    }
+
     // The terminal is the caller's again, so the session can finally be named.
     // The id only becomes known once a turn is attributed, which is mid-session
     // — the one moment printing is forbidden. The proxy sends exactly one id, so
@@ -765,11 +781,11 @@ pub async fn run(args: StartArgs) -> Result<()> {
 /// `None` covers the two cases where the lane cannot or should not run: the user
 /// opted out, or the harness is not Claude — no other harness writes into the
 /// Claude project tree the shared crate's discovery walks (Codex keeps rollout
-/// files of its own; opencode keeps sessions in a SQLite database, which is not
-/// a tree a transcript sweep can walk at all). Returning `None` rather than
-/// failing is deliberate: those are still good wire captures, and refusing to
-/// start one over a lane that does not apply would be a regression against PR
-/// 5.
+/// files of its own, carried by [`spawn_codex_anchor_lane`]; opencode keeps
+/// sessions in a SQLite database, which is not a tree a transcript sweep can
+/// walk at all). Returning `None` rather than failing is deliberate: those are
+/// still good wire captures, and refusing to start one over a lane that does
+/// not apply would be a regression against PR 5.
 fn spawn_tailer(
     config: &StartConfig,
     tracker: SessionTracker,
@@ -790,6 +806,37 @@ fn spawn_tailer(
     );
     let client = TranscriptClient::new(&config.tapes_url)?;
     Ok(Some(tailer::spawn(client, tracker, tailer_config)))
+}
+
+/// Start the Codex spawn-anchor lane, which is Codex's whole transcript lane.
+///
+/// Codex writes no per-session transcript tree, so [`spawn_tailer`] has nothing
+/// to walk for it. What it does write is one `sub_agent_activity` record per
+/// spawn, in the parent thread's rollout — the only place the
+/// (spawn call_id ↔ child thread id) join exists, since `spawn_agent`'s
+/// arguments are encrypted on the wire. Without this lane a `tapesctl`-captured
+/// Codex session reconstructs into a flatter tree than the same session
+/// captured through paperd, which ships these anchors.
+///
+/// `None` when the user opted out of transcripts or the harness is not Codex.
+fn spawn_codex_anchor_lane(
+    config: &StartConfig,
+    snapshot: tapes_harnesses::attribution::CodexWatcherSnapshotHandle,
+) -> Result<
+    Option<(
+        tokio::sync::oneshot::Sender<()>,
+        tokio::task::JoinHandle<()>,
+    )>,
+> {
+    if !config.transcripts || !config.harness.is_codex() {
+        return Ok(None);
+    }
+    let client = TranscriptClient::new(&config.tapes_url)?;
+    Ok(Some(codex_anchors::spawn(
+        client,
+        snapshot,
+        codex_anchors::AnchorLaneConfig::new(CODEX_PROVIDER_PREFIX),
+    )))
 }
 
 /// The last line printed before the harness takes the terminal.
