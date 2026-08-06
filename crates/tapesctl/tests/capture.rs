@@ -105,6 +105,7 @@ async fn start_harness_as(
         org_id: Arc::new(String::new()),
         auth_subject: Arc::new("local:test".to_owned()),
         session_seen: Arc::new(tokio::sync::Mutex::new(None)),
+        desktop_sessions: None,
         transcript_tracker: SessionTracker::new(),
     };
 

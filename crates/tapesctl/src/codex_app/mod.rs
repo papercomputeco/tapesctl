@@ -51,6 +51,7 @@
 
 pub mod hook;
 pub mod install;
+pub mod lifecycle;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
