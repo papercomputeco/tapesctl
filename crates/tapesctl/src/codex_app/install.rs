@@ -14,19 +14,21 @@
 //!
 //! All three are written here, and all three are removed by `uninstall`.
 //!
-//! # What this deliberately does not do
+//! A fourth step then hands the packaged tree to Codex's own plugin manager,
+//! so `plugin install` finishes the install rather than printing commands for
+//! someone to paste. It goes last for a reason the ordering comment in
+//! [`run_at`] gives.
 //!
-//! It does not run `codex plugin marketplace add` / `codex plugin add`. paper
-//! does, and the ~200 lines it takes to do it well — collision detection
-//! against an existing marketplace of the same name, force-refresh on a
-//! changed source, and matching the CLI's own stderr phrasings to tell
-//! "already there" from "failed" — are *Codex plugin-manager knowledge*, not
-//! delivery. That knowledge belongs in `tapes-harnesses` beside the manifest
-//! templates it completes; it is not there yet, and copying it here would
-//! create the second drifting implementation the shared crate exists to
-//! prevent. So the installer writes a source tree in the layout the plugin
-//! manager consumes and prints the two commands. When the crate grows the
-//! invocation, this becomes a call.
+//! # Where the plugin-manager knowledge lives
+//!
+//! Not here. The marketplace wrapper, the paths inside it, and the invocation
+//! — including the parts that take real care, like telling a same-named
+//! marketplace pointing elsewhere from a genuine failure — are Codex's rules,
+//! not this client's, so they come from
+//! [`tapes_harnesses::plugin::codex_app::manager`] and the closed-source client
+//! completes the same install by the same rules. What stays here is delivery:
+//! which names this client uses, where the tree goes, and what the user is
+//! told.
 //!
 //! # Writing under the user's home
 //!
@@ -44,6 +46,9 @@ use std::path::{Path, PathBuf};
 use snafu::{OptionExt, ResultExt};
 use tapes_harnesses::config::codex as codex_config;
 use tapes_harnesses::launch::CodexAuth;
+use tapes_harnesses::plugin::codex_app::manager::{
+    self, InstallGoal, InstallOutcome, ManagerRun, MarketplaceIdentity, PluginManager,
+};
 use tapes_harnesses::plugin::codex_app::{
     HookPluginIdentity, render_hooks_manifest, render_plugin_manifest,
 };
@@ -89,16 +94,19 @@ pub struct Plan {
 }
 
 impl Plan {
+    /// The plugin manager over this plan's packaged tree.
+    ///
+    /// `codex` is named bare so the user's `PATH` resolves it — the same
+    /// binary they would have run themselves.
+    #[must_use]
+    pub fn manager(&self) -> PluginManager {
+        PluginManager::new("codex", &self.plugin_root, MARKETPLACE_NAME, PLUGIN_NAME)
+    }
+
     /// The `<plugin>@<marketplace>` spec `codex plugin add` takes.
     #[must_use]
     pub fn plugin_spec(&self) -> String {
-        format!("{PLUGIN_NAME}@{MARKETPLACE_NAME}")
-    }
-
-    /// The directory `codex plugin marketplace add` is pointed at.
-    #[must_use]
-    pub fn marketplace_root(&self) -> &Path {
-        &self.plugin_root
+        manager::plugin_spec(PLUGIN_NAME, MARKETPLACE_NAME)
     }
 }
 
@@ -183,55 +191,28 @@ fn identity() -> HookPluginIdentity<'static> {
         .with_developer_name("tapesctl")
 }
 
-/// The marketplace manifest that offers the packaged plugin as a local source.
-///
-/// NOTE: this shape is Codex plugin-manager knowledge and the crate does not
-/// own it — it ships the plugin's own two manifests as templates and stops
-/// there, so the wrapper that makes them *installable* is authored twice, here
-/// and in paper. Rendered rather than embedded so the two names it carries
-/// come from the constants everything else uses.
-fn marketplace_manifest() -> String {
-    format!(
-        r#"{{
-  "name": "{MARKETPLACE_NAME}",
-  "interface": {{
-    "displayName": "tapesctl"
-  }},
-  "plugins": [
-    {{
-      "name": "{PLUGIN_NAME}",
-      "source": {{
-        "source": "local",
-        "path": "./plugins/{PLUGIN_NAME}"
-      }},
-      "policy": {{
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL"
-      }},
-      "category": "Productivity"
-    }}
-  ]
-}}
-"#
-    )
-}
-
 /// The files a packaged plugin consists of, relative to [`Plan::plugin_root`].
+///
+/// Every path and every byte comes from the crate: the two manifests are its
+/// templates rendered around this client's identity, and the marketplace
+/// wrapper that makes them installable is its template too, rendered around
+/// this client's two names. Nothing about the layout Codex walks is spelled
+/// here.
 fn plugin_files(hook_command: &str) -> Vec<(PathBuf, String)> {
-    let plugin_dir = Path::new("plugins").join(PLUGIN_NAME);
     vec![
         (
-            Path::new(".agents")
-                .join("plugins")
-                .join("marketplace.json"),
-            marketplace_manifest(),
+            PathBuf::from(manager::MARKETPLACE_MANIFEST_PATH),
+            manager::render_marketplace_manifest(
+                &MarketplaceIdentity::new(MARKETPLACE_NAME, PLUGIN_NAME)
+                    .with_display_name("tapesctl"),
+            ),
         ),
         (
-            plugin_dir.join(".codex-plugin").join("plugin.json"),
+            manager::plugin_manifest_path(PLUGIN_NAME),
             render_plugin_manifest(&identity()),
         ),
         (
-            plugin_dir.join("hooks").join("hooks.json"),
+            manager::hooks_manifest_path(PLUGIN_NAME),
             render_hooks_manifest(hook_command),
         ),
     ]
@@ -331,6 +312,16 @@ pub fn run_at(args: &PluginInstallArgs, home: &Path, config_path: PathBuf) -> Re
         plan.handoff_path.display(),
     );
 
+    // Registration is last, and it is the only step that reaches outside this
+    // installation. It must follow the handoff: registering copies the plugin
+    // into Codex's cache, after which its hooks can fire at any moment — and a
+    // hook that fires before the handoff exists has no address to report to and
+    // no secret to prove itself with. It is also the safest step to fail: the
+    // config and the handoff already agree, the packaged tree is on disk, and
+    // the two commands below finish the job by hand, so a previously working
+    // install keeps working either way.
+    register_with_codex(&plan);
+
     info!(
         harness = harness.id(),
         proxy = %plan.proxy_addr,
@@ -338,6 +329,58 @@ pub fn run_at(args: &PluginInstallArgs, home: &Path, config_path: PathBuf) -> Re
     );
     report_next_steps(&plan, harness.id());
     Ok(())
+}
+
+/// Hand the packaged tree to Codex's plugin manager and say what it did.
+///
+/// Never fails the install. Every outcome the manager reports is either
+/// finished or recoverable with the printed commands, and the two things an
+/// install must get right — the config and the handoff — are already committed
+/// by the time this runs. Turning a plugin-manager hiccup into a failed
+/// `plugin install` would only invite a re-run that rotates the secret again.
+fn register_with_codex(plan: &Plan) {
+    let manager = plan.manager();
+    let disabled = read_config(&plan.config_path)
+        .ok()
+        .flatten()
+        .is_some_and(|text| manager::plugin_disabled_in_config(&text, &plan.plugin_spec()));
+
+    // `Install`, not `Verify`: this client keeps no record of what Codex has
+    // cached, and every install rewrites the hook command and rotates the
+    // secret, so an existing copy of the plugin is always one that must be
+    // replaced rather than one that can be believed.
+    match manager.register(InstallGoal::Install, disabled) {
+        ManagerRun::CliAbsent => {
+            println!();
+            println!("tapesctl: no `codex` CLI found; register the plugin yourself:");
+            for command in manager.manual_commands() {
+                println!("  {command}");
+            }
+        }
+        ManagerRun::Steps {
+            marketplace,
+            install,
+        } => {
+            println!(
+                "tapesctl: marketplace registration: {}",
+                marketplace.describe()
+            );
+            println!("tapesctl: plugin install: {}", install.describe());
+            if let InstallOutcome::RemovedNotReinstalled { .. } = &install {
+                println!(
+                    "tapesctl: the previous copy was removed but re-adding it failed; \
+                     the plugin is currently NOT installed"
+                );
+                println!("tapesctl: restore it with: {}", manager.install_command());
+            }
+            if marketplace.failed() || install.needs_manual_retry() {
+                println!("tapesctl: retry manually:");
+                for command in manager.manual_commands() {
+                    println!("  {command}");
+                }
+            }
+        }
+    }
 }
 
 /// Run one `plugin uninstall` for a lifecycle-hook harness.
@@ -368,7 +411,8 @@ pub fn uninstall_at(args: &PluginUninstallArgs, home: &Path, config_path: PathBu
         println!("tapesctl: would remove {}", state.display());
         println!(
             "tapesctl: would leave the plugin registered with Codex; remove it with \
-             `codex plugin remove {PLUGIN_NAME}@{MARKETPLACE_NAME}`",
+             `codex plugin remove {}`",
+            manager::plugin_spec(PLUGIN_NAME, MARKETPLACE_NAME),
         );
         return Ok(());
     }
@@ -399,7 +443,8 @@ pub fn uninstall_at(args: &PluginUninstallArgs, home: &Path, config_path: PathBu
     info!(harness = harness.id(), "codex-app capture uninstalled");
     println!(
         "tapesctl: the plugin is still registered with Codex — remove it with \
-         `codex plugin remove {PLUGIN_NAME}@{MARKETPLACE_NAME}`",
+         `codex plugin remove {}`",
+        manager::plugin_spec(PLUGIN_NAME, MARKETPLACE_NAME),
     );
     Ok(())
 }
@@ -683,16 +728,27 @@ fn report_plan(plan: &Plan) {
         plan.proxy_addr,
     );
     println!("tapesctl: each hook would run {}", plan.hook_command);
+    println!("tapesctl: would then register it with the codex CLI when available:");
+    for command in plan.manager().manual_commands() {
+        println!("  {command}");
+    }
 }
 
+/// The two steps Codex gates on the human, and the command that starts
+/// capturing. Registration is done by the time this prints; enabling the
+/// plugin and trusting its hooks are decisions the app deliberately refuses to
+/// let any installer make.
 fn report_next_steps(plan: &Plan, harness_id: &str) {
     println!();
-    println!("Next, register the plugin with Codex and let it run the hooks:");
+    println!("Finish in the Codex app (tapesctl cannot automate these):");
     println!(
-        "  codex plugin marketplace add {}",
-        plan.marketplace_root().display()
+        "  1. Enable the {} plugin in the app's Installed list.",
+        plan.plugin_spec()
     );
-    println!("  codex plugin add {}", plan.plugin_spec());
+    println!(
+        "  2. Run /hooks and trust its hooks. Trust binds to the exact \
+         hook-definition hash, so a reinstall requires trusting again."
+    );
     println!();
     println!("Then capture:");
     println!("  tapesctl capture {harness_id} --tapes-url <url>");
@@ -1142,14 +1198,63 @@ mod tests {
         assert!(err.contains("codex-app"), "got: {err}");
     }
 
+    /// The wrapper carries this client's names, and the source path it
+    /// advertises is where the packaged files actually landed. The manifest is
+    /// the crate's shape; what this asserts is that the two names threaded
+    /// into it are the ones the rest of the installer uses, so the offer Codex
+    /// reads resolves to a directory that exists.
     #[test]
-    fn the_marketplace_manifest_points_at_the_packaged_plugin() {
-        let parsed: serde_json::Value = serde_json::from_str(&marketplace_manifest()).unwrap();
+    fn the_marketplace_offer_resolves_to_the_written_plugin() {
+        let home = tempfile::tempdir().unwrap();
+        let plan = a_plan(home.path());
+        for (relative, contents) in plugin_files(&plan.hook_command) {
+            write_private(
+                &plan.plugin_root.join(relative),
+                contents.as_bytes(),
+                home.path(),
+            )
+            .unwrap();
+        }
+
+        let manifest =
+            std::fs::read_to_string(plan.plugin_root.join(manager::MARKETPLACE_MANIFEST_PATH))
+                .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&manifest).unwrap();
         assert_eq!(parsed["name"], MARKETPLACE_NAME);
         assert_eq!(parsed["plugins"][0]["name"], PLUGIN_NAME);
+
+        let offered = parsed["plugins"][0]["source"]["path"].as_str().unwrap();
+        let offered = plan.plugin_root.join(offered.trim_start_matches("./"));
+        assert!(offered.is_dir(), "{} is not a directory", offered.display());
+        assert!(
+            offered.join(".codex-plugin").join("plugin.json").is_file(),
+            "the offered source holds no plugin manifest"
+        );
         assert_eq!(
-            parsed["plugins"][0]["source"]["path"],
-            format!("./plugins/{PLUGIN_NAME}"),
+            plan.plugin_spec(),
+            format!("{PLUGIN_NAME}@{MARKETPLACE_NAME}")
+        );
+    }
+
+    /// The manager the installer hands the tree to names that same tree and
+    /// that same spec — the two commands a user would be told to run when
+    /// there is no CLI to run them with.
+    #[test]
+    fn the_manager_is_pointed_at_the_packaged_tree() {
+        let home = tempfile::tempdir().unwrap();
+        let plan = a_plan(home.path());
+        let manager = plan.manager();
+
+        assert_eq!(manager.marketplace_root(), plan.plugin_root);
+        assert_eq!(
+            manager.manual_commands(),
+            [
+                format!(
+                    "codex plugin marketplace add {}",
+                    plan.plugin_root.display()
+                ),
+                format!("codex plugin add {}", plan.plugin_spec()),
+            ]
         );
     }
 }

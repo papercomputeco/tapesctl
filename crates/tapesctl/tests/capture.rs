@@ -408,12 +408,20 @@ async fn the_private_marker_header_never_travels_upstream() {
         seen.headers.get("x-tapesctl-codex-attribution").is_none(),
         "the marker is this client's private channel to its own proxy",
     );
-    // Carrying a marker puts the request on the Codex lane, and an
-    // unresolvable Codex session emits no envelope rather than asserting an
-    // identity the pipeline declined to assert.
+    // Carrying a marker puts the request on the Codex lane. An unresolvable
+    // session no longer suppresses the envelope: a Codex request is
+    // self-describing, so the turn is stamped with what IS known — that it is
+    // codex — and left without a session id, which is what lets a later
+    // repair pass find it. Asserting a session id absent is the half that
+    // matters: a miss must never invent one.
+    assert_eq!(
+        seen.headers.get("x-tapes-harness-id").unwrap(),
+        "codex",
+        "a codex turn is known to be codex even when its session is not",
+    );
     assert!(
-        seen.headers.get("x-tapes-harness-id").is_none(),
-        "an undecided codex turn must not be stamped with a harness id",
+        seen.headers.get("x-tapes-harness-session-id").is_none(),
+        "an unresolved codex turn must not assert a session id",
     );
 }
 

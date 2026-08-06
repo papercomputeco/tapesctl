@@ -210,6 +210,14 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
                 .iter()
                 .find_map(|name| parts.headers.get(*name).and_then(|v| v.to_str().ok()))
                 .filter(|value| !value.trim().is_empty()),
+            // Both `None` is the crate's documented no-evidence reading, and
+            // it is the behaviour this lane already had: the identity-driven
+            // rungs stand down and the rollout id above remains the only
+            // per-request evidence. Supplying either one is a change to how
+            // sessions are attributed, not to how a plugin is installed, so it
+            // belongs to the codex-parity work rather than here.
+            codex_identity: None,
+            codex_hook_evidence: None,
         },
     )
     .await;
