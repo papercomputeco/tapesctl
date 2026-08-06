@@ -42,6 +42,10 @@
                 # revision's tree, and are expected to be equal. A future diff
                 # where they differ means the two pins have drifted apart again.
                 #
+                # TEMPORARY-PIN: these hash an unmerged tapes-harnesses branch
+                # head; re-point both with Cargo.toml's two revs at merged main
+                # before this branch merges.
+                #
                 # Recompute when the pins in Cargo.toml re-point to the
                 # merged main revision:
                 #   nix shell nixpkgs#nix-prefetch-git -c nix-prefetch-git \
@@ -49,8 +53,8 @@
                 # `nix build` fails on a stale value even though the cargo-native
                 # targets never notice, which is how two earlier pin bumps landed
                 # without a recompute.
-                "tapes-harnesses-0.1.0" = "sha256-RQ1Lzf9j+4V2tiDpRJDcHH5jLiPr1wkbE6O1C6ehcwE=";
-                "tapes-cassette-client-0.1.0" = "sha256-RQ1Lzf9j+4V2tiDpRJDcHH5jLiPr1wkbE6O1C6ehcwE=";
+                "tapes-harnesses-0.1.0" = "sha256-MP6d5vldDhkL9gUwZESCkG/VBDdOF42zfAG9JfS2GQo=";
+                "tapes-cassette-client-0.1.0" = "sha256-MP6d5vldDhkL9gUwZESCkG/VBDdOF42zfAG9JfS2GQo=";
               };
             };
             cargoBuildFlags = [ "-p" "tapesctl" ];

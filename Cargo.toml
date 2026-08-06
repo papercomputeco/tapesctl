@@ -34,7 +34,12 @@ repository = "https://github.com/papercomputeco/tapesctl"
 # had a concrete cost here: the peer-socket rescan fix (harnesses #13) was in the
 # newer rev only, so tapesctl's proxy still failed closed on a first-scan miss
 # and the capture suite flaked under parallel load. Keep them equal.
-tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "73b555339dd8416360db377ef7fa37a1106dbc0f" }
+#
+# TEMPORARY-PIN: this rev is an unmerged tapes-harnesses branch head
+# (jason/pcc-1121-codex-anchors). Re-point both pins here and both
+# `outputHashes` in flake.nix at merged tapes-harnesses main before this branch
+# merges — keeping all four in step.
+tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "b8c3c7f470f7e17428747079c16aba821c5edf2a" }
 
 # The generated cassette-surface machinery (discovery decode, OpenAPI
 # reduction, the on-disk surface cache, clap command synthesis, and the
@@ -42,7 +47,7 @@ tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", r
 # repository since the PCC-1104 split, so every capture client generates the
 # same surface the same way. Pinned by revision like the crate above — and at
 # the same rev as it, for the reasons given there.
-tapes-cassette-client = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "73b555339dd8416360db377ef7fa37a1106dbc0f" }
+tapes-cassette-client = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "b8c3c7f470f7e17428747079c16aba821c5edf2a" }
 
 # --- CLI ---
 # `string` lets a Command/Arg be named by an owned String rather than only by a
