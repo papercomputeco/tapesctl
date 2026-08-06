@@ -896,21 +896,19 @@ mod tests {
         std::fs::write(&config, "model = \"gpt-5-codex\"\n").unwrap();
 
         let restore = ConfigRestore::capture(&config).unwrap();
-        // Deny writes to the directory, so replacing the file (written to a
-        // sibling temp path and renamed) cannot succeed.
-        let mut perms = std::fs::metadata(&dir).unwrap().permissions();
-        perms.set_readonly(true);
-        std::fs::set_permissions(&dir, perms).unwrap();
+
+        // Replace the captured file with a directory. Restoring renames a
+        // temporary file over that path, which cannot succeed against a
+        // directory — a rule of the filesystem rather than of permissions,
+        // so it holds for root too. Denying writes to the parent instead
+        // would prove nothing under CI, which runs as root and is not
+        // subject to the permission bits at all.
+        std::fs::remove_file(&config).unwrap();
+        std::fs::create_dir(&config).unwrap();
 
         let left = restore.rollback().expect_err("the rollback cannot succeed");
 
         assert_eq!(left, config);
-
-        // Leave the directory writable so the tempdir can be cleaned up.
-        let mut perms = std::fs::metadata(&dir).unwrap().permissions();
-        #[allow(clippy::permissions_set_readonly_false)]
-        perms.set_readonly(false);
-        std::fs::set_permissions(&dir, perms).unwrap();
     }
 
     /// The message a user is left with has to name both the file and the way
