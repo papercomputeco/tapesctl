@@ -91,16 +91,28 @@ pub struct Plan {
     pub handoff_path: PathBuf,
     /// The command line each hook runs, already shell-quoted.
     pub hook_command: String,
+    /// The `codex` binary the plugin manager is driven through.
+    ///
+    /// Bare by default, so the user's `PATH` resolves the same binary they
+    /// would have run themselves. It is a field rather than a literal for the
+    /// reason `config_path` is a parameter of [`run_at`]: a test that cannot
+    /// substitute it can only assert what the installer *would* do, and the
+    /// one thing worth asserting here — that registration happens after the
+    /// config and the handoff are both in place — is visible only to the
+    /// program being run.
+    pub codex_program: PathBuf,
 }
 
 impl Plan {
     /// The plugin manager over this plan's packaged tree.
-    ///
-    /// `codex` is named bare so the user's `PATH` resolves it — the same
-    /// binary they would have run themselves.
     #[must_use]
     pub fn manager(&self) -> PluginManager {
-        PluginManager::new("codex", &self.plugin_root, MARKETPLACE_NAME, PLUGIN_NAME)
+        PluginManager::new(
+            &self.codex_program,
+            &self.plugin_root,
+            MARKETPLACE_NAME,
+            PLUGIN_NAME,
+        )
     }
 
     /// The `<plugin>@<marketplace>` spec `codex plugin add` takes.
@@ -135,6 +147,7 @@ pub fn plan(
         plugin_root: plugin_root(home),
         hook_command: hook_command(executable, &handoff_path, harness_id),
         handoff_path,
+        codex_program: PathBuf::from("codex"),
     })
 }
 
@@ -221,10 +234,25 @@ pub fn run(args: &PluginInstallArgs, home: &Path) -> Result<()> {
 /// test that called the resolver would patch the developer's own Codex
 /// configuration on any machine where that variable happens to be set.
 pub fn run_at(args: &PluginInstallArgs, home: &Path, config_path: PathBuf) -> Result<()> {
+    run_with(args, home, config_path, PathBuf::from("codex"))
+}
+
+/// The body of [`run_at`], against an explicit `codex` binary.
+///
+/// Split for the reason the config path is: driving the plugin manager means
+/// running a program, and a test that had to find that program on `PATH` would
+/// be mutating process-global state shared with every other test in the
+/// binary.
+pub fn run_with(
+    args: &PluginInstallArgs,
+    home: &Path,
+    config_path: PathBuf,
+    codex_program: PathBuf,
+) -> Result<()> {
     let harness = super::resolve_hook_harness(&args.harness)?;
     let auth = resolve_auth(args.codex_auth.as_deref())?;
     let executable = std::env::current_exe().context(error::CurrentExeSnafu)?;
-    let plan = plan(
+    let mut plan = plan(
         home,
         config_path,
         args.port,
@@ -232,6 +260,7 @@ pub fn run_at(args: &PluginInstallArgs, home: &Path, config_path: PathBuf) -> Re
         &executable,
         harness.id(),
     )?;
+    plan.codex_program = codex_program;
 
     if args.dry_run {
         report_plan(&plan);
@@ -1267,6 +1296,72 @@ mod tests {
         assert_eq!(
             plan.plugin_spec(),
             format!("{PLUGIN_NAME}@{MARKETPLACE_NAME}")
+        );
+    }
+
+    /// Registration runs only once the config and the handoff are both in
+    /// place.
+    ///
+    /// Registering copies the plugin into Codex's cache, after which its hooks
+    /// can fire at any moment — and a hook that fires before the handoff exists
+    /// has no address to report to and no secret to prove itself with. The
+    /// ordering is therefore a property of the install, not a stylistic
+    /// choice, so it is asserted from where it is actually visible: inside the
+    /// `codex` process the installer runs, which records what was on disk at
+    /// the moment it was invoked.
+    #[cfg(unix)]
+    #[test]
+    fn registration_happens_only_after_the_config_and_handoff_are_written() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = tempfile::tempdir().unwrap();
+        let config = config_path(home.path());
+        let handoff = Handoff::path(home.path());
+        let observed = home.path().join("observed.log");
+        let shim = home.path().join("codex-shim");
+        std::fs::write(
+            &shim,
+            format!(
+                "#!/bin/sh\n\
+                 [ -f '{config}' ] && echo CONFIG >> '{observed}'\n\
+                 [ -f '{handoff}' ] && echo HANDOFF >> '{observed}'\n\
+                 echo \"$@\" >> '{observed}'\n\
+                 exit 0\n",
+                config = config.display(),
+                handoff = handoff.display(),
+                observed = observed.display(),
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        run_with(&install_args(false), home.path(), config.clone(), shim).unwrap();
+
+        let lines: Vec<String> = std::fs::read_to_string(&observed)
+            .expect("the installer never ran codex at all")
+            .lines()
+            .map(str::to_owned)
+            .collect();
+
+        // The first invocation is the marketplace registration, and by then
+        // both files the hooks depend on must already exist. Asserting the
+        // whole prefix rather than membership is what makes an install that
+        // registered first fail here.
+        assert_eq!(
+            &lines[..3],
+            &[
+                "CONFIG".to_owned(),
+                "HANDOFF".to_owned(),
+                format!(
+                    "plugin marketplace add {}",
+                    plugin_root(home.path()).display()
+                ),
+            ],
+            "got: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.starts_with("plugin add")),
+            "the install never reached `codex plugin add`: {lines:?}"
         );
     }
 
