@@ -118,6 +118,14 @@ pub enum Command {
     /// Launch a harness under a just-in-time capture proxy.
     Start(StartArgs),
 
+    /// Capture a harness that launches itself, such as the Codex desktop app.
+    ///
+    /// `start` owns the harness process; this does not. The proxy binds the
+    /// address the harness was *installed* against and serves until
+    /// interrupted, so an app the user starts from the dock is captured for
+    /// whichever of its sessions run in that window.
+    Capture(CaptureArgs),
+
     /// Sweep completed harness transcripts into the tapes ingest server.
     ///
     /// The live tailer that runs during `start` is the primary path; this is the
@@ -231,6 +239,41 @@ pub struct StartArgs {
     /// the case where another capture client is already tailing the same tree.
     #[arg(long)]
     pub no_transcripts: bool,
+}
+
+/// Arguments for `tapesctl capture`.
+///
+/// Deliberately a subset of [`StartArgs`]. There is no `--schema` — a harness
+/// nobody launches speaks whatever its own config says — and no
+/// `--no-transcripts`, because the only harness on this surface writes Codex
+/// rollouts, which the transcript lane does not walk.
+#[derive(Debug, Args)]
+pub struct CaptureArgs {
+    /// The harness to capture (today: `codex-app`).
+    pub harness: String,
+
+    /// Base URL of the tapes ingest server. Falls back to `TAPES_URL`.
+    #[arg(long, env = "TAPES_URL")]
+    pub tapes_url: Option<String>,
+
+    /// Where to forward the harness's LLM traffic. Defaults to the backend
+    /// that honours the credential the harness was configured with.
+    #[arg(long, env = "TAPES_UPSTREAM")]
+    pub upstream: Option<String>,
+
+    /// Base URL of the web console, used to print links to captured sessions.
+    #[arg(long, env = "TAPES_WEB_URL")]
+    pub web_url: Option<String>,
+
+    /// Org id to stamp on captured turns. Must be a UUID; empty (the default)
+    /// selects the server's local sentinel org.
+    #[arg(long, env = "TAPES_ORG_ID")]
+    pub org_id: Option<String>,
+
+    /// Acting subject to stamp on captured turns. Defaults to
+    /// `local:<username>`.
+    #[arg(long, env = "TAPES_AUTH_SUBJECT")]
+    pub auth_subject: Option<String>,
 }
 
 /// Arguments for `tapesctl sync`.
@@ -815,6 +858,82 @@ mod tests {
                 assert_eq!(args.query, "gum glow charm");
                 assert_eq!(args.top, 5, "the Go default is 5");
                 assert!(!args.quiet);
+            }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn capture_names_a_harness_it_does_not_launch_and_takes_no_trailing_args() {
+        // There is no child process, so there is nothing for `--` to pass
+        // through to — unlike `start`, whose trailing args are the harness's.
+        let cli = parse(&[
+            "tapesctl",
+            "capture",
+            "codex-app",
+            "--tapes-url",
+            "http://x",
+        ]);
+        match cli.command {
+            Some(Command::Capture(args)) => {
+                assert_eq!(args.harness, "codex-app");
+                assert_eq!(args.tapes_url.as_deref(), Some("http://x"));
+            }
+            other => panic!("got: {other:?}"),
+        }
+        assert!(
+            Cli::try_parse_from(["tapesctl", "capture", "codex-app", "--", "-p", "hi"]).is_err(),
+        );
+    }
+
+    /// A capture keeps the terminal for its whole run — nothing is handed a
+    /// TUI — so its diagnostics belong on the terminal rather than in a file.
+    #[test]
+    fn capture_does_not_hand_over_the_terminal() {
+        let cli = parse(&[
+            "tapesctl",
+            "capture",
+            "codex-app",
+            "--tapes-url",
+            "http://x",
+        ]);
+        assert!(!cli.command.unwrap().hands_over_terminal());
+    }
+
+    #[test]
+    fn a_hook_invocation_names_its_harness_and_its_handoff() {
+        // The installer writes this command line; a person never types it.
+        let cli = parse(&[
+            "tapesctl",
+            "plugin",
+            "hook",
+            "codex-app",
+            "--handoff",
+            "/home/someone/.tapes/codex-app/handoff.json",
+        ]);
+        match cli.command {
+            Some(Command::Plugin(PluginCommand::Hook(args))) => {
+                assert_eq!(args.harness, "codex-app");
+                assert_eq!(
+                    args.handoff,
+                    PathBuf::from("/home/someone/.tapes/codex-app/handoff.json"),
+                );
+            }
+            other => panic!("got: {other:?}"),
+        }
+        assert!(
+            Cli::try_parse_from(["tapesctl", "plugin", "hook", "codex-app"]).is_err(),
+            "--handoff is required: without it a hook has nowhere to report",
+        );
+    }
+
+    #[test]
+    fn plugin_uninstall_mirrors_install() {
+        let cli = parse(&["tapesctl", "plugin", "uninstall", "codex-app", "--dry-run"]);
+        match cli.command {
+            Some(Command::Plugin(PluginCommand::Uninstall(args))) => {
+                assert_eq!(args.harness, "codex-app");
+                assert!(args.dry_run);
             }
             other => panic!("got: {other:?}"),
         }

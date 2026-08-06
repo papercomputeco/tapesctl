@@ -416,19 +416,30 @@ fn provider_patch(plan: &Plan) -> codex_config::CodexProviderPatch {
         plan.auth,
     );
     match plan.auth {
-        // Codex appends `/responses` to `base_url`. OpenAI's route is
-        // `/v1/responses`, so an API-key endpoint has to end at the `/v1`
-        // segment; the ChatGPT backend has no `/v1` component at all. Same
-        // split `Harness::endpoint_for` makes for `start codex`.
         CodexAuth::ApiKey => patch.with_env_key_instructions(ENV_KEY_INSTRUCTIONS),
         CodexAuth::ChatGpt => patch,
     }
 }
 
 fn base_url(plan: &Plan) -> String {
-    match plan.auth {
-        CodexAuth::ChatGpt => format!("http://{}", plan.proxy_addr),
-        CodexAuth::ApiKey => format!("http://{}/v1", plan.proxy_addr),
+    expected_base_url(plan.proxy_addr, plan.auth)
+}
+
+/// The `base_url` a provider patched for `addr` under `auth` carries.
+///
+/// Shared with the capture side, which reads the value back to check that the
+/// app is still pointed here: two spellings of this rule would let a capture
+/// declare a config healthy that the installer would rewrite.
+///
+/// Codex appends `/responses` to whatever it is given. OpenAI's route is
+/// `/v1/responses`, so an API-key endpoint has to end at the `/v1` segment;
+/// the ChatGPT backend has no `/v1` component at all. Same split
+/// `Harness::endpoint_for` makes for `start codex`.
+#[must_use]
+pub fn expected_base_url(addr: SocketAddr, auth: CodexAuth) -> String {
+    match auth {
+        CodexAuth::ChatGpt => format!("http://{addr}"),
+        CodexAuth::ApiKey => format!("http://{addr}/v1"),
     }
 }
 

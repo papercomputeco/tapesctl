@@ -626,6 +626,39 @@ pub enum Error {
         source: serde_json::Error,
     },
 
+    /// The harness's own config does not declare this installation's provider,
+    /// so a capture would bind an address it never talks to.
+    #[snafu(display(
+        "{} declares no {provider_id:?} provider, so the Codex app is not routed \
+         through tapesctl: run `tapesctl plugin install codex-app`",
+        path.display()
+    ))]
+    CodexAppNotConfigured {
+        /// The config that was checked.
+        path: PathBuf,
+        /// The provider that should have been there.
+        provider_id: String,
+    },
+
+    /// The harness's config points at a different address than the handoff.
+    ///
+    /// Refused rather than warned: a capture bound to the handoff's address
+    /// while the app talks to another would run perfectly and record nothing,
+    /// which is the one failure a user cannot diagnose from the outside.
+    #[snafu(display(
+        "{} routes the Codex app to {found:?}, not {expected:?}: \
+         run `tapesctl plugin install codex-app` to bring the two back together",
+        path.display()
+    ))]
+    CodexAppConfigDrift {
+        /// The config that was checked.
+        path: PathBuf,
+        /// What this handoff's address implies.
+        expected: String,
+        /// What the config actually says.
+        found: String,
+    },
+
     /// Codex's `config.toml` could not be read.
     #[snafu(display("could not read the codex config at {}", path.display()))]
     CodexConfigRead {

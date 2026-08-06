@@ -2,6 +2,7 @@
 //! dispatch is unit-testable without spawning the binary.
 
 pub mod api;
+pub mod capture;
 pub mod cassette;
 pub mod cli;
 pub mod codex_app;
@@ -144,6 +145,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Some(Command::Start(args)) => start(args).await,
+        Some(Command::Capture(args)) => capture::run(args).await,
         Some(Command::Sync(args)) => transcript::sync::run(args).await,
         Some(Command::Sessions(command)) => api::sessions(command).await,
         Some(Command::Traces(command)) => api::traces(command).await,
