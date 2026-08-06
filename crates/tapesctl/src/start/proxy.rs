@@ -126,6 +126,15 @@ pub struct ProxyState {
     /// Notified with the harness session id the first time one resolves, so the
     /// caller can print a session URL.
     pub session_seen: Arc<tokio::sync::Mutex<Option<UnboundedSender<String>>>>,
+    /// Desktop sessions an authenticated lifecycle report introduced, when
+    /// this proxy is capturing a harness attributed that way.
+    ///
+    /// `None` on every `start` proxy: a launched harness names its session
+    /// through the pipeline or through its own envelope, and a registry here
+    /// would be a third answer nothing populates. `Some` only under
+    /// `tapesctl capture`, which is also the only command that serves the
+    /// route that fills it.
+    pub desktop_sessions: Option<Arc<crate::codex_app::lifecycle::DesktopSessions>>,
     /// Sessions whose transcripts this process is responsible for.
     ///
     /// An attributed request is the proof that a session's traffic flows
@@ -212,15 +221,35 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
         state.transcript_tracker.observe(session);
     }
 
-    // Whose account of the session wins. For a redirected harness there is only
-    // one — the pipeline's. For a self-attributing harness the request carries an
-    // envelope stamped inside the harness, and that is strictly better evidence:
-    // the peer-PID path cannot see into an extension, so the pipeline's answer
-    // for those requests is always `unknown`. Taking the inbound envelope here is
-    // the ingest-side counterpart of what `stamp` already does header-side, and
-    // without it a pi session would be captured and then filed under nothing.
-    let envelope_attribution =
-        trusted_inbound_envelope(&state, peer, &parts.headers).or_else(|| attributed.envelope());
+    // Whose account of the session wins. Three lanes can name one, and at
+    // most one of them is live on any given proxy.
+    //
+    // For a redirected harness there is only the pipeline's. For a
+    // self-attributing harness the request carries an envelope stamped inside
+    // the harness, which is strictly better evidence: the peer-PID path cannot
+    // see into an extension, so the pipeline's answer for those requests is
+    // always `unknown`. For a harness attributed by lifecycle hooks there is
+    // no launched process to anchor on at all, and the answer comes from the
+    // registry an authenticated report filled.
+    let desktop = desktop_envelope(&state, &parts.headers);
+    let from_desktop = desktop.is_some();
+    let envelope_attribution = desktop
+        .or_else(|| trusted_inbound_envelope(&state, peer, &parts.headers))
+        .or_else(|| attributed.envelope())
+        // A desktop capture serves one app, so every request reaching it is
+        // that app's — and the pipeline has no lane for a harness this process
+        // did not launch, so its answer here is legitimately "no envelope".
+        // Left at that, the turn would be posted with no session block at all,
+        // which reads downstream as a turn nobody asked about rather than one
+        // nothing could attribute. `unknown` is what makes an unattributed
+        // desktop turn countable, and counting them is how a broken install
+        // gets noticed at all.
+        .or_else(|| {
+            state
+                .desktop_sessions
+                .is_some()
+                .then(envelope::TapesAttribution::unknown)
+        });
     let session = envelope_attribution
         .as_ref()
         .map(|a| SessionEnvelope::from_attribution(a, &state.org_id, &state.auth_subject));
@@ -235,10 +264,19 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
     //
     // `stamp` rather than injecting the value above: it also honours the rule
     // that a harness which stamped its own complete envelope keeps it, which a
-    // hand-rolled inject would silently overwrite.
-    attributed
-        .stamp(&mut out_headers)
-        .context(error::EnvelopeSnafu)?;
+    // hand-rolled inject would silently overwrite. The desktop lane is the one
+    // case `stamp` cannot express — the pipeline has no lane for a harness
+    // this process did not launch, so it would write `unknown` over the
+    // identity the turn is about to be filed under.
+    match (from_desktop, envelope_attribution) {
+        (true, Some(attribution)) => {
+            envelope::inject_tapes_attribution(&mut out_headers, attribution)
+                .context(error::EnvelopeSnafu)?;
+        }
+        _ => attributed
+            .stamp(&mut out_headers)
+            .context(error::EnvelopeSnafu)?,
+    }
     if let Some(session_id) = session_id.as_deref() {
         announce_session(&state, session_id).await;
     }
@@ -301,6 +339,33 @@ async fn announce_session(state: &ProxyState, session_id: &str) {
     if let Some(tx) = slot.take() {
         let _ = tx.send(session_id.to_owned());
     }
+}
+
+/// The session a lifecycle-hook harness's request belongs to, if any.
+///
+/// `None` on every proxy that is not capturing such a harness, and `None` for
+/// a request whose identities no authenticated report introduced — which is
+/// the fail-closed rule for this lane stated in one place. There is no
+/// fallback: a Codex desktop request naming a session nobody reported is filed
+/// as `unknown`, never as the session that happens to be the only one known.
+///
+/// Note what is *not* consulted: the peer. A harness this process did not
+/// launch has no PID to compare against, so the ancestry half of the
+/// `start`-side trust pair simply does not exist here. Its job is done earlier
+/// and elsewhere — by the secret that had to be presented before any of these
+/// identities could enter the registry at all. See
+/// [`crate::codex_app::lifecycle`] for what that does and does not buy.
+fn desktop_envelope(state: &ProxyState, headers: &HeaderMap) -> Option<envelope::TapesAttribution> {
+    let sessions = state.desktop_sessions.as_ref()?;
+    let identities = crate::codex_app::lifecycle::request_identities(headers);
+    let resolved = sessions.resolve(identities.iter().copied());
+    if resolved.is_none() && !identities.is_empty() {
+        debug!(
+            "a request named a Codex session no lifecycle report introduced; \
+             filing the turn as unattributed",
+        );
+    }
+    Some(resolved?.envelope())
 }
 
 /// The inbound envelope, if this request is entitled to supply one.

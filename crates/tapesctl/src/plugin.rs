@@ -30,11 +30,11 @@
 use std::path::{Path, PathBuf};
 
 use snafu::{OptionExt, ResultExt};
-use tapes_harnesses::harness::{self, Harness};
+use tapes_harnesses::harness::{self, Harness, PluginDelivery};
 use tapes_harnesses::plugin::{GATEWAY_URL_ENV, PluginArtifact};
 use tracing::info;
 
-use crate::cli::PluginInstallArgs;
+use crate::cli::{PluginInstallArgs, PluginUninstallArgs};
 use crate::error::{Result, error};
 
 /// Resolve a user-typed harness name against the shared registry.
@@ -186,6 +186,35 @@ pub fn run(args: PluginInstallArgs) -> Result<()> {
 /// destructive.
 fn run_in(args: &PluginInstallArgs, home: &Path) -> Result<()> {
     let harness = resolve(&args.harness)?;
+
+    // A harness whose plugin is a set of manifest *templates* is not installed
+    // by copying anything: the manifests have to be rendered around this
+    // client's identity and hook command, the harness's own config has to be
+    // pointed at a durable address, and the two have to be reconciled through a
+    // handoff. That is a different enough shape to be its own module — and it
+    // has to be checked before the artifact list, because templates
+    // deliberately yield no artifacts and would otherwise read as "needs no
+    // plugin".
+    if matches!(harness.plugin(), PluginDelivery::HookManifestTemplates(_)) {
+        return crate::codex_app::install::run(args, home);
+    }
+    // The flags that shape that install describe a durable endpoint and a
+    // credential mode, neither of which a copied artifact has.
+    if args.port.is_some() {
+        return error::PluginFlagNotApplicableSnafu {
+            flag: "--port",
+            harness: harness.id(),
+        }
+        .fail();
+    }
+    if args.codex_auth.is_some() {
+        return error::PluginFlagNotApplicableSnafu {
+            flag: "--codex-auth",
+            harness: harness.id(),
+        }
+        .fail();
+    }
+
     let artifacts = harness.plugin_artifacts();
 
     // Not an error. "This harness needs no plugin" is the ordinary answer —
@@ -232,6 +261,56 @@ fn run_in(args: &PluginInstallArgs, home: &Path) -> Result<()> {
         },
         harness.id(),
     );
+    Ok(())
+}
+
+/// Run one `plugin uninstall`.
+pub fn uninstall(args: PluginUninstallArgs) -> Result<()> {
+    let home = dirs::home_dir().context(error::NoHomeDirSnafu)?;
+    uninstall_in(&args, &home)
+}
+
+/// The body of [`uninstall`], against an explicit home.
+///
+/// Removal is the mirror of installation and inherits its asymmetry: a copied
+/// artifact is a file to delete, while a hook plugin also wrote configuration
+/// into a file the *harness* owns. Only the second can leave a machine broken
+/// if it is half-undone, which is why it has its own path.
+fn uninstall_in(args: &PluginUninstallArgs, home: &Path) -> Result<()> {
+    let harness = resolve(&args.harness)?;
+
+    if matches!(harness.plugin(), PluginDelivery::HookManifestTemplates(_)) {
+        return crate::codex_app::install::uninstall(args, home);
+    }
+
+    let artifacts = harness.plugin_artifacts();
+    if artifacts.is_empty() {
+        println!(
+            "tapesctl: {} has no capture plugin to remove — its traffic is \
+             captured by redirecting it.",
+            harness.id(),
+        );
+        return Ok(());
+    }
+
+    for artifact in artifacts {
+        let path = artifact.install_path(home);
+        if args.dry_run {
+            println!("tapesctl: would remove {}", path.display());
+            continue;
+        }
+        // `remove_file` rather than a look-then-delete: a link at the path is
+        // removed as the link it is, never followed to whatever it points at.
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                info!(harness = harness.id(), path = %path.display(), "plugin removed");
+                println!("tapesctl: removed {}", path.display());
+            }
+            // Absent is the requested end state, not a failure.
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err).context(error::PluginWriteSnafu { path }),
+        }
+    }
     Ok(())
 }
 
@@ -422,6 +501,8 @@ mod tests {
         let args = PluginInstallArgs {
             harness: "claude".to_owned(),
             dry_run: false,
+            port: None,
+            codex_auth: None,
         };
         run_in(&args, home.path()).unwrap();
         assert!(std::fs::read_dir(home.path()).unwrap().next().is_none());
@@ -433,6 +514,8 @@ mod tests {
         let args = PluginInstallArgs {
             harness: "pi".to_owned(),
             dry_run: true,
+            port: None,
+            codex_auth: None,
         };
         run_in(&args, home.path()).unwrap();
 
@@ -450,6 +533,8 @@ mod tests {
         let args = PluginInstallArgs {
             harness: "pi".to_owned(),
             dry_run: false,
+            port: None,
+            codex_auth: None,
         };
         run_in(&args, home.path()).unwrap();
         assert!(PI_GATEWAY_EXTENSION.install_path(home.path()).exists());

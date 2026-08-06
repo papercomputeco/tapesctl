@@ -506,6 +506,210 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    /// A `plugin install` flag that only shapes a hook-plugin install was
+    /// passed for a harness installed by copying files.
+    ///
+    /// Refused rather than ignored, for the same reason `--schema` is on
+    /// `start`: a flag that silently does nothing reads, from the outside,
+    /// exactly like a flag that worked.
+    #[snafu(display("{flag} does not apply to {harness}, whose capture plugin is a file copy"))]
+    PluginFlagNotApplicable {
+        /// The flag that was passed.
+        flag: &'static str,
+        /// The harness it was passed for.
+        harness: &'static str,
+    },
+
+    // --- the Codex desktop app ----------------------------------------------
+    /// A `plugin` subcommand that only applies to a harness captured through
+    /// lifecycle hooks was aimed at one that is not.
+    #[snafu(display(
+        "{harness} is not captured through lifecycle hooks (hook harnesses: {hook_harnesses})"
+    ))]
+    NotAHookHarness {
+        /// What the user asked for.
+        harness: &'static str,
+        /// The harnesses the registry declares hook-attributed.
+        hook_harnesses: String,
+    },
+
+    /// `--codex-auth` named a credential mode codex does not have.
+    #[snafu(display("invalid --codex-auth {value:?} (valid values: chatgpt, api-key)"))]
+    InvalidCodexAuth {
+        /// What the user asked for.
+        value: String,
+    },
+
+    /// This binary's own path could not be resolved, so no hook command line
+    /// can be written. Fatal rather than falling back to the bare name: a hook
+    /// runs under the desktop app's `PATH`, which generally cannot find it.
+    #[snafu(display("could not resolve this executable's path for the hook command"))]
+    CurrentExe {
+        /// Underlying IO failure.
+        source: std::io::Error,
+    },
+
+    /// The handoff file could not be read.
+    ///
+    /// Every handoff failure names the installer, because re-running it is the
+    /// only fix and it is non-destructive — a user should never have to reason
+    /// about which of these variants they hit.
+    #[snafu(display(
+        "could not read the codex-app handoff at {}: run `tapesctl plugin install codex-app`",
+        path.display()
+    ))]
+    CodexAppHandoffRead {
+        /// Where the read was attempted.
+        path: PathBuf,
+        /// Underlying IO failure.
+        source: std::io::Error,
+    },
+
+    /// The handoff file is not the document this build writes.
+    #[snafu(display(
+        "the codex-app handoff at {} is unreadable: run `tapesctl plugin install codex-app`",
+        path.display()
+    ))]
+    CodexAppHandoffParse {
+        /// Where the read was attempted.
+        path: PathBuf,
+        /// Underlying JSON failure.
+        source: serde_json::Error,
+    },
+
+    /// The handoff file was written by a different version of this schema.
+    #[snafu(display(
+        "the codex-app handoff at {} is version {found}, not {expected}: \
+         run `tapesctl plugin install codex-app`",
+        path.display()
+    ))]
+    CodexAppHandoffVersion {
+        /// Where the read was attempted.
+        path: PathBuf,
+        /// The version found.
+        found: u32,
+        /// The version this build writes.
+        expected: u32,
+    },
+
+    /// The handoff file describes some other harness.
+    #[snafu(display(
+        "the handoff at {} configures {found:?}, not codex-app: \
+         run `tapesctl plugin install codex-app`",
+        path.display()
+    ))]
+    CodexAppHandoffHarness {
+        /// Where the read was attempted.
+        path: PathBuf,
+        /// The harness the file names.
+        found: String,
+    },
+
+    /// The handoff carries no secret, so it can authenticate nothing.
+    #[snafu(display(
+        "the codex-app handoff at {} carries no secret, so no lifecycle report \
+         could be authenticated: run `tapesctl plugin install codex-app`",
+        path.display()
+    ))]
+    CodexAppHandoffSecret {
+        /// Where the read was attempted.
+        path: PathBuf,
+    },
+
+    /// The handoff document could not be rendered. Only reachable from a
+    /// serializer defect: every field is a plain string or a socket address.
+    #[snafu(display("could not render the codex-app handoff for {}", path.display()))]
+    CodexAppHandoffWrite {
+        /// Where the write was attempted.
+        path: PathBuf,
+        /// Underlying JSON failure.
+        source: serde_json::Error,
+    },
+
+    /// The harness's own config does not declare this installation's provider,
+    /// so a capture would bind an address it never talks to.
+    #[snafu(display(
+        "{} declares no {provider_id:?} provider, so the Codex app is not routed \
+         through tapesctl: run `tapesctl plugin install codex-app`",
+        path.display()
+    ))]
+    CodexAppNotConfigured {
+        /// The config that was checked.
+        path: PathBuf,
+        /// The provider that should have been there.
+        provider_id: String,
+    },
+
+    /// The harness's config points at a different address than the handoff.
+    ///
+    /// Refused rather than warned: a capture bound to the handoff's address
+    /// while the app talks to another would run perfectly and record nothing,
+    /// which is the one failure a user cannot diagnose from the outside.
+    #[snafu(display(
+        "{} routes the Codex app to {found:?}, not {expected:?}: \
+         run `tapesctl plugin install codex-app` to bring the two back together",
+        path.display()
+    ))]
+    CodexAppConfigDrift {
+        /// The config that was checked.
+        path: PathBuf,
+        /// What this handoff's address implies.
+        expected: String,
+        /// What the config actually says.
+        found: String,
+    },
+
+    /// Codex's `config.toml` could not be read.
+    #[snafu(display("could not read the codex config at {}", path.display()))]
+    CodexConfigRead {
+        /// Where the read was attempted.
+        path: PathBuf,
+        /// Underlying IO failure.
+        source: std::io::Error,
+    },
+
+    /// An install failed, and putting `config.toml` back failed too.
+    ///
+    /// Distinct from the failure that started it because the machine is now in
+    /// a state neither error describes: the config names a capture address
+    /// whose secret was never written, so the app will dial a port nothing is
+    /// serving. The original cause is recoverable by retrying; this is not
+    /// self-evident from it, which is why it replaces rather than nests it.
+    #[snafu(display(
+        "the install failed and {} could not be put back: it now names a capture \
+         address that was never activated, so run `tapesctl plugin install \
+         codex-app` to complete it (the install failed because: {cause})",
+        path.display(),
+    ))]
+    CodexAppInstallNotRolledBack {
+        /// The config left naming the new address.
+        path: PathBuf,
+        /// What the install failed with before the rollback was attempted.
+        cause: String,
+    },
+
+    /// Codex's `config.toml` could not be written.
+    #[snafu(display("could not write the codex config at {}", path.display()))]
+    CodexConfigWrite {
+        /// Where the write was attempted.
+        path: PathBuf,
+        /// Underlying IO failure.
+        source: std::io::Error,
+    },
+
+    /// The provider patch could not be applied to `config.toml`.
+    ///
+    /// Surfaced rather than worked around: the grammar refuses a document it
+    /// cannot parse, and rewriting a config file whose contents were not
+    /// understood is how a user loses settings.
+    #[snafu(display("could not update the codex config at {}", path.display()))]
+    CodexConfig {
+        /// Which file was being patched.
+        path: PathBuf,
+        /// Underlying grammar failure.
+        source: tapes_harnesses::config::codex::CodexConfigError,
+    },
+
     /// The working directory could not be read, so a `--local` destination
     /// cannot be resolved.
     #[snafu(display("could not determine the working directory"))]
