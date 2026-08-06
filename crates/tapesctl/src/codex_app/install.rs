@@ -50,7 +50,7 @@ use tapes_harnesses::plugin::codex_app::manager::{
     self, InstallGoal, InstallOutcome, ManagerRun, MarketplaceIdentity, PluginManager,
 };
 use tapes_harnesses::plugin::codex_app::{
-    HookPluginIdentity, render_hooks_manifest, render_plugin_manifest,
+    HookPluginIdentity, render_hooks_manifest, render_plugin_manifest, shell_quote,
 };
 use tracing::info;
 
@@ -165,15 +165,6 @@ fn hook_command(executable: &Path, handoff: &Path, harness_id: &str) -> String {
         shell_quote(&executable.to_string_lossy()),
         shell_quote(&handoff.to_string_lossy()),
     )
-}
-
-/// `value` as a single POSIX shell word.
-///
-/// Single quotes suppress every expansion `/bin/sh` performs, so the only
-/// character needing care is the closing quote itself — spliced out, escaped,
-/// and spliced back in.
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', r"'\''"))
 }
 
 /// The identity Codex shows the user when asking them to trust these hooks.
@@ -350,6 +341,16 @@ fn register_with_codex(plan: &Plan) {
     // secret, so an existing copy of the plugin is always one that must be
     // replaced rather than one that can be believed.
     match manager.register(InstallGoal::Install, disabled) {
+        // Nothing was run: not the install, and not the marketplace
+        // registration either, which against a same-named source pointing
+        // elsewhere would have replaced someone else's registration to serve
+        // an install this run is not performing.
+        ManagerRun::SkippedDisabled => {
+            println!(
+                "tapesctl: left the plugin alone — {}",
+                manager::SKIPPED_DISABLED_REASON
+            );
+        }
         ManagerRun::CliAbsent => {
             println!();
             println!("tapesctl: no `codex` CLI found; register the plugin yourself:");
@@ -869,12 +870,45 @@ mod tests {
         assert!(!command.starts_with("tapesctl "), "got: {command}");
     }
 
+    /// Codex hands the command to a shell, so what matters is not how it is
+    /// spelled but what the shell makes of it: exactly five words, with the
+    /// executable and the handoff path intact however awkward the home. The
+    /// quoter itself is the crate's and is tested there; this pins the
+    /// composition around it.
+    #[cfg(unix)]
     #[test]
-    fn shell_quoting_closes_every_quote_it_opens() {
-        assert_eq!(shell_quote("plain"), "'plain'");
-        assert_eq!(shell_quote("two words"), "'two words'");
-        assert_eq!(shell_quote("$(rm -rf /)"), "'$(rm -rf /)'");
-        assert_eq!(shell_quote("it's"), r"'it'\''s'");
+    fn the_hook_command_reaches_the_shell_as_the_arguments_it_names() {
+        let executable = Path::new("/opt/tapes ctl/bin/tapesctl");
+        let handoff = Path::new("/home/o'brien/.tapes/$x/handoff.json");
+        let command = hook_command(executable, handoff, "codex-app");
+
+        let output = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("set -- {command}\nprintf '%s\\n' \"$@\""))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "the hook command is not parseable by /bin/sh: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let words: Vec<String> = String::from_utf8(output.stdout)
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+
+        assert_eq!(
+            words,
+            vec![
+                executable.display().to_string(),
+                "plugin".to_owned(),
+                "hook".to_owned(),
+                "codex-app".to_owned(),
+                "--handoff".to_owned(),
+                handoff.display().to_string(),
+            ]
+        );
     }
 
     /// The three artefacts have to agree, or a hook reports to an address no
