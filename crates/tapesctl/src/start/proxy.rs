@@ -56,7 +56,7 @@ use http_body_util::BodyDataStream;
 use serde_json::value::RawValue;
 use snafu::ResultExt;
 use tapes_harnesses::attribution::{
-    AttributionConfig, AttributionState, RequestFacts, attribute, peer_trust,
+    AttributionConfig, AttributionState, CodexRequestIdentity, RequestFacts, attribute, peer_trust,
 };
 use tapes_harnesses::envelope;
 use tapes_harnesses::plugin::{GATEWAY_NONCE_HEADER, nonce_matches};
@@ -190,6 +190,26 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
     // path can leak it, not even on a lane that never validates it.
     out_headers.remove(GATEWAY_NONCE_HEADER);
 
+    // What this Codex request says about its own identity — the root session
+    // it belongs to, the sub-thread it is, that thread's immediate parent —
+    // and the correlation id that joins the turn back to this decision.
+    //
+    // Withholding it does not merely stand the identity rungs down: a
+    // sub-thread's turn is keyed on whichever rollout the ladder resolved
+    // instead of on the ROOT the request names, so it files as a session of
+    // its own and the spawning session loses its subagent subtree. The ladder
+    // cannot recover from that later, because the child's rollout really is
+    // the rollout that turn was written to — nothing downstream contradicts
+    // it. Identity has to travel with the request or it is lost.
+    //
+    // Minted on the Codex lane only, and on exactly the condition the
+    // pipeline uses to take that lane, so no request is parsed for headers
+    // that will never be consulted.
+    let codex_identity = (state.codex_lane || marker.is_some()).then(|| {
+        CodexRequestIdentity::from_headers(&parts.headers)
+            .with_correlation_id(uuid::Uuid::new_v4().to_string())
+    });
+
     // Attribution comes from the shared crate, so a tapesctl turn and a paperd
     // turn resolve identity through the same code.
     let attributed = attribute(
@@ -205,20 +225,20 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
             codex_route: state.codex_lane,
             // The rollout the request itself names — the only evidence that
             // separates threads inside one Codex process. First present
-            // header wins, in the crate's declared order.
+            // header wins, in the crate's declared order. Superseded by the
+            // parsed identity above, which reads the same two headers and
+            // additionally withholds them from a request that contradicts
+            // itself; kept so the lane still has rollout evidence on the
+            // paths that pass no identity.
             codex_rollout_id: tapes_harnesses::attribution::codex::CODEX_ROLLOUT_ID_HEADERS
                 .iter()
                 .find_map(|name| parts.headers.get(*name).and_then(|v| v.to_str().ok()))
                 .filter(|value| !value.trim().is_empty()),
-            // Both stood down. The identity vocabulary supersedes
-            // `codex_rollout_id` and needs a per-request correlation id only
-            // the consumer can mint in a form its own records agree with, and
-            // hook evidence presupposes a lifecycle-hook lane this client does
-            // not have — `tapesctl start codex` launches the CLI rather than
-            // configuring the desktop app. `None` on both is the documented
-            // degradation: the identity-driven rungs stand down and the lane
-            // behaves exactly as it did before the vocabulary existed.
-            codex_identity: None,
+            codex_identity: codex_identity.as_ref(),
+            // Stood down: hook evidence presupposes a lifecycle-hook lane this
+            // client does not have — `tapesctl start codex` launches the CLI
+            // rather than configuring the desktop app. `None` is the
+            // documented degradation; the hook rungs simply never fire.
             codex_hook_evidence: None,
         },
     )
