@@ -35,6 +35,12 @@ const RESPONSES_PATH: &str = "/responses";
 struct Harness {
     proxy: SocketAddr,
     ingest: MockServer,
+    /// Held only to keep the server alive. Dropping it frees the port the
+    /// proxy is still pointed at, and these tests run concurrently in one
+    /// process — so another test's `MockServer` can bind that port and start
+    /// receiving this proxy's upstream traffic. The symptom is a mock seeing
+    /// a request meant for someone else, which reads as a capture defect.
+    _upstream: MockServer,
 }
 
 /// A proxy configured the way `capture codex-app` configures one: no launched
@@ -111,7 +117,11 @@ async fn start_harness() -> Harness {
     std::mem::forget(claude_dir);
     std::mem::forget(codex_dir);
 
-    Harness { proxy, ingest }
+    Harness {
+        proxy,
+        ingest,
+        _upstream: upstream,
+    }
 }
 
 /// Post one lifecycle report, presenting `secret` if given.
