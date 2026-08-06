@@ -42,6 +42,13 @@
                 # revision's tree, and are expected to be equal. A future diff
                 # where they differ means the two pins have drifted apart again.
                 #
+                # Recompute when the pins in Cargo.toml re-point to the
+                # merged main revision:
+                #   nix shell nixpkgs#nix-prefetch-git -c nix-prefetch-git \
+                #     https://github.com/papercomputeco/tapes-harnesses --rev <sha>
+                # `nix build` fails on a stale value even though the cargo-native
+                # targets never notice, which is how two earlier pin bumps landed
+                # without a recompute.
                 "tapes-harnesses-0.1.0" = "sha256-uhvxu6QyWFaKbLUUQ1922d1FNuVzQnISwdys92MM3I0=";
                 "tapes-cassette-client-0.1.0" = "sha256-uhvxu6QyWFaKbLUUQ1922d1FNuVzQnISwdys92MM3I0=";
               };
