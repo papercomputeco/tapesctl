@@ -106,6 +106,11 @@ pub async fn run(args: CaptureArgs) -> Result<()> {
             RegistryUserAgents::default(),
         )),
         provider: PROVIDER,
+        // The Codex desktop app is configured to one endpoint and speaks one
+        // provider through it, so there is nothing here to label and nothing to
+        // route between. Labelling is a property of the *launched* extension,
+        // and this command launches nothing.
+        provider_routes: None,
         codex_marker_header: Arc::new(crate::start::CODEX_MARKER_HEADER.to_ascii_lowercase()),
         codex_lane: false,
         self_attributing: false,

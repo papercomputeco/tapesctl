@@ -89,6 +89,7 @@ async fn start_harness() -> Harness {
             RegistryUserAgents::default(),
         )),
         provider: "openai",
+        provider_routes: None,
         codex_marker_header: Arc::new("x-tapesctl-codex-attribution".to_owned()),
         // The open-rollout lane is deliberately off. It would resolve some of
         // these requests to `harness_id: codex` — the CLI, not the app — and a

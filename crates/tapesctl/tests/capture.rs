@@ -124,6 +124,7 @@ async fn proxy_for(
             RegistryUserAgents::default(),
         )),
         provider: "anthropic",
+        provider_routes: None,
         codex_marker_header: Arc::new("x-tapesctl-codex-attribution".to_owned()),
         codex_lane: false,
         self_attributing,

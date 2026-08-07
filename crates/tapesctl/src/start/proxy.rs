@@ -46,6 +46,21 @@
 //! (and, for an upstream failure, its status): the diagnostic value of a failed
 //! call is in saying so, not in filing it as a conversation.
 //!
+//! # Refusing to forward is not a drop
+//!
+//! One case stops a request before it is sent at all: a harness whose extension
+//! registers several providers labels each request with the provider it is for,
+//! and a label this capture has no upstream for cannot be forwarded anywhere.
+//! Sending it to the launch's upstream is the defect being fixed, not a
+//! fallback — that upstream speaks another provider's API and answers with a
+//! 404 the harness reports as a model failure.
+//!
+//! That refusal is reported like a drop and classified as neither: the gates
+//! above decide whether an exchange that *happened* is a turn, and this one
+//! decides whether the exchange happens. See
+//! [`ROUTE_REFUSAL_UNROUTABLE_PROVIDER`] for why it does not borrow the shared
+//! drop vocabulary.
+//!
 //! # Capture degrades; forwarding does not
 //!
 //! Whenever capture cannot be done correctly — an oversize request body, a
@@ -83,11 +98,12 @@ use tapes_capture::peer_trust;
 use tapes_harnesses::attribution::{
     AttributionConfig, AttributionState, CodexRequestIdentity, RequestFacts, attribute,
 };
-use tapes_harnesses::plugin::{GATEWAY_NONCE_HEADER, nonce_matches};
+use tapes_harnesses::plugin::{GATEWAY_NONCE_HEADER, nonce_matches, split_provider_route};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tracing::{debug, warn};
 use url::Url;
 
+use super::ProviderRoutes;
 use super::content_encoding::decode_content_encoding;
 use super::ingest::{
     IngestClient, SessionEnvelope, TurnMeta, TurnPayload, encode_raw_response, status_class,
@@ -118,7 +134,21 @@ pub struct ProxyState {
     /// Timeouts and this client's Codex provider id.
     pub attribution_config: Arc<AttributionConfig>,
     /// Provider family for the harness being captured (`anthropic`/`openai`).
+    ///
+    /// The whole answer only when one upstream serves the capture. Under
+    /// [`Self::provider_routes`] it is the fallback for a request that carried
+    /// no label; a labelled one files under its own route's provider.
     pub provider: &'static str,
+    /// The upstreams this proxy routes labelled requests to, when the launched
+    /// extension was told to label them.
+    ///
+    /// `Some` for a harness whose extension registers several providers at
+    /// once, and only when this launch left the upstream to default — the same
+    /// condition that put the switch in the launched environment, so the proxy
+    /// expects labels exactly when the extension was told to send them. `None`
+    /// is the single-upstream capture, where [`Self::upstream`] is the whole
+    /// answer.
+    pub provider_routes: Option<Arc<ProviderRoutes>>,
     /// Name of this client's Codex attribution marker header.
     pub codex_marker_header: Arc<String>,
     /// True when the launched harness is Codex, which selects the Codex lane.
@@ -179,11 +209,63 @@ pub async fn forward_handler(
     match try_forward(state, peer, req).await {
         Ok(response) => response,
         Err(err) => {
-            warn!(error = %err, "forwarding failed");
+            report_forward_failure(&err);
             let mut response = Response::new(Body::from(format!("tapesctl proxy: {err}")));
-            *response.status_mut() = StatusCode::BAD_GATEWAY;
+            *response.status_mut() = refusal_status(&err);
             response
         }
+    }
+}
+
+/// The label a routing refusal is greppable by.
+///
+/// Deliberately **not** a `drop_reason`, and the field name says so. A drop
+/// reason answers "this exchange happened and was not captured"; the shared
+/// corpus that specifies them defines every one of its reasons over an exchange
+/// with a status, and [`turn_policy::capture_refusal`] takes one. There is no
+/// status here and never was: nothing was sent. Reusing the drop vocabulary
+/// would put a request that never reached a provider into the same counter as
+/// turns a provider answered, and `unknown_provider` in particular would be a
+/// lie with a wrong remedy attached — it means "no reducer claims this shape,
+/// add one", where the actual fault is that this capture has no upstream for
+/// the provider at all.
+///
+/// So it is its own vocabulary, one entry wide, sharing the *shape* of a drop
+/// report — a stable machine-readable field, plus the identifier that names the
+/// fault — without borrowing its meaning.
+pub const ROUTE_REFUSAL_UNROUTABLE_PROVIDER: &str = "unroutable_provider";
+
+/// Say why a forward did not happen.
+///
+/// Warned in both cases, and for the same reason [`report_refusal`] warns on an
+/// upstream failure: a call the reader expected to see recorded did not happen.
+/// A routing refusal is the stronger version of that — the exchange did not
+/// merely go uncaptured, it did not occur — so it names the provider and stays
+/// greppable rather than being folded into the generic line.
+fn report_forward_failure(err: &crate::error::Error) {
+    match err {
+        crate::error::Error::UnroutableProvider { provider, known } => warn!(
+            route_refusal = ROUTE_REFUSAL_UNROUTABLE_PROVIDER,
+            provider = provider.as_str(),
+            routable = known.as_str(),
+            "no upstream routes this provider; refused rather than forwarded to the wrong host",
+        ),
+        _ => warn!(error = %err, "forwarding failed"),
+    }
+}
+
+/// The status a failed forward answers with.
+///
+/// `502` for everything that went wrong *reaching* an upstream, which is what
+/// that status means. A request labelled with a provider this capture has no
+/// route for never reached one and never could: `421` says the request was
+/// directed at a server that cannot produce a response for it, which is exactly
+/// the case, and keeps it distinguishable in a harness's own logs from an
+/// upstream that was tried and failed.
+fn refusal_status(err: &crate::error::Error) -> StatusCode {
+    match err {
+        crate::error::Error::UnroutableProvider { .. } => StatusCode::MISDIRECTED_REQUEST,
+        _ => StatusCode::BAD_GATEWAY,
     }
 }
 
@@ -324,14 +406,24 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
     }
 
     let thread_id = envelope::thread_id(&parts.headers).map(str::to_owned);
-    let url = build_upstream_url(&state.upstream, parts.uri.path(), parts.uri.query())?;
+    let route = resolve_route(&state, parts.uri.path())?;
+    let url = build_upstream_url(&route.upstream, &route.path, parts.uri.query())?;
     debug!(method = %parts.method, url = %url, "forwarding");
 
     let method = parts.method.clone();
-    let path = parts.uri.path().to_owned();
+    // The path with this proxy's own routing label taken off, which for an
+    // unlabelled request is the inbound path unchanged. The label is a private
+    // arrangement between this proxy and the extension it launched; carrying it
+    // into a turn's meta would put a route no provider serves into the record of
+    // what the harness asked for.
+    let path = route.path.clone();
     // Read off the URL the request is about to be sent to, so the eligibility
     // gate below and the bytes on the wire cannot disagree about which endpoint
     // this is. Taken before the URL is consumed by the send.
+    //
+    // Not the same as `path` above once a label is in play: that one has the
+    // label removed, this one additionally carries whatever route prefix the
+    // resolved upstream's base contributes.
     let provider_path = turn_policy::provider_path(&url).to_owned();
     let response = reqwest::Client::new()
         .request(method.clone(), url)
@@ -366,6 +458,7 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
     // body has not been read yet — it is teed as it streams.
     let capture = TurnCapture {
         state: state.clone(),
+        provider: route.provider,
         request_body: peeked.whole_body().cloned(),
         // The REQUEST's encoding, read from the inbound headers — not the
         // response's, which `TurnMeta::content_encoding` below carries. The two
@@ -619,6 +712,71 @@ pub fn build_upstream_url(base: &Url, path: &str, query: Option<&str>) -> Result
     Ok(url)
 }
 
+/// Where one request goes, and which provider its turn files under.
+struct Route {
+    /// The upstream to forward to.
+    upstream: Url,
+    /// The path to ask that upstream for, label stripped.
+    path: String,
+    /// The ingest `provider` for the captured turn.
+    provider: &'static str,
+}
+
+/// Resolve the request path into an upstream, a path, and a provider.
+///
+/// Three cases, and the middle one is the whole point of the labelling:
+///
+/// * **Labelling is off.** Every request goes to the launch's upstream, which
+///   is the only shape a single-provider capture has.
+/// * **Labelled with a provider this capture routes.** The label is stripped
+///   and the remainder goes to that provider's own upstream. This is what makes
+///   a pi session on a provider other than the fronted schema work at all: the
+///   registration named the provider, and nothing later in the request does.
+/// * **Labelled with a provider this capture does not route.** Refused. The
+///   default upstream speaks one provider's API and would answer a foreign
+///   route with a 404 the harness reports as a model failure — and whose body
+///   is then captured and rejected by ingest as a malformed turn. One refusal
+///   naming the provider replaces both.
+///
+/// A request that carries no label while labelling is on takes the first case,
+/// deliberately. It means the installed extension predates this launch's
+/// binary, and the provider it wanted is simply not in the request — so there
+/// is nothing to refuse *on*. Sending it to the launch's upstream is what would
+/// have happened before any of this existed, which makes a stale extension no
+/// worse than it was rather than a dead session.
+fn resolve_route(state: &ProxyState, path: &str) -> Result<Route> {
+    let unlabelled = |provider| {
+        Ok(Route {
+            upstream: state.upstream.clone(),
+            path: path.to_owned(),
+            provider,
+        })
+    };
+    let Some(routes) = state.provider_routes.as_deref() else {
+        return unlabelled(state.provider);
+    };
+    let Some((label, rest)) = split_provider_route(path) else {
+        debug!(
+            path,
+            "request carries no provider label; forwarding to the launch upstream",
+        );
+        return unlabelled(state.provider);
+    };
+    let Some(route) = routes.resolve(label) else {
+        return error::UnroutableProviderSnafu {
+            provider: label.to_owned(),
+            known: routes.known(),
+        }
+        .fail();
+    };
+    debug!(label, upstream = %route.upstream, "routing a labelled request");
+    Ok(Route {
+        upstream: route.upstream.clone(),
+        path: rest.to_owned(),
+        provider: route.provider,
+    })
+}
+
 /// Copy the upstream response headers onto our own, minus what must not travel.
 fn build_response(status: StatusCode, upstream: &HeaderMap, body: Body) -> Response {
     let mut builder = Response::builder().status(status);
@@ -768,6 +926,9 @@ impl RawBuffer {
 /// Assembles and posts one turn, off the forwarding path.
 struct TurnCapture {
     state: ProxyState,
+    /// The ingest `provider` this turn files under — the route's, which for a
+    /// labelled request is the labelled provider's rather than the launch's.
+    provider: &'static str,
     /// `None` when the request body exceeded the peek cap, which makes the turn
     /// undescribable and so uncapturable.
     request_body: Option<Bytes>,
@@ -878,7 +1039,7 @@ impl TurnCapture {
             };
 
         let payload = TurnPayload {
-            provider: self.state.provider,
+            provider: self.provider,
             request: &request,
             response: (),
             raw_response: (!raw.is_empty()).then(|| encode_raw_response(&raw)),

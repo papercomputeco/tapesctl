@@ -146,6 +146,7 @@ async fn start_harness(rollouts: &Path) -> Harness {
         attribution: Arc::new(attribution),
         attribution_config: Arc::new(config),
         provider: "openai",
+        provider_routes: None,
         codex_marker_header: Arc::new("x-tapesctl-codex-attribution".to_owned()),
         codex_lane: true,
         self_attributing: false,
