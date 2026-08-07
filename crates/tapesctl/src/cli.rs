@@ -5,11 +5,14 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 
 /// The Tapes client CLI.
-///
-/// The subcommand is required rather than optional. A `tapesctl` with nothing
-/// to do should say what it *can* do, so a bare invocation — and a
-/// flags-only one like `tapesctl -v` — gets the help text out of clap instead
-/// of reaching dispatch with nothing to dispatch.
+// Kept to one line on purpose: clap renders a struct's doc comment as the long
+// `--help` about, so rationale written here would be printed at every user.
+//
+// The rationale, for a reader of the code: the subcommand is required rather
+// than optional because a `tapesctl` with nothing to do should say what it
+// *can* do. That is what makes clap answer a bare invocation — and a
+// flags-only one like `tapesctl -v` — with help, instead of letting either
+// reach dispatch with nothing to dispatch.
 #[derive(Debug, Parser)]
 #[command(
     name = "tapesctl",
