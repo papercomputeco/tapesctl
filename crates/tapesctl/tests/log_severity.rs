@@ -33,6 +33,7 @@ use std::time::Duration;
 use tapes_harnesses::attribution::{
     AttributionConfig, AttributionState, CodexProviderFilter, spawn_codex_watcher, spawn_watcher,
 };
+use tapes_harnesses::harness::RegistryUserAgents;
 use tapesctl::start::ingest::IngestClient;
 use tapesctl::start::proxy::{ProxyState, forward_handler};
 use tapesctl::transcript::tailer::SessionTracker;
@@ -86,9 +87,10 @@ async fn proxy_against(upstream: &MockServer, ingest: &MockServer) -> SocketAddr
             spawn_watcher(claude_dir.path().to_path_buf()),
             spawn_codex_watcher(codex_dir.path().to_path_buf()),
         )),
-        attribution_config: Arc::new(AttributionConfig::new(CodexProviderFilter::new(
-            "tapesctl-openai",
-        ))),
+        attribution_config: Arc::new(AttributionConfig::new(
+            CodexProviderFilter::new("tapesctl-openai"),
+            RegistryUserAgents::default(),
+        )),
         provider: "anthropic",
         codex_marker_header: Arc::new("x-tapesctl-codex-attribution".to_owned()),
         codex_lane: false,

@@ -31,10 +31,11 @@ use std::sync::Arc;
 
 use snafu::{OptionExt, ResultExt};
 use tapes_harnesses::attribution::{
-    AttributionConfig, AttributionState, CodexProviderFilter, claude_session, codex_session,
-    spawn_codex_watcher, spawn_watcher,
+    AttributionConfig, AttributionState, CodexProviderFilter, claude::session as claude_session,
+    codex::session as codex_session, spawn_codex_watcher, spawn_watcher,
 };
 use tapes_harnesses::config::codex as codex_config;
+use tapes_harnesses::harness::RegistryUserAgents;
 use tapes_harnesses::launch::CodexAuth;
 use tracing::{info, warn};
 use url::Url;
@@ -97,9 +98,13 @@ pub async fn run(args: CaptureArgs) -> Result<()> {
                 codex_session::default_sessions_dir().context(error::NoHomeDirSnafu)?,
             ),
         )),
-        attribution_config: Arc::new(AttributionConfig::new(CodexProviderFilter::new(
-            handoff.provider_id.clone(),
-        ))),
+        attribution_config: Arc::new(AttributionConfig::new(
+            CodexProviderFilter::new(handoff.provider_id.clone()),
+            // Which harness a `User-Agent` names is registry knowledge, so the
+            // registry answers it. A local table here would be a second set of
+            // rules for the same question.
+            RegistryUserAgents::default(),
+        )),
         provider: PROVIDER,
         codex_marker_header: Arc::new(crate::start::CODEX_MARKER_HEADER.to_ascii_lowercase()),
         codex_lane: false,

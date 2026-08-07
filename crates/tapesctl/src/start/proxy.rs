@@ -78,10 +78,11 @@ use http::{HeaderMap, StatusCode};
 use http_body_util::BodyDataStream;
 use serde_json::value::RawValue;
 use snafu::ResultExt;
+use tapes_capture::envelope;
+use tapes_capture::peer_trust;
 use tapes_harnesses::attribution::{
-    AttributionConfig, AttributionState, CodexRequestIdentity, RequestFacts, attribute, peer_trust,
+    AttributionConfig, AttributionState, CodexRequestIdentity, RequestFacts, attribute,
 };
-use tapes_harnesses::envelope;
 use tapes_harnesses::plugin::{GATEWAY_NONCE_HEADER, nonce_matches};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tracing::{debug, warn};

@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use tapes_harnesses::attribution::ClaudeSessionFile;
-use tapes_harnesses::attribution::fork_parent::encode_cwd;
+use tapes_harnesses::attribution::claude::fork_parent::encode_cwd;
 use tapesctl::transcript::client::TranscriptClient;
 use tapesctl::transcript::tailer::{self, SessionTracker, TailerConfig};
 use url::Url;

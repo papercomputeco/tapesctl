@@ -124,7 +124,7 @@ pub enum Error {
     #[snafu(display("could not stamp the capture envelope"))]
     Envelope {
         /// Underlying header failure.
-        source: tapes_harnesses::envelope::HeaderError,
+        source: tapes_capture::envelope::HeaderError,
     },
 
     /// The proxy could not take a loopback port.

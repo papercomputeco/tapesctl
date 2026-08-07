@@ -30,12 +30,13 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use tapes_capture::envelope::{
+    CODEX_PARENT_THREAD_ID_HEADER, CODEX_SESSION_ID_HEADER, CODEX_THREAD_ID_HEADER,
+};
 use tapes_harnesses::attribution::{
     AttributionConfig, AttributionState, CodexProviderFilter, spawn_codex_watcher, spawn_watcher,
 };
-use tapes_harnesses::envelope::{
-    CODEX_PARENT_THREAD_ID_HEADER, CODEX_SESSION_ID_HEADER, CODEX_THREAD_ID_HEADER,
-};
+use tapes_harnesses::harness::RegistryUserAgents;
 use tapesctl::start::ingest::IngestClient;
 use tapesctl::start::proxy::{ProxyState, forward_handler};
 use tapesctl::transcript::tailer::SessionTracker;
@@ -133,7 +134,10 @@ async fn start_harness(rollouts: &Path) -> Harness {
     // Production timeouts with a short Codex budget. The ladder's bounded wait
     // is not what these tests are about, and a turn whose rollout will never
     // appear would otherwise hold each one for the full production budget.
-    let mut config = AttributionConfig::new(CodexProviderFilter::new(PROVIDER_BASE));
+    let mut config = AttributionConfig::new(
+        CodexProviderFilter::new(PROVIDER_BASE),
+        RegistryUserAgents::default(),
+    );
     config.codex_timeout = Duration::from_millis(200);
 
     let state = ProxyState {

@@ -17,6 +17,7 @@ use std::time::Duration;
 use tapes_harnesses::attribution::{
     AttributionConfig, AttributionState, CodexProviderFilter, spawn_codex_watcher, spawn_watcher,
 };
+use tapes_harnesses::harness::RegistryUserAgents;
 use tapesctl::codex_app::lifecycle::DesktopSessions;
 use tapesctl::codex_app::{LIFECYCLE_PATH, LIFECYCLE_SECRET_HEADER, LifecycleReport};
 use tapesctl::start::ingest::IngestClient;
@@ -83,9 +84,10 @@ async fn start_harness() -> Harness {
         upstream: Url::parse(&format!("{}{UPSTREAM_PREFIX}", upstream.uri())).unwrap(),
         ingest: IngestClient::new(&Url::parse(&ingest.uri()).unwrap()).unwrap(),
         attribution: Arc::new(attribution),
-        attribution_config: Arc::new(AttributionConfig::new(CodexProviderFilter::new(
-            "tapesctl-codex-app",
-        ))),
+        attribution_config: Arc::new(AttributionConfig::new(
+            CodexProviderFilter::new("tapesctl-codex-app"),
+            RegistryUserAgents::default(),
+        )),
         provider: "openai",
         codex_marker_header: Arc::new("x-tapesctl-codex-attribution".to_owned()),
         // The open-rollout lane is deliberately off. It would resolve some of

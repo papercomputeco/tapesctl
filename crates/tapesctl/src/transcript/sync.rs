@@ -29,7 +29,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use snafu::{OptionExt, ResultExt};
-use tapes_harnesses::envelope::HARNESS_ID_CLAUDE;
+use tapes_capture::envelope::HARNESS_ID_CLAUDE;
 use tapes_harnesses::transcript::{SweepOptions, TranscriptSession, sweep};
 use tracing::{info, warn};
 use url::Url;
@@ -185,7 +185,7 @@ pub async fn sweep_into(client: &TranscriptClient, config: &SyncConfig) -> SyncS
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use tapes_harnesses::attribution::fork_parent::encode_cwd;
+    use tapes_harnesses::attribution::claude::fork_parent::encode_cwd;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 

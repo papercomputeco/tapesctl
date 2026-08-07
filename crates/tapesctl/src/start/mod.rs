@@ -12,7 +12,7 @@
 //! Almost nothing here is tapesctl's own. Directing a harness at a proxy comes
 //! from `tapes_harnesses::launch`; deciding who sent a request comes from
 //! `tapes_harnesses::attribution`; the header contract comes from
-//! `tapes_harnesses::envelope`. What is genuinely local is deployment
+//! `tapes_capture::envelope`. What is genuinely local is deployment
 //! knowledge: which upstream to forward to, which ingest server to post to,
 //! what this client calls its own Codex provider, and what identity to stamp.
 //! That split is deliberate — it is the same split paperd makes, which is what
@@ -47,7 +47,7 @@
 //! once the peer socket is shown to belong to the harness this process launched
 //! *and* the request echoes the per-launch nonce this process generated. An
 //! envelope is a claim, and a loopback port is reachable by everything on the
-//! machine; see [`tapes_harnesses::attribution::peer_trust`] for the ancestry
+//! machine; see [`tapes_capture::peer_trust`] for the ancestry
 //! half of what makes the claim trustworthy, and
 //! [`tapes_harnesses::plugin::GATEWAY_NONCE_ENV`] for the nonce half — which is
 //! what excludes the harness's own subprocesses, descendants that the ancestry
@@ -76,14 +76,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use snafu::{OptionExt, ResultExt};
-use tapes_harnesses::attribution::{
-    AttributionConfig, AttributionState, CodexProviderFilter, claude_session, codex_session,
-    spawn_codex_watcher, spawn_watcher,
-};
-use tapes_harnesses::envelope::{
+use tapes_capture::envelope::{
     HARNESS_ID_CLAUDE, HARNESS_ID_CODEX, HARNESS_ID_OPENCODE, HARNESS_ID_PI,
 };
+use tapes_harnesses::attribution::{
+    AttributionConfig, AttributionState, CodexProviderFilter, claude::session as claude_session,
+    codex::session as codex_session, spawn_codex_watcher, spawn_watcher,
+};
 use tapes_harnesses::harness as registry;
+use tapes_harnesses::harness::RegistryUserAgents;
 use tapes_harnesses::launch::{
     ClaudeRecipe, CodexAuth, CodexRecipe, LaunchPlan, LaunchRecipe, ProxyEndpoint,
     resolve_codex_auth,
@@ -710,9 +711,13 @@ pub async fn run(args: StartArgs) -> Result<()> {
         ingest: IngestClient::new(&config.tapes_url)?,
         transcript_tracker: tracker.clone(),
         attribution: Arc::new(attribution),
-        attribution_config: Arc::new(AttributionConfig::new(CodexProviderFilter::new(
-            CODEX_PROVIDER_PREFIX,
-        ))),
+        attribution_config: Arc::new(AttributionConfig::new(
+            CodexProviderFilter::new(CODEX_PROVIDER_PREFIX),
+            // Which harness a `User-Agent` names is registry knowledge, so the
+            // registry answers it. A local table here would be a second set of
+            // rules for the same question.
+            RegistryUserAgents::default(),
+        )),
         provider: config.harness.provider(config.schema),
         codex_marker_header: Arc::new(CODEX_MARKER_HEADER.to_ascii_lowercase()),
         codex_lane: config.harness.is_codex(),
@@ -917,7 +922,7 @@ pub const NO_LAUNCHED_PID: i32 = 0;
 ///
 /// Spawned and awaited in two steps rather than through `status()`, which never
 /// exposes the child. The PID is what
-/// [`tapes_harnesses::attribution::peer_trust::peer_is_launched_harness`]
+/// [`tapes_capture::peer_trust::peer_is_launched_harness`]
 /// compares a request's peer against, so it has to be published while the
 /// process is running, not returned after it exits. Stdio is inherited either
 /// way, which is what keeps the harness's TUI attached to the terminal.
