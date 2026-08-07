@@ -120,8 +120,13 @@ jobs:
           ./bin/tapesctl version > canary.txt
           test "$(tail -n 1 canary.txt)" = "All in all, just another tape in the stereo"
           # The other half of what a freshly built binary has to prove: a bare
-          # invocation answers with its help. It exits 2 doing so — clap's
-          # code for "I printed help instead of running" — so the run is
-          # separated from the assertion rather than piped into it.
-          ./bin/tapesctl > bare.txt 2>&1 || true
+          # invocation answers with its help, exiting 2 — clap's code for "I
+          # printed help instead of running". Both halves are asserted: the
+          # status is captured rather than discarded, so a binary that printed
+          # the right text with the wrong exit code still fails the smoke.
+          set +e
+          ./bin/tapesctl > bare.txt 2>&1
+          bare_status=$?
+          set -e
+          test "$bare_status" -eq 2
           grep -q '^Usage: tapesctl' bare.txt
