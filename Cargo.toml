@@ -35,7 +35,16 @@ repository = "https://github.com/papercomputeco/tapesctl"
 # newer rev only, so tapesctl's proxy still failed closed on a first-scan miss
 # and the capture suite flaked under parallel load. Keep them equal.
 #
-tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "e5176d9515e371799ec13d92e64da956e4874624" }
+tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "7187065e2adc0db5b119cd689fd877f0b2ec9aa9" }
+
+# The harness-agnostic half of capture — the X-Tapes-* envelope, the
+# capture-gateway environment contract, and the peer-trust ancestry check — in
+# its own crate since the dependency inversion. tapesctl consumes it directly
+# rather than through a re-export: the envelope and the peer check are protocol,
+# and reaching them through the harness registry would say they were harness
+# knowledge. Same repository, same rev as the crates above, for the reasons
+# given there.
+tapes-capture = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "7187065e2adc0db5b119cd689fd877f0b2ec9aa9" }
 
 # The generated cassette-surface machinery (discovery decode, OpenAPI
 # reduction, the on-disk surface cache, clap command synthesis, and the
@@ -43,7 +52,7 @@ tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", r
 # repository since the PCC-1104 split, so every capture client generates the
 # same surface the same way. Pinned by revision like the crate above — and at
 # the same rev as it, for the reasons given there.
-tapes-cassette-client = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "e5176d9515e371799ec13d92e64da956e4874624" }
+tapes-cassette-client = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "7187065e2adc0db5b119cd689fd877f0b2ec9aa9" }
 
 # --- CLI ---
 # `string` lets a Command/Arg be named by an owned String rather than only by a

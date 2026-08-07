@@ -1763,9 +1763,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "tapes-capture"
+version = "0.1.0"
+source = "git+https://github.com/papercomputeco/tapes-harnesses?rev=7187065e2adc0db5b119cd689fd877f0b2ec9aa9#7187065e2adc0db5b119cd689fd877f0b2ec9aa9"
+dependencies = [
+ "base64",
+ "http",
+ "libc",
+ "netsock",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "snafu",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "tapes-cassette-client"
 version = "0.1.0"
-source = "git+https://github.com/papercomputeco/tapes-harnesses?rev=e5176d9515e371799ec13d92e64da956e4874624#e5176d9515e371799ec13d92e64da956e4874624"
+source = "git+https://github.com/papercomputeco/tapes-harnesses?rev=7187065e2adc0db5b119cd689fd877f0b2ec9aa9#7187065e2adc0db5b119cd689fd877f0b2ec9aa9"
 dependencies = [
  "clap",
  "dirs",
@@ -1781,18 +1798,16 @@ dependencies = [
 [[package]]
 name = "tapes-harnesses"
 version = "0.1.0"
-source = "git+https://github.com/papercomputeco/tapes-harnesses?rev=e5176d9515e371799ec13d92e64da956e4874624#e5176d9515e371799ec13d92e64da956e4874624"
+source = "git+https://github.com/papercomputeco/tapes-harnesses?rev=7187065e2adc0db5b119cd689fd877f0b2ec9aa9#7187065e2adc0db5b119cd689fd877f0b2ec9aa9"
 dependencies = [
  "arc-swap",
- "base64",
  "dirs",
  "http",
  "libc",
- "netsock",
- "percent-encoding",
  "serde",
  "serde_json",
  "snafu",
+ "tapes-capture",
  "time",
  "tokio",
  "toml_edit",
@@ -1820,6 +1835,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "snafu",
+ "tapes-capture",
  "tapes-cassette-client",
  "tapes-harnesses",
  "tempfile",
