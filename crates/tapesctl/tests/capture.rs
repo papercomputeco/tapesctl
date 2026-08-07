@@ -70,7 +70,32 @@ async fn start_harness_as(
         .respond_with(response)
         .mount(&upstream)
         .await;
+    let upstream_url = Url::parse(&upstream.uri()).unwrap();
+    proxy_for(upstream, upstream_url, self_attributing, launched_pid).await
+}
 
+/// A proxy in front of an already-configured upstream, pointed at its origin.
+///
+/// The mock decides which routes exist, which is what lets a test exercise a
+/// method or a path the default harness does not mount.
+async fn harness_against(upstream: MockServer) -> Harness {
+    let upstream_url = Url::parse(&upstream.uri()).unwrap();
+    proxy_for(upstream, upstream_url, false, own_pid()).await
+}
+
+/// As [`harness_against`], but with an upstream whose base carries a route
+/// prefix — the shape a plan-authenticated Codex capture runs in, where the
+/// provider's path is longer than the one the harness asks for.
+async fn harness_with_upstream(upstream_url: Url, upstream: MockServer) -> Harness {
+    proxy_for(upstream, upstream_url, false, own_pid()).await
+}
+
+async fn proxy_for(
+    upstream: MockServer,
+    upstream_url: Url,
+    self_attributing: bool,
+    launched_pid: i32,
+) -> Harness {
     let ingest = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/ingest"))
@@ -90,7 +115,7 @@ async fn start_harness_as(
     );
 
     let state = ProxyState {
-        upstream: Url::parse(&upstream.uri()).unwrap(),
+        upstream: upstream_url,
         ingest: IngestClient::new(&Url::parse(&ingest.uri()).unwrap()).unwrap(),
         attribution: Arc::new(attribution),
         attribution_config: Arc::new(AttributionConfig::new(CodexProviderFilter::new(
@@ -387,7 +412,7 @@ async fn a_turn_is_captured_even_when_the_client_never_reads_the_body() {
 }
 
 #[tokio::test]
-async fn an_upstream_error_is_still_captured_and_still_forwarded() {
+async fn an_upstream_error_is_forwarded_intact_but_not_captured() {
     let harness = start_harness(
         ResponseTemplate::new(429)
             .set_body_string(r#"{"error":"rate_limited"}"#)
@@ -399,23 +424,129 @@ async fn an_upstream_error_is_still_captured_and_still_forwarded() {
     assert_eq!(response.status(), 429, "the status reaches the harness");
     assert_eq!(
         response.text().await.unwrap(),
-        r#"{"error":"rate_limited"}"#
+        r#"{"error":"rate_limited"}"#,
+        "and so does the error body, byte for byte",
     );
 
-    let turn = await_captured_turn(&harness.ingest).await;
-    assert_eq!(turn["meta"]["upstream_status"], 429);
-    assert_eq!(turn["meta"]["upstream_status_class"], "4xx");
-    // A failed turn is still a turn — dropping it would hide exactly the
-    // sessions an operator most wants to look at.
-    assert_eq!(
-        String::from_utf8(
-            BASE64
-                .decode(turn["raw_response"].as_str().unwrap())
-                .unwrap()
-        )
-        .unwrap(),
-        r#"{"error":"rate_limited"}"#,
+    // A turn is a completed exchange with a provider; a refused call is a
+    // record of one failing to happen. Capturing it would put failed requests
+    // in the same log as conversations — and the store would refuse it anyway,
+    // since a reduced response with no assistant message is not a turn. The
+    // diagnostic value survives in the drop being reported with its status,
+    // which log_severity.rs pins.
+    assert_no_turn_captured(&harness.ingest).await;
+}
+
+/// Nothing reached ingest — after long enough that a capture task would have.
+async fn assert_no_turn_captured(ingest: &MockServer) {
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let posted = ingest.received_requests().await.unwrap_or_default();
+    assert!(
+        posted.is_empty(),
+        "expected no turn to be posted, got {} — {posted:?}",
+        posted.len(),
     );
+}
+
+#[tokio::test]
+async fn a_health_probe_on_the_turn_path_is_not_a_turn() {
+    // The rule's whole reason for existing. A harness makes several of these
+    // per session, and a probe against the chat endpoint is a probe whatever
+    // path it names.
+    let upstream = MockServer::start().await;
+    Mock::given(method("HEAD"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&upstream)
+        .await;
+    let harness = harness_against(upstream).await;
+
+    let response = reqwest::Client::new()
+        .head(format!("http://{}/v1/messages", harness.proxy))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200, "the probe still gets its answer");
+
+    assert_no_turn_captured(&harness.ingest).await;
+}
+
+#[tokio::test]
+async fn a_read_method_on_the_turn_path_is_not_a_turn() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"data":[]}"#))
+        .mount(&upstream)
+        .await;
+    let harness = harness_against(upstream).await;
+
+    let response = reqwest::Client::new()
+        .get(format!("http://{}/v1/messages", harness.proxy))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.text().await.unwrap(), r#"{"data":[]}"#);
+
+    assert_no_turn_captured(&harness.ingest).await;
+}
+
+#[tokio::test]
+async fn an_endpoint_adjacent_to_the_turn_path_is_not_conversation() {
+    // A successful POST, on the same host, one segment along: its response
+    // carries token counts rather than assistant content, and reducing it would
+    // put non-conversation in the conversation log.
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages/count_tokens"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"input_tokens":7}"#))
+        .mount(&upstream)
+        .await;
+    let harness = harness_against(upstream).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("http://{}/v1/messages/count_tokens", harness.proxy))
+        .header("content-type", "application/json")
+        .body(r#"{"model":"claude","messages":[]}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+
+    assert_no_turn_captured(&harness.ingest).await;
+}
+
+#[tokio::test]
+async fn a_plan_authenticated_codex_turn_resolves_through_its_backend_prefix() {
+    // The path the harness asks for (`/responses`) is not a turn path on its
+    // own; the path the provider sees (`/backend-api/codex/responses`) is. This
+    // is the shape a ChatGPT-plan Codex capture runs in, and gating on the
+    // unresolved path would drop every one of its turns.
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/backend-api/codex/responses"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .mount(&upstream)
+        .await;
+
+    let harness = harness_with_upstream(
+        Url::parse(&format!("{}/backend-api/codex", upstream.uri())).unwrap(),
+        upstream,
+    )
+    .await;
+
+    let response = reqwest::Client::new()
+        .post(format!("http://{}/responses", harness.proxy))
+        .header("content-type", "application/json")
+        .body(r#"{"model":"gpt"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+
+    let turn = await_captured_turn(&harness.ingest).await;
+    assert_eq!(turn["meta"]["upstream_status"], 200);
 }
 
 #[tokio::test]
