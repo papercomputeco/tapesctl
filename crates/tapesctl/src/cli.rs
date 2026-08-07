@@ -5,15 +5,26 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 
 /// The Tapes client CLI.
+///
+/// The subcommand is required rather than optional. A `tapesctl` with nothing
+/// to do should say what it *can* do, so a bare invocation — and a
+/// flags-only one like `tapesctl -v` — gets the help text out of clap instead
+/// of reaching dispatch with nothing to dispatch.
 #[derive(Debug, Parser)]
-#[command(name = "tapesctl", version, about = "The Tapes client CLI")]
+#[command(
+    name = "tapesctl",
+    version,
+    about = "The Tapes client CLI",
+    subcommand_required = true,
+    arg_required_else_help = true
+)]
 pub struct Cli {
     /// Increase log verbosity (`-v` debug, `-vv` trace). `RUST_LOG` overrides.
     #[arg(short, long, global = true, action = clap::ArgAction::Count)]
     pub verbose: u8,
 
     #[command(subcommand)]
-    pub command: Option<Command>,
+    pub command: Command,
 }
 
 /// The flag, and the environment variable behind it, that name a server.
@@ -711,7 +722,7 @@ mod tests {
         let cli = parse(&["tapesctl", "sessions", "list", "--tapes-url", "http://x"]);
         assert!(matches!(
             cli.command,
-            Some(Command::Sessions(SessionsCommand::List(_))),
+            Command::Sessions(SessionsCommand::List(_)),
         ));
     }
 
@@ -727,7 +738,7 @@ mod tests {
             "http://x",
         ]);
         match cli.command {
-            Some(Command::Spans(SpansCommand::Get(args))) => {
+            Command::Spans(SpansCommand::Get(args)) => {
                 assert_eq!(args.trace_id, "t-1");
                 assert_eq!(args.span_id, "s-1");
             }
@@ -751,7 +762,7 @@ mod tests {
             "hi",
         ]);
         match cli.command {
-            Some(Command::Start(args)) => {
+            Command::Start(args) => {
                 assert_eq!(args.harness, "claude");
                 assert_eq!(args.harness_args, vec!["--verbose", "-p", "hi"]);
             }
@@ -776,7 +787,7 @@ mod tests {
             "gpt-5",
         ]);
         match cli.command {
-            Some(Command::Start(args)) => {
+            Command::Start(args) => {
                 assert_eq!(args.harness, "pi");
                 assert_eq!(args.schema.as_deref(), Some("openai"));
                 assert_eq!(args.harness_args, vec!["--model", "gpt-5"]);
@@ -789,7 +800,7 @@ mod tests {
     fn sync_defaults_to_the_bounded_window_and_the_home_tree() {
         let cli = parse(&["tapesctl", "sync", "--tapes-url", "http://x"]);
         match cli.command {
-            Some(Command::Sync(args)) => {
+            Command::Sync(args) => {
                 assert_eq!(args.since_days, None);
                 assert_eq!(args.projects_root, None);
             }
@@ -809,7 +820,7 @@ mod tests {
             "http://x",
         ]);
         match cli.command {
-            Some(Command::Export(args)) => {
+            Command::Export(args) => {
                 assert_eq!(args.output, Some(PathBuf::from("out.jsonl")));
             }
             other => panic!("got: {other:?}"),
@@ -821,7 +832,7 @@ mod tests {
         // It is a local file copy; requiring --tapes-url would be a lie.
         let cli = parse(&["tapesctl", "skill", "sync", "review", "--claude", "--local"]);
         match cli.command {
-            Some(Command::Skill(SkillCommand::Sync(args))) => {
+            Command::Skill(SkillCommand::Sync(args)) => {
                 assert_eq!(args.name, "review");
                 assert!(args.claude);
                 assert!(args.local);
@@ -836,7 +847,7 @@ mod tests {
         // nothing is fetched, so requiring --tapes-url would be a lie.
         let cli = parse(&["tapesctl", "plugin", "install", "pi"]);
         match cli.command {
-            Some(Command::Plugin(PluginCommand::Install(args))) => {
+            Command::Plugin(PluginCommand::Install(args)) => {
                 assert_eq!(args.harness, "pi");
                 assert!(!args.dry_run);
             }
@@ -854,7 +865,7 @@ mod tests {
             "http://x",
         ]);
         match cli.command {
-            Some(Command::Search(args)) => {
+            Command::Search(args) => {
                 assert_eq!(args.query, "gum glow charm");
                 assert_eq!(args.top, 5, "the Go default is 5");
                 assert!(!args.quiet);
@@ -875,7 +886,7 @@ mod tests {
             "http://x",
         ]);
         match cli.command {
-            Some(Command::Capture(args)) => {
+            Command::Capture(args) => {
                 assert_eq!(args.harness, "codex-app");
                 assert_eq!(args.tapes_url.as_deref(), Some("http://x"));
             }
@@ -897,7 +908,7 @@ mod tests {
             "--tapes-url",
             "http://x",
         ]);
-        assert!(!cli.command.unwrap().hands_over_terminal());
+        assert!(!cli.command.hands_over_terminal());
     }
 
     #[test]
@@ -912,7 +923,7 @@ mod tests {
             "/home/someone/.tapes/codex-app/handoff.json",
         ]);
         match cli.command {
-            Some(Command::Plugin(PluginCommand::Hook(args))) => {
+            Command::Plugin(PluginCommand::Hook(args)) => {
                 assert_eq!(args.harness, "codex-app");
                 assert_eq!(
                     args.handoff,
@@ -931,7 +942,7 @@ mod tests {
     fn plugin_uninstall_mirrors_install() {
         let cli = parse(&["tapesctl", "plugin", "uninstall", "codex-app", "--dry-run"]);
         match cli.command {
-            Some(Command::Plugin(PluginCommand::Uninstall(args))) => {
+            Command::Plugin(PluginCommand::Uninstall(args)) => {
                 assert_eq!(args.harness, "codex-app");
                 assert!(args.dry_run);
             }
@@ -943,7 +954,7 @@ mod tests {
     fn plugin_install_takes_a_dry_run() {
         let cli = parse(&["tapesctl", "plugin", "install", "pi", "--dry-run"]);
         match cli.command {
-            Some(Command::Plugin(PluginCommand::Install(args))) => assert!(args.dry_run),
+            Command::Plugin(PluginCommand::Install(args)) => assert!(args.dry_run),
             other => panic!("got: {other:?}"),
         }
     }
@@ -961,7 +972,7 @@ mod tests {
             "http://x",
         ]);
         match cli.command {
-            Some(Command::Search(args)) => {
+            Command::Search(args) => {
                 assert_eq!(args.top, 10);
                 assert!(args.quiet);
             }
@@ -990,7 +1001,7 @@ mod tests {
             "http://x",
         ]);
         match cli.command {
-            Some(Command::Skill(SkillCommand::Generate(args))) => {
+            Command::Skill(SkillCommand::Generate(args)) => {
                 assert_eq!(args.session_ids, vec!["s-1", "s-2"]);
                 assert_eq!(args.name, "debug-hooks");
                 assert_eq!(args.skill_type, "workflow");
@@ -1036,7 +1047,7 @@ mod tests {
             "http://x",
         ]);
         match cli.command {
-            Some(Command::Skill(SkillCommand::Generate(args))) => {
+            Command::Skill(SkillCommand::Generate(args)) => {
                 assert!(args.session_ids.is_empty());
                 assert_eq!(args.search.as_deref(), Some("react hooks"));
                 assert_eq!(args.search_top, 5);
@@ -1050,7 +1061,7 @@ mod tests {
         // It reads the authoring directory; requiring --tapes-url would be a lie.
         let cli = parse(&["tapesctl", "skill", "list", "--type", "workflow"]);
         match cli.command {
-            Some(Command::Skill(SkillCommand::List(args))) => {
+            Command::Skill(SkillCommand::List(args)) => {
                 assert_eq!(args.skill_type.as_deref(), Some("workflow"));
             }
             other => panic!("got: {other:?}"),

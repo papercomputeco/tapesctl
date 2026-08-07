@@ -116,4 +116,12 @@ jobs:
       - name: Run canary
         run: |
           chmod +x ./bin/tapesctl
-          test "$(./bin/tapesctl)" = "All in all, just another tape in the stereo"
+          # The canary lives in `version` now.
+          ./bin/tapesctl version > canary.txt
+          test "$(tail -n 1 canary.txt)" = "All in all, just another tape in the stereo"
+          # The other half of what a freshly built binary has to prove: a bare
+          # invocation answers with its help. It exits 2 doing so — clap's
+          # code for "I printed help instead of running" — so the run is
+          # separated from the assertion rather than piped into it.
+          ./bin/tapesctl > bare.txt 2>&1 || true
+          grep -q '^Usage: tapesctl' bare.txt
