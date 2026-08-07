@@ -133,6 +133,19 @@ pub const DEFAULT_OPENAI_UPSTREAM: &str = "https://api.openai.com";
 /// route, not a preference.
 pub const DEFAULT_CHATGPT_UPSTREAM: &str = "https://chatgpt.com/backend-api/codex";
 
+/// Where a labelled `openai-codex` request is forwarded: the ChatGPT backend
+/// root, without the `/codex` segment.
+///
+/// The segment is absent here because pi's plan client carries it in the path
+/// it composes — a labelled request arrives as `/codex/responses`, not
+/// `/responses`. Codex the harness is the opposite: it appends a bare
+/// `/responses`, which is why [`DEFAULT_CHATGPT_UPSTREAM`] keeps the segment.
+/// One host, two clients, and the split between base and path drawn in two
+/// different places; reusing the Codex constant on this route doubles the
+/// segment into `/codex/codex/responses`, which the backend answers with a
+/// 404 the harness reports as a model failure.
+const PI_CHATGPT_UPSTREAM: &str = "https://chatgpt.com/backend-api";
+
 /// Every provider label this capture can route, with the upstream its traffic
 /// goes to and the ingest `provider` its turns file under.
 ///
@@ -143,12 +156,14 @@ pub const DEFAULT_CHATGPT_UPSTREAM: &str = "https://chatgpt.com/backend-api/code
 /// them would either route plan traffic to `api.openai.com`, which rejects the
 /// credential, or file it under a provider ingest has no reducer for.
 ///
-/// [`DEFAULT_CHATGPT_UPSTREAM`] appears here for the same reason it does in
-/// Codex's default: the credential decides the host.
+/// The ChatGPT backend appears here for the same reason it does in Codex's
+/// default: the credential decides the host. It appears as
+/// [`PI_CHATGPT_UPSTREAM`] rather than [`DEFAULT_CHATGPT_UPSTREAM`] because
+/// the routed client also decides where base ends and path begins.
 const PROVIDER_ROUTES: &[(&str, &str, &str)] = &[
     ("anthropic", DEFAULT_ANTHROPIC_UPSTREAM, "anthropic"),
     ("openai", DEFAULT_OPENAI_UPSTREAM, "openai"),
-    ("openai-codex", DEFAULT_CHATGPT_UPSTREAM, "openai"),
+    ("openai-codex", PI_CHATGPT_UPSTREAM, "openai"),
 ];
 
 /// Appended to the pi status entry when this capture routes every provider.
@@ -1501,13 +1516,20 @@ mod tests {
             );
         }
         // The plan credential rides its own host, and files under the schema it
-        // speaks rather than under its own name.
+        // speaks rather than under its own name. The base is the backend ROOT:
+        // pi's client supplies the `/codex` segment in the path it composes,
+        // and a base that repeats it produces `/codex/codex/responses` — a 404
+        // the harness reports as a model failure.
         let plan = routes.resolve("openai-codex").unwrap();
-        assert_eq!(
-            plan.upstream.as_str(),
-            "https://chatgpt.com/backend-api/codex"
-        );
+        assert_eq!(plan.upstream.as_str(), "https://chatgpt.com/backend-api");
         assert_eq!(plan.provider, "openai");
+        let composed =
+            super::proxy::build_upstream_url(&plan.upstream, "/codex/responses", None).unwrap();
+        assert_eq!(
+            composed.as_str(),
+            "https://chatgpt.com/backend-api/codex/responses",
+            "the path pi actually sends must land on the endpoint the backend serves",
+        );
     }
 
     /// The launched environment carries the switch exactly when the proxy can
