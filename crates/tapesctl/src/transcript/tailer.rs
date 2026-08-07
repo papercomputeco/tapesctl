@@ -45,9 +45,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use arc_swap::ArcSwap;
-use tapes_harnesses::attribution::fork_parent::encode_cwd;
-use tapes_harnesses::attribution::{ClaudeSessionFile, claude_session};
-use tapes_harnesses::envelope::HARNESS_ID_CLAUDE;
+use tapes_capture::envelope::HARNESS_ID_CLAUDE;
+use tapes_harnesses::attribution::claude::fork_parent::encode_cwd;
+use tapes_harnesses::attribution::{ClaudeSessionFile, claude::session as claude_session};
 use tapes_harnesses::transcript::{
     FileFingerprint, TranscriptSession, TriggerInput, TriggerPolicy, decide, fingerprint,
     session_files,

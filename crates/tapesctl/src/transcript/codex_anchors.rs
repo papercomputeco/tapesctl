@@ -47,10 +47,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use tapes_capture::envelope::HARNESS_ID_CODEX;
 use tapes_harnesses::attribution::{
     CodexProviderFilter, CodexSessionFile, CodexWatcherSnapshotHandle,
 };
-use tapes_harnesses::envelope::HARNESS_ID_CODEX;
 use tapes_harnesses::transcript::codex_anchors::{
     CodexAnchorScanner, SubAgentAnchor, anchor_records, build_anchor_payload,
 };

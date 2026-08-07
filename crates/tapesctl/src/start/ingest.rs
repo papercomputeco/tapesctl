@@ -32,7 +32,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::Serialize;
 use serde_json::value::RawValue;
 use snafu::ResultExt;
-use tapes_harnesses::envelope::TapesAttribution;
+use tapes_capture::envelope::TapesAttribution;
 use url::Url;
 
 use crate::error::{Error, Result, error};

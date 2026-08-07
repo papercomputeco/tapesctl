@@ -178,7 +178,7 @@ impl Handoff {
             }
         );
         snafu::ensure!(
-            handoff.harness_id == tapes_harnesses::envelope::HARNESS_ID_CODEX_APP,
+            handoff.harness_id == tapes_capture::envelope::HARNESS_ID_CODEX_APP,
             error::CodexAppHandoffHarnessSnafu {
                 path: path.to_path_buf(),
                 found: handoff.harness_id.clone(),
@@ -387,7 +387,7 @@ mod tests {
     fn handoff() -> Handoff {
         Handoff {
             version: HANDOFF_VERSION,
-            harness_id: tapes_harnesses::envelope::HARNESS_ID_CODEX_APP.to_owned(),
+            harness_id: tapes_capture::envelope::HARNESS_ID_CODEX_APP.to_owned(),
             proxy_addr: "127.0.0.1:51520".parse().unwrap(),
             secret: generate_secret(),
             provider_id: PROVIDER_ID.to_owned(),

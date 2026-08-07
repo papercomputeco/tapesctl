@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 use serde_json::value::RawValue;
-use tapes_harnesses::envelope::TapesAttribution;
+use tapes_capture::envelope::TapesAttribution;
 use tapes_harnesses::transcript::{
     SubagentMeta, TranscriptFile, TranscriptSession, build_payload, jsonl_to_records,
 };

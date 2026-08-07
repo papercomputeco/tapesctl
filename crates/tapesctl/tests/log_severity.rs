@@ -33,6 +33,8 @@ use std::time::Duration;
 use tapes_harnesses::attribution::{
     AttributionConfig, AttributionState, CodexProviderFilter, spawn_codex_watcher, spawn_watcher,
 };
+use tapes_harnesses::harness::RegistryUserAgents;
+use tapesctl::start::ProviderRoutes;
 use tapesctl::start::ingest::IngestClient;
 use tapesctl::start::proxy::{ProxyState, forward_handler};
 use tapesctl::transcript::tailer::SessionTracker;
@@ -77,6 +79,14 @@ impl<'a> MakeWriter<'a> for Captured {
 }
 
 async fn proxy_against(upstream: &MockServer, ingest: &MockServer) -> SocketAddr {
+    proxy_with(upstream, ingest, None).await
+}
+
+async fn proxy_with(
+    upstream: &MockServer,
+    ingest: &MockServer,
+    provider_routes: Option<Arc<ProviderRoutes>>,
+) -> SocketAddr {
     let claude_dir = tempfile::tempdir().unwrap();
     let codex_dir = tempfile::tempdir().unwrap();
     let state = ProxyState {
@@ -86,10 +96,12 @@ async fn proxy_against(upstream: &MockServer, ingest: &MockServer) -> SocketAddr
             spawn_watcher(claude_dir.path().to_path_buf()),
             spawn_codex_watcher(codex_dir.path().to_path_buf()),
         )),
-        attribution_config: Arc::new(AttributionConfig::new(CodexProviderFilter::new(
-            "tapesctl-openai",
-        ))),
+        attribution_config: Arc::new(AttributionConfig::new(
+            CodexProviderFilter::new("tapesctl-openai"),
+            RegistryUserAgents::default(),
+        )),
         provider: "anthropic",
+        provider_routes,
         codex_marker_header: Arc::new("x-tapesctl-codex-attribution".to_owned()),
         codex_lane: false,
         self_attributing: false,
@@ -301,6 +313,58 @@ async fn a_bodiless_request_is_not_a_warning_but_a_malformed_one_still_is() {
             .any(|line| line.contains("WARN") && line.contains("upstream_status")),
         "at a severity an operator sees, not buried at debug: {after_failed}",
     );
+
+    // And the sixth, which is not a drop at all: a request labelled with a
+    // provider this capture has no upstream for. The exchange does not happen,
+    // so it has no status and no drop reason — but it is the strongest form of
+    // "a call you expected was not made", and it has to be as visible as the
+    // drops above and greppable on its own field.
+    let routed = routing_proxy_against(&upstream, &ingest).await;
+    let response = client
+        .post(format!(
+            "http://{routed}/_tapes/provider/gemini/v1/messages"
+        ))
+        .header("content-type", "application/json")
+        .body(r#"{"model":"gemini"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 421);
+    let _ = response.bytes().await.unwrap();
+
+    settle().await;
+
+    let after_unroutable = logs.contents();
+    assert!(
+        after_unroutable
+            .lines()
+            .any(|line| line.contains("WARN") && line.contains("route_refusal")),
+        "a refusal to forward must warn, and carry its own field: {after_unroutable}",
+    );
+    assert!(
+        after_unroutable.contains("unroutable_provider") && after_unroutable.contains("gemini"),
+        "the line must name the fault and the provider that caused it: {after_unroutable}",
+    );
+    // Deliberately NOT in the drop vocabulary: nothing was forwarded, so there
+    // is no exchange for a drop reason to be about. Folding it into
+    // `drop_reason` would count a request that never reached a provider
+    // alongside turns a provider answered.
+    assert!(
+        !after_unroutable
+            .lines()
+            .any(|line| line.contains("route_refusal") && line.contains("drop_reason")),
+        "a routing refusal must not borrow the drop-reason field: {after_unroutable}",
+    );
+}
+
+/// A proxy that routes per provider, so a label it cannot resolve is refused
+/// rather than forwarded. The route table is deliberately narrow: what is being
+/// exercised is the refusal, and a table naming every real provider would need
+/// a server per entry to say nothing more.
+async fn routing_proxy_against(upstream: &MockServer, ingest: &MockServer) -> SocketAddr {
+    let routes =
+        ProviderRoutes::from_pairs([("anthropic", upstream.uri().as_str(), "anthropic")]).unwrap();
+    proxy_with(upstream, ingest, Some(Arc::new(routes))).await
 }
 
 /// Give the detached capture task time to finalize.

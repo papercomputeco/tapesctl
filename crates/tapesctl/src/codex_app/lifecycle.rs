@@ -38,8 +38,8 @@ use std::sync::{Arc, Mutex};
 
 use axum::extract::State;
 use http::{HeaderMap, StatusCode};
+use tapes_capture::envelope::{HARNESS_ID_CODEX_APP, TapesAttribution};
 use tapes_harnesses::attribution::codex::session::CODEX_ROLLOUT_ID_HEADERS;
-use tapes_harnesses::envelope::{HARNESS_ID_CODEX_APP, TapesAttribution};
 use tapes_harnesses::plugin::nonce_matches;
 use tracing::{debug, warn};
 use url::Url;

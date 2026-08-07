@@ -17,6 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 tapes-harnesses = { workspace = true }
+tapes-capture = { workspace = true }
 tapes-cassette-client = { workspace = true }
 arc-swap = { workspace = true }
 axum = { workspace = true }

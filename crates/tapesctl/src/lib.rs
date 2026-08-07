@@ -167,7 +167,7 @@ pub async fn run(cli: Cli) -> Result<()> {
 /// Launch a harness under a just-in-time capture proxy.
 ///
 /// Spawns the harness with launch env from `tapes_harnesses::launch`, stands up
-/// the dumb byte-forwarding proxy, stamps the `tapes_harnesses::envelope` onto
+/// the dumb byte-forwarding proxy, stamps the `tapes_capture::envelope` onto
 /// every turn, POSTs `TurnPayload`s to the tapes ingest server, and tails the
 /// session's transcripts alongside it. See [`start`] for the lifetime and the
 /// division of knowledge, and [`transcript::tailer`] for why the second lane is

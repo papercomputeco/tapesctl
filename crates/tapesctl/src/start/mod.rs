@@ -12,7 +12,7 @@
 //! Almost nothing here is tapesctl's own. Directing a harness at a proxy comes
 //! from `tapes_harnesses::launch`; deciding who sent a request comes from
 //! `tapes_harnesses::attribution`; the header contract comes from
-//! `tapes_harnesses::envelope`. What is genuinely local is deployment
+//! `tapes_capture::envelope`. What is genuinely local is deployment
 //! knowledge: which upstream to forward to, which ingest server to post to,
 //! what this client calls its own Codex provider, and what identity to stamp.
 //! That split is deliberate — it is the same split paperd makes, which is what
@@ -47,7 +47,7 @@
 //! once the peer socket is shown to belong to the harness this process launched
 //! *and* the request echoes the per-launch nonce this process generated. An
 //! envelope is a claim, and a loopback port is reachable by everything on the
-//! machine; see [`tapes_harnesses::attribution::peer_trust`] for the ancestry
+//! machine; see [`tapes_capture::peer_trust`] for the ancestry
 //! half of what makes the claim trustworthy, and
 //! [`tapes_harnesses::plugin::GATEWAY_NONCE_ENV`] for the nonce half — which is
 //! what excludes the harness's own subprocesses, descendants that the ancestry
@@ -76,19 +76,24 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use snafu::{OptionExt, ResultExt};
-use tapes_harnesses::attribution::{
-    AttributionConfig, AttributionState, CodexProviderFilter, claude_session, codex_session,
-    spawn_codex_watcher, spawn_watcher,
-};
-use tapes_harnesses::envelope::{
+use tapes_capture::envelope::{
     HARNESS_ID_CLAUDE, HARNESS_ID_CODEX, HARNESS_ID_OPENCODE, HARNESS_ID_PI,
 };
+use tapes_harnesses::attribution::{
+    AttributionConfig, AttributionState, CodexProviderFilter, claude::session as claude_session,
+    codex::session as codex_session, spawn_codex_watcher, spawn_watcher,
+};
 use tapes_harnesses::harness as registry;
+use tapes_harnesses::harness::RegistryUserAgents;
 use tapes_harnesses::launch::{
     ClaudeRecipe, CodexAuth, CodexRecipe, LaunchPlan, LaunchRecipe, ProxyEndpoint,
     resolve_codex_auth,
 };
-use tapes_harnesses::plugin::{GATEWAY_NONCE_ENV, GATEWAY_SCHEMA_ENV, GATEWAY_URL_ENV};
+use tapes_harnesses::plugin::pi::GATEWAY_LABEL_SUFFIX_ENV;
+use tapes_harnesses::plugin::{
+    GATEWAY_NONCE_ENV, GATEWAY_PROVIDER_ROUTES_ENV, GATEWAY_PROVIDER_ROUTES_ON, GATEWAY_SCHEMA_ENV,
+    GATEWAY_URL_ENV,
+};
 use tokio::sync::mpsc::unbounded_channel;
 use tracing::{info, warn};
 use url::Url;
@@ -127,6 +132,105 @@ pub const DEFAULT_OPENAI_UPSTREAM: &str = "https://api.openai.com";
 /// ChatGPT backend, never on `api.openai.com` — the credential decides the
 /// route, not a preference.
 pub const DEFAULT_CHATGPT_UPSTREAM: &str = "https://chatgpt.com/backend-api/codex";
+
+/// Every provider label this capture can route, with the upstream its traffic
+/// goes to and the ingest `provider` its turns file under.
+///
+/// The labels are the harness's spellings — what the pi extension calls its
+/// providers — and they are not all schema names: `openai-codex` is pi's
+/// ChatGPT-plan provider, which speaks the OpenAI schema to a different host.
+/// That is exactly why the table has two columns rather than one. Collapsing
+/// them would either route plan traffic to `api.openai.com`, which rejects the
+/// credential, or file it under a provider ingest has no reducer for.
+///
+/// [`DEFAULT_CHATGPT_UPSTREAM`] appears here for the same reason it does in
+/// Codex's default: the credential decides the host.
+const PROVIDER_ROUTES: &[(&str, &str, &str)] = &[
+    ("anthropic", DEFAULT_ANTHROPIC_UPSTREAM, "anthropic"),
+    ("openai", DEFAULT_OPENAI_UPSTREAM, "openai"),
+    ("openai-codex", DEFAULT_CHATGPT_UPSTREAM, "openai"),
+];
+
+/// Appended to the pi status entry when this capture routes every provider.
+///
+/// The entry reads `<label>:<schema><suffix>`, and the schema in it is the one
+/// this launch fronts *by default* — which, once every provider has a route, is
+/// no longer the only thing being captured. Without this the status would name
+/// one provider for a session carrying three, and a user debugging a missing
+/// turn would rule out the right explanation on the strength of it.
+const PROVIDER_ROUTES_LABEL_SUFFIX: &str = "+all";
+
+/// Where one labelled provider's traffic goes.
+#[derive(Debug, Clone)]
+pub struct ProviderRoute {
+    /// The upstream this provider's requests are forwarded to.
+    pub upstream: Url,
+    /// The ingest `provider` its turns file under.
+    pub provider: &'static str,
+}
+
+/// The provider labels one capture can route.
+///
+/// A resolved value carried by the proxy rather than a lookup into
+/// [`PROVIDER_ROUTES`], because the upstreams are the thing a test has to be
+/// able to substitute: a routing rule that can only be exercised against
+/// `api.anthropic.com` is a routing rule nothing checks.
+#[derive(Debug, Clone)]
+pub struct ProviderRoutes {
+    routes: Vec<(String, ProviderRoute)>,
+}
+
+impl ProviderRoutes {
+    /// The routes a real launch uses — [`PROVIDER_ROUTES`], parsed.
+    pub fn defaults() -> Result<Self> {
+        Self::from_pairs(
+            PROVIDER_ROUTES
+                .iter()
+                .map(|(label, upstream, provider)| (*label, *upstream, *provider)),
+        )
+    }
+
+    /// Build a route set from `(label, upstream, ingest provider)` triples.
+    pub fn from_pairs<'a>(
+        pairs: impl IntoIterator<Item = (&'a str, &'a str, &'static str)>,
+    ) -> Result<Self> {
+        let routes = pairs
+            .into_iter()
+            .map(|(label, upstream, provider)| {
+                Ok((
+                    label.to_owned(),
+                    ProviderRoute {
+                        upstream: Url::parse(upstream).context(error::UpstreamUrlSnafu)?,
+                        provider,
+                    },
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self { routes })
+    }
+
+    /// Resolve a provider label.
+    ///
+    /// `None` for a label no route names, which the proxy refuses rather than
+    /// guesses at — see [`crate::error::Error::UnroutableProvider`].
+    #[must_use]
+    pub fn resolve(&self, label: &str) -> Option<&ProviderRoute> {
+        self.routes
+            .iter()
+            .find(|(name, _)| name == label)
+            .map(|(_, route)| route)
+    }
+
+    /// The labels this set resolves, comma-separated, for error messages.
+    #[must_use]
+    pub fn known(&self) -> String {
+        self.routes
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
 
 /// Which upstream API schema the proxy fronts.
 ///
@@ -346,6 +450,23 @@ impl Harness {
         matches!(self, Self::Codex)
     }
 
+    /// Whether this harness's capture extension points *several* providers at
+    /// the proxy at once, rather than redirecting the one being captured.
+    ///
+    /// pi is the case: its extension registers `anthropic`, `openai`, and
+    /// `openai-codex` together, because it has to register before a model is
+    /// chosen. A proxy behind one upstream can serve one of them, so the other
+    /// two arrive as requests it must either route elsewhere or refuse — which
+    /// is what [`PROVIDER_ROUTES`] and the label on the request are for.
+    ///
+    /// Not the same question as [`Self::default_schema`]. That asks which
+    /// schema a launch fronts *by default*; this asks whether one upstream can
+    /// be the whole answer at all.
+    #[must_use]
+    pub fn registers_several_providers(self) -> bool {
+        matches!(self, Self::Pi)
+    }
+
     /// Whether this harness stamps its own `X-Tapes-*` envelope from inside.
     ///
     /// Read from the registry rather than matched on here: which harnesses
@@ -409,6 +530,7 @@ impl Harness {
         auth: Option<CodexAuth>,
         schema: Option<UpstreamSchema>,
         nonce: &str,
+        provider_routes: bool,
     ) -> Result<LaunchPlan> {
         match self {
             Self::Claude => ClaudeRecipe::new(endpoint).plan(),
@@ -426,6 +548,7 @@ impl Harness {
                     &endpoint,
                     schema.unwrap_or(DEFAULT_OPENCODE_SCHEMA),
                     nonce,
+                    provider_routes,
                 ));
             }
             Self::Pi => {
@@ -433,6 +556,7 @@ impl Harness {
                     &endpoint,
                     schema.unwrap_or(DEFAULT_PI_SCHEMA),
                     nonce,
+                    provider_routes,
                 ));
             }
         }
@@ -509,14 +633,39 @@ fn supported_names() -> String {
 /// the deletion), and anything the harness itself passes along explicitly.
 /// What the nonce guarantees unconditionally is that a *complete* forgery
 /// needs the secret, not just two headers and a loopback port.
-fn gateway_plan(endpoint: &ProxyEndpoint, schema: UpstreamSchema, nonce: &str) -> LaunchPlan {
+/// The routes variable is a switch, and the only one here that changes what the
+/// extension puts on the wire. Set, each captured provider registers under its
+/// own label and this proxy routes by it; unset, every provider registers at
+/// the endpoint directly and the schema above is the only thing that can be
+/// captured. It is set only when this launch can actually honour a label — see
+/// [`StartConfig::provider_routes`] — because an extension labelling requests a
+/// proxy would refuse is strictly worse than one that labels nothing.
+fn gateway_plan(
+    endpoint: &ProxyEndpoint,
+    schema: UpstreamSchema,
+    nonce: &str,
+    provider_routes: bool,
+) -> LaunchPlan {
+    let mut env = vec![
+        (GATEWAY_URL_ENV.to_owned(), endpoint.as_str().to_owned()),
+        (GATEWAY_SCHEMA_ENV.to_owned(), schema.as_str().to_owned()),
+        (GATEWAY_NONCE_ENV.to_owned(), nonce.to_owned()),
+    ];
+    if provider_routes {
+        env.push((
+            GATEWAY_PROVIDER_ROUTES_ENV.to_owned(),
+            GATEWAY_PROVIDER_ROUTES_ON.to_owned(),
+        ));
+        // The status entry would otherwise read `tapesctl:anthropic`, which
+        // names one schema for a capture that is carrying all of them.
+        env.push((
+            GATEWAY_LABEL_SUFFIX_ENV.to_owned(),
+            PROVIDER_ROUTES_LABEL_SUFFIX.to_owned(),
+        ));
+    }
     LaunchPlan {
         args: Vec::new(),
-        env: vec![
-            (GATEWAY_URL_ENV.to_owned(), endpoint.as_str().to_owned()),
-            (GATEWAY_SCHEMA_ENV.to_owned(), schema.as_str().to_owned()),
-            (GATEWAY_NONCE_ENV.to_owned(), nonce.to_owned()),
-        ],
+        env,
         config_files: Vec::new(),
     }
 }
@@ -565,6 +714,15 @@ pub struct StartConfig {
     pub harness_args: Vec<String>,
     /// Where forwarded LLM traffic goes.
     pub upstream: Url,
+    /// Whether the launched extension labels each registration with its
+    /// provider, so the proxy routes each one to its own upstream.
+    ///
+    /// On for a harness that registers several providers at once — and only
+    /// when the upstream was left to default. An explicit `--upstream` names
+    /// one host and means it: a user pointing a capture at a local gateway is
+    /// asking for everything to go *there*, and a per-provider table would send
+    /// two thirds of the session somewhere they did not ask for.
+    pub provider_routes: bool,
     /// Base URL of the tapes ingest server.
     pub tapes_url: Url,
     /// Base URL of the web console, for the printed session link.
@@ -602,6 +760,7 @@ impl StartConfig {
             codex_auth,
             schema,
             harness_args: args.harness_args,
+            provider_routes: harness.registers_several_providers() && args.upstream.is_none(),
             upstream: Url::parse(upstream).context(error::UpstreamUrlSnafu)?,
             tapes_url,
             web_url,
@@ -685,6 +844,7 @@ pub async fn run(args: StartArgs) -> Result<()> {
         config.codex_auth,
         config.schema,
         &gateway_nonce,
+        config.provider_routes,
     )?;
 
     // Published once and read by two consumers: the attribution pipeline, and
@@ -710,10 +870,19 @@ pub async fn run(args: StartArgs) -> Result<()> {
         ingest: IngestClient::new(&config.tapes_url)?,
         transcript_tracker: tracker.clone(),
         attribution: Arc::new(attribution),
-        attribution_config: Arc::new(AttributionConfig::new(CodexProviderFilter::new(
-            CODEX_PROVIDER_PREFIX,
-        ))),
+        attribution_config: Arc::new(AttributionConfig::new(
+            CodexProviderFilter::new(CODEX_PROVIDER_PREFIX),
+            // Which harness a `User-Agent` names is registry knowledge, so the
+            // registry answers it. A local table here would be a second set of
+            // rules for the same question.
+            RegistryUserAgents::default(),
+        )),
         provider: config.harness.provider(config.schema),
+        provider_routes: config
+            .provider_routes
+            .then(ProviderRoutes::defaults)
+            .transpose()?
+            .map(Arc::new),
         codex_marker_header: Arc::new(CODEX_MARKER_HEADER.to_ascii_lowercase()),
         codex_lane: config.harness.is_codex(),
         self_attributing: config.harness.is_self_attributing(),
@@ -917,7 +1086,7 @@ pub const NO_LAUNCHED_PID: i32 = 0;
 ///
 /// Spawned and awaited in two steps rather than through `status()`, which never
 /// exposes the child. The PID is what
-/// [`tapes_harnesses::attribution::peer_trust::peer_is_launched_harness`]
+/// [`tapes_capture::peer_trust::peer_is_launched_harness`]
 /// compares a request's peer against, so it has to be published while the
 /// process is running, not returned after it exits. Stdio is inherited either
 /// way, which is what keeps the harness's TUI attached to the terminal.
@@ -1085,6 +1254,7 @@ mod tests {
                 None,
                 None,
                 "unused-nonce",
+                false,
             )
             .unwrap();
         let env = plan_env(&plan);
@@ -1111,6 +1281,7 @@ mod tests {
                 Some(CodexAuth::ApiKey),
                 None,
                 "unused-nonce",
+                false,
             )
             .unwrap();
         let joined = plan.args.join(" ");
@@ -1221,6 +1392,7 @@ mod tests {
                 None,
                 Some(UpstreamSchema::Anthropic),
                 "per-launch-secret",
+                false,
             )
             .unwrap();
         let env = plan_env(&plan);
@@ -1276,6 +1448,106 @@ mod tests {
         assert_eq!(config.schema, Some(DEFAULT_PI_SCHEMA));
         assert_eq!(config.upstream.as_str(), "https://api.anthropic.com/");
         assert_eq!(config.harness.provider(config.schema), "anthropic");
+    }
+
+    /// pi registers three providers, so a pi launch that did not route them
+    /// would send two thirds of the session to a host that cannot serve it.
+    /// The schema still picks the *default* upstream, which is what an
+    /// unlabelled request falls back to.
+    #[test]
+    fn a_pi_launch_routes_every_provider_it_registers() {
+        let config = StartConfig::resolve(args("pi")).unwrap();
+        assert!(config.provider_routes);
+        assert!(Harness::Pi.registers_several_providers());
+    }
+
+    /// A harness whose extension redirects exactly one provider has nothing to
+    /// route between, and labelling would only invent a path its upstream has
+    /// no route for.
+    #[test]
+    fn a_harness_that_registers_one_provider_never_labels() {
+        for harness in ["claude", "codex"] {
+            let config = StartConfig::resolve(args(harness)).unwrap();
+            assert!(
+                !config.provider_routes,
+                "{harness} asked its extension to label registrations"
+            );
+        }
+    }
+
+    /// An explicit `--upstream` names one host and means it. A user pointing a
+    /// capture at a local gateway is asking for the whole session to go there;
+    /// a per-provider table would quietly send two thirds of it to the public
+    /// APIs instead.
+    #[test]
+    fn an_explicit_upstream_turns_provider_routing_off() {
+        let mut args = args("pi");
+        args.upstream = Some("http://127.0.0.1:18832/local-gw".to_owned());
+        let config = StartConfig::resolve(args).unwrap();
+        assert!(!config.provider_routes);
+        assert_eq!(config.upstream.as_str(), "http://127.0.0.1:18832/local-gw");
+    }
+
+    /// Every label the extension can send resolves to a host and an ingest
+    /// provider. A registered provider with no route would be refused at the
+    /// proxy, which is a working session broken by its own launch.
+    #[test]
+    fn every_provider_the_extension_registers_has_a_route() {
+        let routes = ProviderRoutes::defaults().unwrap();
+        for provider in ["anthropic", "openai", "openai-codex"] {
+            assert!(
+                routes.resolve(provider).is_some(),
+                "the extension registers {provider} and this capture cannot route it"
+            );
+        }
+        // The plan credential rides its own host, and files under the schema it
+        // speaks rather than under its own name.
+        let plan = routes.resolve("openai-codex").unwrap();
+        assert_eq!(
+            plan.upstream.as_str(),
+            "https://chatgpt.com/backend-api/codex"
+        );
+        assert_eq!(plan.provider, "openai");
+    }
+
+    /// The launched environment carries the switch exactly when the proxy can
+    /// honour it. An extension told to label a proxy that refuses labels would
+    /// break every turn of the session.
+    #[test]
+    fn the_pi_plan_asks_the_extension_to_label_only_when_this_launch_routes() {
+        let plan = Harness::Pi
+            .plan(
+                Harness::Pi.endpoint_for(addr(), None),
+                "unused",
+                None,
+                Some(UpstreamSchema::Anthropic),
+                "per-launch-secret",
+                true,
+            )
+            .unwrap();
+        let env = plan_env(&plan);
+        assert_eq!(
+            env.get(GATEWAY_PROVIDER_ROUTES_ENV).map(String::as_str),
+            Some(GATEWAY_PROVIDER_ROUTES_ON),
+        );
+        // The status entry would otherwise name one schema for a capture
+        // carrying all of them.
+        assert_eq!(
+            env.get(GATEWAY_LABEL_SUFFIX_ENV).map(String::as_str),
+            Some(PROVIDER_ROUTES_LABEL_SUFFIX),
+        );
+
+        let unrouted = Harness::Pi
+            .plan(
+                Harness::Pi.endpoint_for(addr(), None),
+                "unused",
+                None,
+                Some(UpstreamSchema::Anthropic),
+                "per-launch-secret",
+                false,
+            )
+            .unwrap();
+        assert!(!plan_env(&unrouted).contains_key(GATEWAY_PROVIDER_ROUTES_ENV));
     }
 
     #[test]
@@ -1420,6 +1692,7 @@ mod tests {
                 None,
                 Some(UpstreamSchema::Anthropic),
                 "per-launch-secret",
+                false,
             )
             .unwrap();
         let env = plan_env(&plan);

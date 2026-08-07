@@ -19,6 +19,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use tapes_harnesses::attribution::{
     AttributionConfig, AttributionState, CodexProviderFilter, spawn_codex_watcher, spawn_watcher,
 };
+use tapes_harnesses::harness::RegistryUserAgents;
 use tapesctl::start::ingest::IngestClient;
 use tapesctl::start::proxy::{ProxyState, forward_handler};
 use tapesctl::transcript::tailer::SessionTracker;
@@ -118,10 +119,12 @@ async fn proxy_for(
         upstream: upstream_url,
         ingest: IngestClient::new(&Url::parse(&ingest.uri()).unwrap()).unwrap(),
         attribution: Arc::new(attribution),
-        attribution_config: Arc::new(AttributionConfig::new(CodexProviderFilter::new(
-            "tapesctl-openai",
-        ))),
+        attribution_config: Arc::new(AttributionConfig::new(
+            CodexProviderFilter::new("tapesctl-openai"),
+            RegistryUserAgents::default(),
+        )),
         provider: "anthropic",
+        provider_routes: None,
         codex_marker_header: Arc::new("x-tapesctl-codex-attribution".to_owned()),
         codex_lane: false,
         self_attributing,

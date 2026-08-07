@@ -99,6 +99,25 @@ pub enum Error {
         source: url::ParseError,
     },
 
+    /// A request labelled itself with a provider this capture has no upstream
+    /// for, so there is no host it could be forwarded to.
+    ///
+    /// Refused rather than sent to the launch's default upstream: that upstream
+    /// speaks one provider's API, and a request for another arrives there as a
+    /// route it has never heard of. The harness then reports a failure that
+    /// looks like the model's, and the 404 body is captured and rejected by
+    /// ingest as a malformed turn. Naming the provider is the whole diagnosis.
+    #[snafu(display(
+        "no upstream for the provider {provider:?} this request is labelled with \
+         (this capture routes: {known})"
+    ))]
+    UnroutableProvider {
+        /// The provider label carried in the request path.
+        provider: String,
+        /// The provider labels this capture can route, comma-separated.
+        known: String,
+    },
+
     /// `--web-url` was not a URL.
     #[snafu(display("invalid web console URL"))]
     WebUrl {
@@ -124,7 +143,7 @@ pub enum Error {
     #[snafu(display("could not stamp the capture envelope"))]
     Envelope {
         /// Underlying header failure.
-        source: tapes_harnesses::envelope::HeaderError,
+        source: tapes_capture::envelope::HeaderError,
     },
 
     /// The proxy could not take a loopback port.
