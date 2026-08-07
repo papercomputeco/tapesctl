@@ -93,9 +93,16 @@ where
     S: Into<String> + Clone,
 {
     let argv: Vec<String> = argv.into_iter().map(Into::into).collect();
-    let surface = discover(&argv).await;
+    let server = cli::discovery_url(&argv);
+    let surface = discover(server.as_deref()).await;
 
-    let command = cassette::command::augment(Cli::command(), &surface);
+    // The epilogue is attached here rather than declared on `Cli`, because what
+    // it has to say depends on the discovery that just ran: the derive can only
+    // carry a constant, and a constant cannot tell a reader whether the missing
+    // cassette commands are missing because no server was named or because the
+    // named one served none.
+    let command = cassette::command::augment(Cli::command(), &surface)
+        .after_help(cassette::command::epilogue(server.as_deref(), &surface));
     let matches = command.get_matches_from(&argv);
 
     // A noun on the surface is a generated command; anything else is one of the
@@ -117,16 +124,18 @@ where
     }
 }
 
-/// The cassette surface for whatever server this command line names.
+/// The cassette surface for the server this command line names, if any.
 ///
 /// Never fails: with no server, an unparseable one, or an unreachable one, the
 /// result is simply no cassette nouns. The hand-written surface has to keep
-/// working on a machine that cannot reach any tapes server at all.
-async fn discover(argv: &[String]) -> Surface {
-    let Some(raw) = cli::discovery_url(argv) else {
+/// working on a machine that cannot reach any tapes server at all — which is
+/// also why the caller keeps the server around to explain the empty result in
+/// the help epilogue.
+async fn discover(raw: Option<&str>) -> Surface {
+    let Some(raw) = raw else {
         return Surface::default();
     };
-    let Ok(url) = Url::parse(&raw) else {
+    let Ok(url) = Url::parse(raw) else {
         tracing::debug!(%raw, "not a URL, so no cassettes were discovered");
         return Surface::default();
     };
