@@ -29,8 +29,18 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 /// The handoff secret this capture was started with.
 const SECRET: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-/// The route a Codex request takes through the proxy.
+/// The route a Codex request takes through the proxy — the path the app asks
+/// for, which is what a plan-authenticated Codex appends to whatever base URL it
+/// was given.
 const RESPONSES_PATH: &str = "/responses";
+
+/// The route prefix the ChatGPT backend's own base URL carries, so the path the
+/// PROVIDER sees is `/backend-api/codex/responses`.
+///
+/// The mock upstream mounts the resolved path and the proxy is pointed at the
+/// prefixed base, because that is the shape this capture actually runs in — and
+/// the turn-eligibility gate reads the resolved path, not the asked-for one.
+const UPSTREAM_PREFIX: &str = "/backend-api/codex";
 
 struct Harness {
     proxy: SocketAddr,
@@ -49,7 +59,7 @@ struct Harness {
 async fn start_harness() -> Harness {
     let upstream = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path(RESPONSES_PATH))
+        .and(path(format!("{UPSTREAM_PREFIX}{RESPONSES_PATH}")))
         .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"id":"resp_1"}"#))
         .mount(&upstream)
         .await;
@@ -70,7 +80,7 @@ async fn start_harness() -> Harness {
 
     let sessions = Arc::new(DesktopSessions::new(SECRET));
     let state = ProxyState {
-        upstream: Url::parse(&upstream.uri()).unwrap(),
+        upstream: Url::parse(&format!("{}{UPSTREAM_PREFIX}", upstream.uri())).unwrap(),
         ingest: IngestClient::new(&Url::parse(&ingest.uri()).unwrap()).unwrap(),
         attribution: Arc::new(attribution),
         attribution_config: Arc::new(AttributionConfig::new(CodexProviderFilter::new(

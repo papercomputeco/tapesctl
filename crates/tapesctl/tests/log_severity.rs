@@ -1,10 +1,17 @@
 //! What the capture proxy considers worth warning about.
 //!
-//! A warning means "a turn you expected to see was dropped". Requests with no
-//! body — the model listings and auth probes a harness makes several of per
-//! session — are not that: there is nothing to capture and never could be.
-//! Warning on them trains the reader to skim past the severity that matters,
+//! A warning means "a turn you expected to see was dropped". The model listings,
+//! health probes and auth probes a harness makes several of per session are not
+//! that: they were never turns, so there is nothing to capture and never could
+//! be. Warning on them trains the reader to skim past the severity that matters,
 //! which is how the genuinely dropped turn goes unnoticed.
+//!
+//! An upstream that refused the call is on the other side of that line. The
+//! exchange is not captured — a turn is a completed exchange, and the store
+//! refuses a reduction with no assistant message anyway — but it is a call the
+//! reader expected to see recorded, so it warns and it names the status. That
+//! is the whole diagnostic value a failed call still has, and discarding it
+//! silently would be the one genuinely bad outcome.
 //!
 //! The turns that ARE dropped must also say which of the reasons applies. A
 //! body in an encoding this build cannot decode and a body that is genuinely
@@ -138,6 +145,13 @@ async fn a_bodiless_request_is_not_a_warning_but_a_malformed_one_still_is() {
         .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"ok":true}"#))
         .mount(&upstream)
         .await;
+    // A second turn path, so the refused-exchange shape below can be exercised
+    // without a second answer for the one above.
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(400).set_body_string(r#"{"error":"bad_request"}"#))
+        .mount(&upstream)
+        .await;
 
     let ingest = MockServer::start().await;
     Mock::given(method("POST"))
@@ -168,8 +182,13 @@ async fn a_bodiless_request_is_not_a_warning_but_a_malformed_one_still_is() {
         "a bodiless GET must not warn — this is the line that corrupted TUIs: {after_get}",
     );
     assert!(
-        after_get.contains("request had no body"),
-        "the diagnostic must survive the demotion, at debug: {after_get}",
+        !after_get.contains("WARN"),
+        "a model listing was never a turn; nothing about it is worth a warning: {after_get}",
+    );
+    assert!(
+        after_get.contains("non_turn_request"),
+        "the diagnostic must survive the demotion, at debug, and must name the \
+         reason the shared corpus specifies: {after_get}",
     );
 
     // The other half: a body that is present and genuinely unparseable is a
@@ -249,6 +268,38 @@ async fn a_bodiless_request_is_not_a_warning_but_a_malformed_one_still_is() {
         warns_after,
         "an undecodable body must NOT be reported as malformed JSON — that \
          conflation is what kept this invisible: {after_undecodable}",
+    );
+
+    // And the fifth: a turn-shaped request the upstream refused. Not captured —
+    // a turn is a completed exchange — but the operator asked for it and it did
+    // not happen, so it warns, and the warning carries the status. A drop that
+    // said nothing would be indistinguishable from capture quietly breaking.
+    let response = client
+        .post(format!("http://{proxy}/v1/chat/completions"))
+        .header("content-type", "application/json")
+        .body(r#"{"model":"claude"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400, "the status reaches the harness");
+    let _ = response.bytes().await.unwrap();
+
+    settle().await;
+
+    let after_failed = logs.contents();
+    assert!(
+        after_failed.contains("upstream_status"),
+        "a refused exchange must name the reason the shared corpus specifies: {after_failed}",
+    );
+    assert!(
+        after_failed.contains("upstream_status=400"),
+        "and must carry the status, which is the first thing a reader needs: {after_failed}",
+    );
+    assert!(
+        after_failed
+            .lines()
+            .any(|line| line.contains("WARN") && line.contains("upstream_status")),
+        "at a severity an operator sees, not buried at debug: {after_failed}",
     );
 }
 

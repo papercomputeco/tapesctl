@@ -32,6 +32,20 @@
 //!   The sender is an `Option` that finalizing takes, so the `Drop` path is a
 //!   no-op after `poll_next` already finished.
 //!
+//! # Not every exchange is a turn
+//!
+//! Two gates run before any of that, in [`super::turn_policy`]: the request has
+//! to be a turn-shaped request on a provider chat-completion endpoint, and the
+//! upstream has to have completed the exchange. Both are decidable at
+//! response-header time, so an exchange that fails either is forwarded without
+//! ever being buffered or teed.
+//!
+//! These are shared capture policy rather than this client's preference — the
+//! gateway route applies the same two rules, and both are specified as data in
+//! a corpus both implementations run. A refusal is reported with its reason
+//! (and, for an upstream failure, its status): the diagnostic value of a failed
+//! call is in saying so, not in filing it as a conversation.
+//!
 //! # Capture degrades; forwarding does not
 //!
 //! Whenever capture cannot be done correctly — an oversize request body, a
@@ -78,6 +92,7 @@ use super::ingest::{
     IngestClient, SessionEnvelope, TurnMeta, TurnPayload, encode_raw_response, status_class,
 };
 use super::peek::BoundedPeek;
+use super::turn_policy;
 use crate::error::{Result, error};
 use crate::transcript::tailer::SessionTracker;
 
@@ -293,6 +308,10 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
 
     let method = parts.method.clone();
     let path = parts.uri.path().to_owned();
+    // Read off the URL the request is about to be sent to, so the eligibility
+    // gate below and the bytes on the wire cannot disagree about which endpoint
+    // this is. Taken before the URL is consumed by the send.
+    let provider_path = turn_policy::provider_path(&url).to_owned();
     let response = reqwest::Client::new()
         .request(method.clone(), url)
         .headers(out_headers)
@@ -303,6 +322,24 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
 
     let status = response.status();
     let upstream_headers = response.headers().clone();
+
+    // Is this exchange a turn at all? Both gates are decidable now, before a
+    // byte of the response has been read, so an exchange that is not a turn is
+    // never buffered and never teed — it is forwarded and nothing else.
+    //
+    // The path handed to the gate is the one the PROVIDER sees, taken back off
+    // the URL this request was actually built from. See `turn_policy`: a
+    // harness's own path can be a proper suffix of the provider's.
+    if let Some(reason) =
+        turn_policy::capture_refusal(method.as_str(), &provider_path, status.as_u16())
+    {
+        report_refusal(reason, &method, &path, status);
+        return Ok(build_response(
+            status,
+            &upstream_headers,
+            Body::from_stream(response.bytes_stream()),
+        ));
+    }
 
     // Everything the capture needs is known now, at response-header time. The
     // body has not been read yet — it is teed as it streams.
@@ -340,6 +377,38 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
         &upstream_headers,
         Body::from_stream(stream),
     ))
+}
+
+/// Say why an exchange was not captured.
+///
+/// A drop is never silent — the reason is the whole diagnostic value a
+/// non-captured exchange still has, and an upstream failure that goes unsaid is
+/// indistinguishable from a capture that quietly stopped working.
+///
+/// The severities follow this proxy's existing rule (see `tests/log_severity.rs`):
+/// a warning means "a turn you expected to see was dropped". An upstream that
+/// refused the call is exactly that, and it carries the status, which is the
+/// first thing anyone reading the line needs. A request that was never a turn is
+/// not — a harness makes several health probes and model listings per session,
+/// by construction, and warning on each teaches the reader to skim past the one
+/// severity that matters.
+fn report_refusal(reason: &'static str, method: &http::Method, path: &str, status: StatusCode) {
+    if reason == turn_policy::DROP_UPSTREAM_STATUS {
+        warn!(
+            drop_reason = reason,
+            upstream_status = status.as_u16(),
+            %method,
+            path,
+            "the upstream did not complete the exchange; forwarded but not captured",
+        );
+    } else {
+        debug!(
+            drop_reason = reason,
+            %method,
+            path,
+            "not a turn request; forwarded but not captured",
+        );
+    }
 }
 
 async fn announce_session(state: &ProxyState, session_id: &str) {
