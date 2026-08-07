@@ -53,6 +53,7 @@ pub mod hook;
 pub mod install;
 pub mod lifecycle;
 
+use std::ffi::OsStr;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
@@ -289,7 +290,13 @@ pub fn plugin_root(home: &Path) -> PathBuf {
     state_dir(home).join(PLUGIN_DIR)
 }
 
-/// `$CODEX_HOME`, or `~/.codex` when it is unset or empty.
+/// `override_`, or `~/.codex` when it is absent or empty.
+///
+/// The override is `$CODEX_HOME`, and it is a parameter rather than a read
+/// because this function decides where a file gets *written*. Reading the
+/// variable here would put the developer's own Codex home one call away from
+/// every test in the crate; [`crate::machine::Machine::resolve`] reads it
+/// once, at the CLI boundary, and everything below is handed the answer.
 ///
 /// NOTE: this rule is harness knowledge and it is spelled a second time here.
 /// The shared crate resolves the same variable for the rollout tree
@@ -300,16 +307,16 @@ pub fn plugin_root(home: &Path) -> PathBuf {
 /// too. Two consumers with the same duplicate is the signal that the boundary
 /// is drawn one field too far downstream.
 #[must_use]
-pub fn codex_home(home: &Path) -> PathBuf {
-    std::env::var_os("CODEX_HOME")
+pub fn codex_home(home: &Path, override_: Option<&OsStr>) -> PathBuf {
+    override_
         .filter(|value| !value.is_empty())
         .map_or_else(|| home.join(".codex"), PathBuf::from)
 }
 
 /// The Codex config file this installer patches.
 #[must_use]
-pub fn codex_config_path(home: &Path) -> PathBuf {
-    codex_home(home).join("config.toml")
+pub fn codex_config_path(home: &Path, codex_home_override: Option<&OsStr>) -> PathBuf {
+    codex_home(home, codex_home_override).join("config.toml")
 }
 
 /// A fresh handoff secret.
@@ -515,13 +522,26 @@ mod tests {
         assert!(resolve_hook_harness("gemini").is_err());
     }
 
+    /// The override is now an argument, so the rule it encodes can be
+    /// asserted outright rather than through a shape check that held whatever
+    /// `$CODEX_HOME` happened to say on the machine running the suite.
     #[test]
     fn the_codex_home_override_wins_over_the_default() {
         let home = Path::new("/home/someone");
-        // Asserted through the public helper rather than by reading the
-        // variable here, because this is the second spelling of a rule the
-        // crate also owns and the duplicate is the thing worth pinning.
-        let resolved = codex_config_path(home);
-        assert!(resolved.ends_with("config.toml"), "got: {resolved:?}");
+
+        assert_eq!(
+            codex_config_path(home, None),
+            Path::new("/home/someone/.codex/config.toml"),
+        );
+        assert_eq!(
+            codex_config_path(home, Some(OsStr::new("/elsewhere/codex"))),
+            Path::new("/elsewhere/codex/config.toml"),
+        );
+        // Empty reads as unset: an exported-but-blank variable is a shell
+        // accident, not a request to write to `/config.toml`.
+        assert_eq!(
+            codex_config_path(home, Some(OsStr::new(""))),
+            Path::new("/home/someone/.codex/config.toml"),
+        );
     }
 }
