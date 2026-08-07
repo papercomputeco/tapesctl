@@ -159,7 +159,20 @@ fn decode_one_layer(
     header: &str,
 ) -> Result<(Vec<u8>, bool), DecodeError> {
     match layer {
-        "gzip" | "x-gzip" => read_capped(flate2::read::GzDecoder::new(body), "gzip", header),
+        // `MultiGzDecoder`, not `GzDecoder`: RFC 1952 §2.2 defines a gzip
+        // stream as a *series* of members, and `GzDecoder` stops at the first
+        // one's trailer. A streaming compressor that flushed mid-body emits
+        // several members, and the single-member reader would return that
+        // prefix as a clean, untruncated success — a silently short capture
+        // that only surfaces later as a parse failure with nothing pointing
+        // here. Go's `compress/gzip` reads every member unless asked not to,
+        // so this is also what the two paths agreeing requires.
+        "gzip" | "x-gzip" => read_capped(flate2::read::MultiGzDecoder::new(body), "gzip", header),
+        // zstd frames may be concatenated the same way gzip members are, but
+        // there is no multi-frame variant to opt into here: the streaming
+        // decoder already spans frames, matching Go. The asymmetry with the
+        // gzip arm above is in the two bindings' defaults, not in the policy —
+        // `zstd-concatenated-frames` pins that they behave alike.
         "zstd" => {
             let mut decoder =
                 zstd::stream::read::Decoder::new(body).map_err(|source| DecodeError::Read {
@@ -278,6 +291,42 @@ mod tests {
     fn a_gzip_body_decodes_under_either_spelling() {
         assert_eq!(decoded(&gzipped(BODY), Some("gzip")).bytes.as_ref(), BODY);
         assert_eq!(decoded(&gzipped(BODY), Some("x-gzip")).bytes.as_ref(), BODY);
+    }
+
+    #[test]
+    fn every_member_of_a_concatenated_gzip_body_is_read() {
+        // RFC 1952 §2.2: a gzip stream is a *series* of members, and a
+        // compressor that flushed mid-body emits more than one. `GzDecoder`
+        // stops at the first member's trailer and reports that prefix as a
+        // clean decode, so this asserts the whole plaintext AND that nothing
+        // was flagged as truncated — a decoder that lost the tail here would
+        // do it silently, which is the only reason it went unnoticed.
+        let mut two_members = gzipped(b"{\"part\":\"one\"}");
+        two_members.extend_from_slice(&gzipped(b"{\"part\":\"two\"}"));
+
+        let got = decode_content_encoding(&two_members, Some("gzip")).unwrap();
+        assert_eq!(got.bytes.as_ref(), br#"{"part":"one"}{"part":"two"}"#);
+        assert!(
+            !got.truncated,
+            "a complete multi-member stream is not a salvage",
+        );
+    }
+
+    #[test]
+    fn every_frame_of_a_concatenated_zstd_body_is_read() {
+        // The same rule for the other coding. It already held — libzstd's
+        // streaming decoder spans frames with nothing to opt into — so this
+        // pins agreement rather than repairing a divergence, and goes red if a
+        // binding change ever drops it.
+        let mut two_frames = zstded(b"{\"part\":\"one\"}");
+        two_frames.extend_from_slice(&zstded(b"{\"part\":\"two\"}"));
+
+        let got = decode_content_encoding(&two_frames, Some("zstd")).unwrap();
+        assert_eq!(got.bytes.as_ref(), br#"{"part":"one"}{"part":"two"}"#);
+        assert!(
+            !got.truncated,
+            "a complete multi-frame stream is not a salvage"
+        );
     }
 
     #[test]

@@ -104,6 +104,10 @@ struct PlaintextSpec {
 struct TruncateSpec {
     #[serde(default)]
     drop_tail_bytes: Option<usize>,
+    /// An absolute prefix, for cut points derived from the container format
+    /// rather than from one encoder's output length.
+    #[serde(default)]
+    keep_head_bytes: Option<usize>,
     /// `[num, den]`: keep `len * num / den` bytes, integer division.
     #[serde(default)]
     keep_head_ratio: Option<[usize; 2]>,
@@ -116,6 +120,10 @@ struct BuildSpec {
     /// Codings to apply, left-to-right, in the same order the header lists
     /// them. Building is left-to-right; decoding peels right-to-left.
     layers: Vec<String>,
+    /// Encode the plaintext as this many independently-encoded, concatenated
+    /// streams instead of one. Absent means one — an ordinary body.
+    #[serde(default)]
+    members: Option<usize>,
     #[serde(default)]
     truncate: Option<TruncateSpec>,
 }
@@ -242,6 +250,40 @@ fn apply_layer(file: &str, body: &[u8], layer: &str) -> Vec<u8> {
     }
 }
 
+/// Cut a plaintext into the chunks a case asked to be encoded independently,
+/// defaulting to one.
+///
+/// Chunks are as near equal as integer division allows, with the remainder on
+/// the last. Every chunk must be non-empty: an empty member is a different case
+/// — an empty stream inside a stream — and would make "two members" quietly
+/// mean "one member and a zero-byte one".
+fn split_into_members<'a>(
+    file: &str,
+    plaintext: &'a [u8],
+    members: Option<usize>,
+) -> Vec<&'a [u8]> {
+    let n = members.unwrap_or(1);
+    assert!(n >= 1, "{file}: members must be at least 1");
+    assert!(
+        plaintext.len() >= n,
+        "{file}: {n} members needs at least {n} plaintext bytes, got {}",
+        plaintext.len(),
+    );
+
+    let size = plaintext.len() / n;
+    (0..n)
+        .map(|i| {
+            let start = i * size;
+            let end = if i == n - 1 {
+                plaintext.len()
+            } else {
+                start + size
+            };
+            &plaintext[start..end]
+        })
+        .collect()
+}
+
 /// The wire bytes for a case, plus the plaintext they were built from (`None`
 /// for a `bytes_b64` case, which has no plaintext).
 fn build_body(file: &str, case: &EncodingCase) -> (Vec<u8>, Option<Vec<u8>>) {
@@ -254,9 +296,18 @@ fn build_body(file: &str, case: &EncodingCase) -> (Vec<u8>, Option<Vec<u8>>) {
         }
         (None, Some(build)) => {
             let plaintext = build_plaintext(file, &build.plaintext);
-            let mut body = plaintext.clone();
-            for layer in &build.layers {
-                body = apply_layer(file, &body, layer);
+            // A multi-member body is the same plaintext encoded in more than
+            // one go. The split is over the PLAINTEXT, not the encoded bytes,
+            // so the member boundary lands at the same logical offset for
+            // every compressor and the case can still assert equality with the
+            // whole plaintext.
+            let mut body = Vec::new();
+            for chunk in split_into_members(file, &plaintext, build.members) {
+                let mut encoded = chunk.to_vec();
+                for layer in &build.layers {
+                    encoded = apply_layer(file, &encoded, layer);
+                }
+                body.extend_from_slice(&encoded);
             }
             if let Some(truncate) = &build.truncate {
                 body = apply_truncation(file, body, truncate);
@@ -269,8 +320,12 @@ fn build_body(file: &str, case: &EncodingCase) -> (Vec<u8>, Option<Vec<u8>>) {
 
 /// Cut the *encoded* bytes, after every layer has been applied.
 fn apply_truncation(file: &str, body: Vec<u8>, truncate: &TruncateSpec) -> Vec<u8> {
-    match (truncate.drop_tail_bytes, truncate.keep_head_ratio) {
-        (Some(drop), None) => {
+    match (
+        truncate.drop_tail_bytes,
+        truncate.keep_head_bytes,
+        truncate.keep_head_ratio,
+    ) {
+        (Some(drop), None, None) => {
             assert!(
                 body.len() > drop,
                 "{file}: drop_tail_bytes {drop} would empty a {}-byte body",
@@ -278,7 +333,17 @@ fn apply_truncation(file: &str, body: Vec<u8>, truncate: &TruncateSpec) -> Vec<u
             );
             body[..body.len() - drop].to_vec()
         }
-        (None, Some([num, den])) => {
+        (None, Some(keep), None) => {
+            // It must actually cut: a keep count at or past the encoded length
+            // would silently turn the case into an untruncated one.
+            assert!(
+                body.len() > keep,
+                "{file}: keep_head_bytes must be shorter than the {}-byte encoded body",
+                body.len(),
+            );
+            body[..keep].to_vec()
+        }
+        (None, None, Some([num, den])) => {
             assert!(den > 0, "{file}: keep_head_ratio denominator must be > 0");
             // Integer division on the encoded length, which differs per
             // compressor — which is why a ratio-truncated case can only assert
@@ -336,7 +401,7 @@ const KNOWN_DIVERGENCE: &str = "divergence-empty-body-under-zstd.json";
 #[test]
 fn every_case_decodes_to_its_declared_outcome() {
     let cases = load_cases();
-    assert_eq!(cases.len(), 25, "the vendored corpus is 25 cases");
+    assert_eq!(cases.len(), 27, "the vendored corpus is 27 cases");
     assert!(
         cases.iter().any(|(file, _)| file == KNOWN_DIVERGENCE),
         "the known-divergence exemption names a case that is no longer in the corpus; \

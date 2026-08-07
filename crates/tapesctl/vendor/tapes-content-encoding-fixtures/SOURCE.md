@@ -13,12 +13,11 @@ than quietly making a red test green against cases nobody upstream still has.
 
 * **Repo:** `tapes` (Paper Compute).
 * **Path within repo:** `fixtures/content-encoding/`.
-* **Current snapshot SHA:** `7fb5187680343d9b91c965962a1d1efebaf2295c`
-  ("✨ feat(fixtures): pin the content-encoding decode policy to a shared
-  corpus") — the commit that established the corpus, and the last to touch
-  `fixtures/content-encoding`. 25 cases. TODO: replace with a tagged
-  fixture-cut id once tapes publishes versioned cuts
-  (`fixtures/manifest.json` reserves the `cut` block for exactly that).
+* **Current snapshot SHA:** `2c4607c87153342375bc0a67409290b3879ca866`
+  ("✨ feat(fixtures): pin that a concatenated stream decodes past its first
+  member") — the last commit to touch `fixtures/content-encoding`. 27 cases.
+  TODO: replace with a tagged fixture-cut id once tapes publishes versioned
+  cuts (`fixtures/manifest.json` reserves the `cut` block for exactly that).
 
 The snapshot is the contract: it is pinned to a specific upstream commit, and a
 refresh lands in the same PR as whatever consumer change it forces.
@@ -27,8 +26,10 @@ refresh lands in the same PR as whatever consumer change it forces.
 
 `(body bytes, Content-Encoding value)` → decoded bytes, a reported salvage, or a
 classified error. Not a header contract but a **capture policy**: which codings
-are readable, how stacked layers compose (peeled right-to-left), the 32 MiB
-per-layer output cap, the zstd window bound, and the two-conjunct salvage rule.
+are readable, how stacked layers compose (peeled right-to-left), that a
+concatenated multi-member stream is read to its end rather than to its first
+member, the 32 MiB per-layer output cap, the zstd window bound, and the
+two-conjunct salvage rule.
 
 The policy has two independent implementations in two languages, and capture
 fidelity is supposed to be identical whichever path a session took:
