@@ -44,7 +44,7 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// The route a Codex request takes through the proxy.
-const RESPONSES_PATH: &str = "/responses";
+const RESPONSES_PATH: &str = "/v1/responses";
 
 /// The provider id family `tapesctl start codex` stamps on its launches. The
 /// per-launch suffix is what distinguishes two concurrent launches; the base
