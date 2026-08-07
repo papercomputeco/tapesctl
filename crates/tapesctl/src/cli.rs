@@ -189,7 +189,7 @@ pub struct ApiArgs {
 /// Arguments for `tapesctl start`.
 #[derive(Debug, Args)]
 pub struct StartArgs {
-    /// The harness to launch (e.g. `claude`, `codex`, `opencode`, `pi`).
+    /// The harness to launch (e.g. `claude`, `codex`, `pi`).
     pub harness: String,
 
     /// Arguments passed through verbatim to the harness.
@@ -208,8 +208,8 @@ pub struct StartArgs {
     /// Which upstream API schema the proxy fronts: `anthropic` (the default) or
     /// `openai`.
     ///
-    /// Only meaningful for a harness that speaks several — `pi` and `opencode`
-    /// redirect all of their providers to one endpoint, so this is what picks the
+    /// Only meaningful for a harness that speaks several — `pi` redirects all
+    /// of its providers to one endpoint, so this is what picks the
     /// upstream, the wire format ingest reduces, and the schema the extension
     /// reports. A
     /// harness that speaks exactly one schema takes it from the harness instead,

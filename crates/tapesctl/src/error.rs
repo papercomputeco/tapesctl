@@ -52,7 +52,7 @@ pub enum Error {
     #[snafu(display(
         "--schema does not apply to {harness}, which speaks {provider} only \
          (it is for a harness that redirects several providers to one endpoint, \
-         such as pi or opencode)"
+         such as pi)"
     ))]
     SchemaNotApplicable {
         /// The harness being launched.

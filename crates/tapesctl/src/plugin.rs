@@ -129,6 +129,20 @@ pub fn install(artifact: &PluginArtifact, home: &Path) -> Result<PathBuf> {
         .context(error::PluginWriteSnafu {
             path: staged.clone(),
         })
+        // Removal comes between the staging and the rename, and the order is
+        // the whole point. Writing is only half of an install: pi loads *every*
+        // file in its extension directory into one process, so a copy an older
+        // client wrote under a different name is not residue but a second
+        // reader, contending over the same launch nonce and the same provider
+        // registrations and unattributing both products' sessions. Removing it
+        // *after* the rename would mean a failed removal returned an error with
+        // both extensions sitting where the harness looks — the exact state
+        // this is here to prevent, reached by the code preventing it. Removing
+        // it while the new bytes are still under a name the harness's glob
+        // cannot match means every failure leaves at most one extension: the
+        // staged copy is discarded and the user keeps the one that at least
+        // works.
+        .and_then(|()| remove_superseded(artifact, &resolved_dir))
         .and_then(|()| {
             std::fs::rename(&staged, &target).context(error::PluginWriteSnafu {
                 path: target.clone(),
@@ -140,6 +154,47 @@ pub fn install(artifact: &PluginArtifact, home: &Path) -> Result<PathBuf> {
     }
     staged_result?;
     Ok(target)
+}
+
+/// Remove the copies this artifact supersedes from the directory it installs
+/// into.
+///
+/// The crate owns the list because no client can be expected to know what its
+/// competitor installed, and removing only one's own leaves the collision
+/// intact from the other direction.
+///
+/// A superseded file that is absent is the requested end state. One that exists
+/// and cannot be removed fails the install: the harness would go on loading it,
+/// and reporting a clean install over that is how the fix ships without
+/// reaching anybody.
+fn remove_superseded(artifact: &PluginArtifact, resolved_dir: &Path) -> Result<()> {
+    for superseded in superseded_targets(artifact, resolved_dir) {
+        match std::fs::remove_file(&superseded) {
+            Ok(()) => {
+                info!(path = %superseded.display(), "superseded plugin removed");
+                println!("tapesctl: removed superseded {}", superseded.display());
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err).context(error::PluginWriteSnafu { path: superseded }),
+        }
+    }
+    Ok(())
+}
+
+/// The superseded copies to remove, inside a directory already checked for
+/// containment.
+///
+/// The crate's names are `&'static str` components it tests cannot traverse, so
+/// re-joining them onto the *resolved* directory only re-states that; what it
+/// actually buys is that a symlinked `~/.pi/agent/extensions` cannot make a
+/// `remove_file` land outside the home the caller named — the same check the
+/// write is contained by, applied to the more dangerous of the two operations.
+fn superseded_targets(artifact: &PluginArtifact, resolved_dir: &Path) -> Vec<PathBuf> {
+    artifact
+        .superseded_file_names()
+        .iter()
+        .map(|name| resolved_dir.join(name))
+        .collect()
 }
 
 /// Open the staging file exclusively — never through an existing entry.
@@ -239,6 +294,22 @@ fn run_in(args: &PluginInstallArgs, home: &Path) -> Result<()> {
                 artifact.file_name(),
                 artifact.install_path(home).display(),
             );
+            // The removal is the half of an install a user cannot infer from
+            // "would install", and it is the half that deletes something they
+            // may not know they have. A dry run that named only the write would
+            // be describing a different operation than the one it stands in
+            // for. Only what is actually there is listed — an absent superseded
+            // copy is nothing this run would do.
+            for superseded in artifact.superseded_paths(home) {
+                if superseded.exists() {
+                    println!(
+                        "tapesctl: would remove superseded {} (loaded alongside {} by {})",
+                        superseded.display(),
+                        artifact.file_name(),
+                        harness.id(),
+                    );
+                }
+            }
         }
         return Ok(());
     }
@@ -321,26 +392,6 @@ mod tests {
     use tapes_harnesses::plugin::PI_GATEWAY_EXTENSION;
     use tapes_harnesses::plugin::pi;
 
-    /// The branding tapesctl's pi extension carries.
-    ///
-    /// The crate ships pi's extension as a template with slots for the strings a
-    /// product owns, and [`tapes_harnesses::plugin::PI_GATEWAY_EXTENSION`] is that
-    /// template rendered with the crate's own vendor-neutral values. tapesctl is
-    /// the consumer for whom those values are already right — it *is* tapes, it
-    /// runs no daemon at a fixed address, and the environment variable is what it
-    /// would tell a user to set anyway.
-    ///
-    /// Stating the branding here regardless, and asserting the artifact renders to
-    /// it, is what keeps "already right" from becoming "whatever the crate happens
-    /// to say". These four strings are user-visible surface of this CLI; a crate
-    /// revision that renamed the status entry or gave the extension a default
-    /// endpoint would otherwise change what `tapesctl plugin install` writes with
-    /// nothing here to notice.
-    const PI_BRANDING: pi::ExtensionBranding<'static> = pi::ExtensionBranding::new(
-        "tapes",
-        "Point TAPES_GATEWAY_URL at a proxy serving that provider, or switch that proxy's active schema, if requests fail.",
-    );
-
     /// The command's whole reason to exist: the bytes the crate owns land where
     /// the harness looks for them. A regression that wrote an empty file, or
     /// wrote to the wrong place, passes every containment test below.
@@ -366,38 +417,169 @@ mod tests {
         );
     }
 
-    /// **The golden test.** What this command installs is the crate's pi
-    /// extension template rendered with [`PI_BRANDING`] — byte for byte, in
-    /// this repository's own CI, against the crate revision it actually pins.
+    /// **The presentation this CLI ships.** The asset is no longer a template
+    /// with slots a consumer fills — there is one file, installed by everyone,
+    /// and what a product says differently it says by setting three variables
+    /// in the environment of a launch it owns. tapesctl sets none of them: it
+    /// *is* tapes, so the asset's own fallbacks are already the strings it
+    /// would have supplied.
     ///
-    /// Two failures it catches that nothing else here would. A crate revision
-    /// whose shipped asset drifted from its template would install bytes no
-    /// template produced; and a crate revision that changed the neutral
-    /// branding would quietly change this CLI's user-visible strings — the
-    /// status entry a user sees in pi, or, far worse, a default endpoint that
-    /// would redirect every pi session on the machine.
+    /// That makes those fallbacks this CLI's user-visible surface, arriving
+    /// from a pinned crate revision, so they are asserted here rather than
+    /// taken on trust. A revision that renamed the status entry would otherwise
+    /// change what a user sees in pi after `tapesctl plugin install pi` with
+    /// nothing in this repository's CI to notice.
     #[test]
-    fn what_this_command_installs_is_the_template_rendered_with_our_branding() {
-        assert_eq!(
-            PI_GATEWAY_EXTENSION.contents(),
-            pi::render_extension(&PI_BRANDING),
-            "the crate's pi artifact is not its template rendered with the \
-             branding tapesctl declares",
+    fn the_status_entry_this_cli_installs_is_the_neutral_one() {
+        assert_eq!(pi::DEFAULT_LABEL, "tapes");
+        assert!(
+            PI_GATEWAY_EXTENSION
+                .contents()
+                .contains(&format!("const DEFAULT_LABEL = \"{}\";", pi::DEFAULT_LABEL)),
+            "the asset's fallback label is not the constant the crate publishes",
+        );
+    }
+
+    /// …and the fallback *remedy* names the variable a user can act on, since
+    /// a tapesctl-installed extension has no product command to point at.
+    ///
+    /// The remedy is the one string here with a job beyond looking right: it is
+    /// what pi shows when the proxy is fronting a schema the chosen model does
+    /// not speak, and a sentence naming a command tapesctl does not have would
+    /// be worse than the neutral one.
+    #[test]
+    fn the_fallback_remedy_names_the_variable_that_fixes_the_problem() {
+        let contents = PI_GATEWAY_EXTENSION.contents();
+        let remedy = contents
+            .split_once("const DEFAULT_REMEDY =")
+            .expect("the asset declares no DEFAULT_REMEDY")
+            .1;
+        let remedy = &remedy[..remedy.find(';').expect("unterminated DEFAULT_REMEDY")];
+        assert!(
+            remedy.contains(GATEWAY_URL_ENV),
+            "the fallback remedy does not name {GATEWAY_URL_ENV}: {remedy}",
         );
     }
 
     /// tapesctl leaves uncaptured pi sessions alone. The extension installs
     /// into pi's *global* auto-discovery directory, so it loads for every pi
-    /// session on the machine; a default endpoint would redirect all of them
+    /// session on the machine; a built-in endpoint would redirect all of them
     /// at a port tapesctl does not even keep open between runs.
     #[test]
     fn the_installed_extension_points_nowhere_until_a_launch_configures_it() {
-        assert!(PI_BRANDING.default_gateway_url.is_empty());
+        let contents = PI_GATEWAY_EXTENSION.contents();
+        for literal in ["127.0.0.1", "localhost:", "DEFAULT_GATEWAY_URL"] {
+            assert!(
+                !contents.contains(literal),
+                "the asset carries {literal:?}; it must be inert without {GATEWAY_URL_ENV}",
+            );
+        }
+    }
+
+    /// **The other half of installing.** A user who ran an older `paperctl` has
+    /// `paper-gateway.ts` in pi's extension directory, and pi loads *every*
+    /// file there into one process: writing `tapes-gateway.ts` beside it leaves
+    /// two extensions contending over one launch's nonce and over the same
+    /// provider registrations, which unattributes both. An install that only
+    /// wrote would leave `tapesctl plugin install pi` reporting success while
+    /// creating exactly that.
+    #[test]
+    fn installing_removes_a_copy_another_client_left_in_the_same_directory() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = PI_GATEWAY_EXTENSION.install_dir(home.path());
+        std::fs::create_dir_all(&dir).unwrap();
+        let superseded = dir.join("paper-gateway.ts");
+        std::fs::write(&superseded, "// another client's rendering\n").unwrap();
+
+        let written = install(&PI_GATEWAY_EXTENSION, home.path()).unwrap();
+
+        assert!(
+            !superseded.exists(),
+            "the superseded extension survived the install; pi would load both",
+        );
+        assert_eq!(
+            std::fs::read_to_string(&written).unwrap(),
+            PI_GATEWAY_EXTENSION.contents(),
+        );
+        // …and nothing else went with it: the removal is the crate's named
+        // list, not a sweep of a directory the user also keeps their own
+        // extensions in.
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    }
+
+    /// **The ordering, not just the removal.** The staging name is chosen so
+    /// the harness's glob cannot match it, which is what lets the removal
+    /// happen while the new bytes are not yet installed. Pinned because the
+    /// property is invisible in the success path: an install that renamed first
+    /// and removed second passes every other test here, and fails only when a
+    /// removal fails — leaving both extensions where the harness looks, which
+    /// is the state the whole artifact exists to prevent.
+    #[test]
+    fn the_staged_name_is_not_something_the_harness_would_load() {
+        let staged = format!(
+            ".{}.tapesctl-install-{}",
+            PI_GATEWAY_EXTENSION.file_name(),
+            std::process::id()
+        );
+        assert!(
+            !staged.ends_with(".ts"),
+            "pi globs *.ts; {staged} would be loaded as an extension while staged",
+        );
+        assert!(staged.starts_with('.'), "got: {staged}");
+    }
+
+    /// The list has to actually name the file the bug is about — the test above
+    /// would pass just as happily against an empty list if it staged no
+    /// superseded file. This is the crate's claim, restated where this command
+    /// depends on it, so a crate revision that emptied the list fails here.
+    #[test]
+    fn the_removal_list_names_what_another_client_actually_installed() {
         assert!(
             PI_GATEWAY_EXTENSION
-                .contents()
-                .contains("const DEFAULT_GATEWAY_URL = \"\";"),
+                .superseded_file_names()
+                .contains(&"paper-gateway.ts"),
+            "nothing removes the file an older paperctl installed",
         );
+    }
+
+    /// A user's own extensions are untouched: only the crate's named list is
+    /// removed, so an install is never a reason to lose unrelated work.
+    #[test]
+    fn installing_leaves_the_users_own_extensions_alone() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = PI_GATEWAY_EXTENSION.install_dir(home.path());
+        std::fs::create_dir_all(&dir).unwrap();
+        let mine = dir.join("my-extension.ts");
+        std::fs::write(&mine, "// mine\n").unwrap();
+
+        install(&PI_GATEWAY_EXTENSION, home.path()).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&mine).unwrap(), "// mine\n");
+    }
+
+    /// A dry run must describe the operation it stands in for, and the removal
+    /// is the half of it that *deletes* something. It still writes nothing.
+    #[test]
+    fn a_dry_run_names_the_superseded_copy_it_would_remove() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = PI_GATEWAY_EXTENSION.install_dir(home.path());
+        std::fs::create_dir_all(&dir).unwrap();
+        let superseded = dir.join("paper-gateway.ts");
+        std::fs::write(&superseded, "// another client's rendering\n").unwrap();
+
+        let args = PluginInstallArgs {
+            harness: "pi".to_owned(),
+            dry_run: true,
+            port: None,
+            codex_auth: None,
+        };
+        run_in(&args, home.path()).unwrap();
+
+        assert!(
+            superseded.exists(),
+            "a dry run that removed the file would have changed the machine",
+        );
+        assert!(!PI_GATEWAY_EXTENSION.install_path(home.path()).exists());
     }
 
     /// The harness's extension directory need not exist yet — a user may run

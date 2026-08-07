@@ -25,8 +25,8 @@
 //! inside by an extension instead — `tapes-harnesses` owns the assets,
 //! [`crate::plugin`] installs them, and this module's job is only to point an
 //! already-installed extension at this proxy through the crate's environment
-//! contract. That split is why `start pi` and `start opencode` refuse to launch
-//! when the extension is absent instead of running an uncaptured session.
+//! contract. That split is why `start pi` refuses to launch when the extension
+//! is absent instead of running an uncaptured session.
 //!
 //! pi is that way by necessity — it has no base-URL knob at all. opencode is
 //! that way by choice: the crate does ship an `OpenCodeRecipe` that redirects it
@@ -34,6 +34,10 @@
 //! belongs to, and opencode publishes no PID-indexed session file for the peer
 //! lookup to read. Taking the plugin road gets the redirect and the identity
 //! from one artifact, and makes this arm identical to pi's.
+//!
+//! `start opencode` is nonetheless refused today: the arm is intact and the
+//! harness is registered, but the verb is withdrawn pending rework — see
+//! [`WITHDRAWN`].
 //!
 //! The consequence for attribution is the interesting one. A redirected harness
 //! is identified from the outside, by peer PID; these two cannot be, so they
@@ -199,19 +203,39 @@ pub enum Harness {
     Pi,
 }
 
-/// Every harness `start` has an arm for, in the order they should be offered.
+/// Every harness `start` will launch, in the order they should be offered.
 ///
 /// The registry is deliberately the wider set: it lists every harness the shared
 /// crate knows, including ones no arm here launches (the Codex desktop app,
 /// which is configured rather than launched at all). This is the narrower claim
 /// — what this binary can actually do — and the error message for an unsupported
 /// name is derived from it so the two cannot drift.
-pub const SUPPORTED: &[Harness] = &[
-    Harness::Claude,
-    Harness::Codex,
-    Harness::OpenCode,
-    Harness::Pi,
-];
+///
+/// It is also what [`Harness::parse`] gates on, so this list is the surface
+/// itself rather than a description of it: a harness [`Harness`] has an arm for
+/// but that is absent here cannot be launched at all.
+pub const SUPPORTED: &[Harness] = &[Harness::Claude, Harness::Codex, Harness::Pi];
+
+/// Harnesses this binary has a working arm for and deliberately does not offer.
+///
+/// A withdrawal, not a deletion. opencode keeps everything it had — its registry
+/// entry, its capture plugin, its arms below, `tapesctl plugin install
+/// opencode` — and reinstating the verb is moving one entry back into
+/// [`SUPPORTED`]. What is withdrawn is the first-class `start` verb, because on
+/// the OAuth path the plugin captures nothing (PCC-1128), and a `start` that
+/// runs an agent while silently recording none of it is worse than a `start`
+/// that refuses.
+///
+/// The marker lives here rather than in the registry because the registry's
+/// launchability axis states a *capability* — whether a launch can be planned
+/// at all — and opencode's can. This is a product judgement about one client's
+/// surface, which is the kind of thing that differs between clients: paperctl
+/// carries its own list, by the same name and for the same reason.
+///
+/// Naming the withdrawn set explicitly, rather than just dropping the entry
+/// above, is what keeps the arms below from reading as dead code somebody
+/// tidies away — they are the work this is pending a rework of.
+pub const WITHDRAWN: &[Harness] = &[Harness::OpenCode];
 
 impl Harness {
     /// Resolve a user-typed harness name.
@@ -221,14 +245,21 @@ impl Harness {
     /// aliases and casing included. A harness the registry knows but this binary
     /// has no arm for fails here, with the same message as a name nobody knows:
     /// from the user's side both mean "not something `tapesctl start` launches".
+    ///
+    /// A [`WITHDRAWN`] harness fails identically, and that is the point: it has
+    /// an arm, and the refusal is deliberate rather than a gap. Gating on
+    /// [`SUPPORTED`] rather than on the match below is what makes the withdrawal
+    /// one line of data instead of a special case threaded through the arms.
     pub fn parse(name: &str) -> Result<Self> {
-        let resolved = registry::find(name).and_then(|harness| match harness.id() {
-            HARNESS_ID_CLAUDE => Some(Self::Claude),
-            HARNESS_ID_CODEX => Some(Self::Codex),
-            HARNESS_ID_OPENCODE => Some(Self::OpenCode),
-            HARNESS_ID_PI => Some(Self::Pi),
-            _ => None,
-        });
+        let resolved = registry::find(name)
+            .and_then(|harness| match harness.id() {
+                HARNESS_ID_CLAUDE => Some(Self::Claude),
+                HARNESS_ID_CODEX => Some(Self::Codex),
+                HARNESS_ID_OPENCODE => Some(Self::OpenCode),
+                HARNESS_ID_PI => Some(Self::Pi),
+                _ => None,
+            })
+            .filter(|harness| SUPPORTED.contains(harness));
         resolved.context(error::UnsupportedHarnessSnafu {
             harness: name.trim().to_owned(),
             supported: supported_names(),
@@ -1175,11 +1206,8 @@ mod tests {
         let err = Harness::parse("codex-app").unwrap_err();
         let message = format!("{err}");
         assert!(message.contains("codex-app"), "got: {message}");
-        // And the message advertises exactly the arms that exist.
-        assert!(
-            message.contains("claude, codex, opencode, pi"),
-            "got: {message}"
-        );
+        // And the message advertises exactly what `start` will launch.
+        assert!(message.contains("claude, codex, pi"), "got: {message}");
     }
 
     #[test]
@@ -1337,12 +1365,46 @@ mod tests {
     //
     // opencode takes pi's lane, so these mirror pi's tests rather than inventing
     // a shape. What is asserted below is precisely the places the two harnesses
-    // are *not* interchangeable.
+    // are *not* interchangeable — and, first, that none of it is reachable
+    // through `start` today.
+
+    /// **The withdrawal.** `start opencode` is refused exactly the way an
+    /// unknown name is: from a user's side there is no difference between "we
+    /// never had this" and "we are not offering this", and inventing a third
+    /// answer would only invite them to work around it.
+    #[test]
+    fn a_withdrawn_harness_is_refused_the_way_an_unrecognised_one_is() {
+        for name in ["opencode", "  OpenCode "] {
+            let message = format!("{}", Harness::parse(name).unwrap_err());
+            assert!(message.contains(name.trim()), "got: {message}");
+            assert!(!message.contains(", opencode"), "still offered: {message}");
+        }
+    }
+
+    /// …and it is a withdrawal, not a deletion: the registry still knows the
+    /// harness, `tapesctl plugin install opencode` still installs its capture
+    /// plugin, and the arms below still work. Reinstating the verb is moving one
+    /// entry from [`WITHDRAWN`] to [`SUPPORTED`], which is why the two lists are
+    /// asserted disjoint rather than one being derived from the other.
+    #[test]
+    fn a_withdrawn_harness_keeps_everything_except_the_verb() {
+        for harness in WITHDRAWN {
+            assert!(!SUPPORTED.contains(harness), "{harness:?} is still offered");
+            let registered = registry::find(harness.id())
+                .unwrap_or_else(|| panic!("{harness:?} withdrawn from a registry that lacks it"));
+            assert!(
+                registered.is_launchable(),
+                "{harness:?} needed no withdrawing"
+            );
+            assert!(
+                !harness.required_plugin_artifacts().is_empty(),
+                "{harness:?}'s capture plugin went with the verb",
+            );
+        }
+    }
 
     #[test]
-    fn opencode_resolves_through_the_shared_registry() {
-        assert_eq!(Harness::parse("opencode").unwrap(), Harness::OpenCode);
-        assert_eq!(Harness::parse("  OpenCode ").unwrap(), Harness::OpenCode);
+    fn opencode_still_resolves_to_its_registry_identity() {
         assert_eq!(Harness::OpenCode.program(), "opencode");
         assert_eq!(Harness::OpenCode.id(), "opencode");
     }
@@ -1392,22 +1454,30 @@ mod tests {
         );
     }
 
+    /// Asserted on the arm rather than through `StartConfig::resolve`, which no
+    /// longer accepts the name. The schema/upstream/provider triple is the work
+    /// the withdrawal is pending a rework of, and it should keep being held to
+    /// its shape while it waits.
     #[test]
     fn opencode_defaults_to_the_anthropic_schema() {
-        let config = StartConfig::resolve(args("opencode")).unwrap();
-        assert_eq!(config.schema, Some(DEFAULT_OPENCODE_SCHEMA));
-        assert_eq!(config.upstream.as_str(), "https://api.anthropic.com/");
-        assert_eq!(config.harness.provider(config.schema), "anthropic");
+        let harness = Harness::OpenCode;
+        assert_eq!(harness.default_schema(), Some(DEFAULT_OPENCODE_SCHEMA));
+        assert_eq!(
+            harness.default_upstream(None, Some(DEFAULT_OPENCODE_SCHEMA)),
+            "https://api.anthropic.com",
+        );
+        assert_eq!(harness.provider(Some(DEFAULT_OPENCODE_SCHEMA)), "anthropic");
     }
 
     #[test]
-    fn the_opencode_schema_selects_the_upstream_the_provider_and_the_hint_together() {
-        let mut args = args("opencode");
-        args.schema = Some("openai".to_owned());
-        let config = StartConfig::resolve(args).unwrap();
-        assert_eq!(config.schema, Some(UpstreamSchema::OpenAi));
-        assert_eq!(config.upstream.as_str(), "https://api.openai.com/");
-        assert_eq!(config.harness.provider(config.schema), "openai");
+    fn the_opencode_schema_selects_the_upstream_and_the_provider_together() {
+        let harness = Harness::OpenCode;
+        let schema = Some(UpstreamSchema::OpenAi);
+        assert_eq!(
+            harness.default_upstream(None, schema),
+            "https://api.openai.com",
+        );
+        assert_eq!(harness.provider(schema), "openai");
     }
 
     #[test]
