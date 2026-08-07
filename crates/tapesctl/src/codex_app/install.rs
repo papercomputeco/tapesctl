@@ -55,11 +55,12 @@ use tapes_harnesses::plugin::codex_app::{
 use tracing::info;
 
 use super::{
-    Handoff, MARKETPLACE_NAME, PLUGIN_NAME, PROVIDER_DISPLAY_NAME, PROVIDER_ID, codex_config_path,
-    generate_secret, plugin_root, resolve_auth, state_dir,
+    Handoff, MARKETPLACE_NAME, PLUGIN_NAME, PROVIDER_DISPLAY_NAME, PROVIDER_ID, generate_secret,
+    plugin_root, resolve_auth, state_dir,
 };
 use crate::cli::{PluginInstallArgs, PluginUninstallArgs};
 use crate::error::{Result, error};
+use crate::machine::Machine;
 
 /// Version stamped into the rendered plugin manifest.
 ///
@@ -93,13 +94,14 @@ pub struct Plan {
     pub hook_command: String,
     /// The `codex` binary the plugin manager is driven through.
     ///
-    /// Bare by default, so the user's `PATH` resolves the same binary they
-    /// would have run themselves. It is a field rather than a literal for the
-    /// reason `config_path` is a parameter of [`run_at`]: a test that cannot
-    /// substitute it can only assert what the installer *would* do, and the
-    /// one thing worth asserting here — that registration happens after the
-    /// config and the handoff are both in place — is visible only to the
-    /// program being run.
+    /// Carried from [`Machine::codex_program`] rather than defaulted to the
+    /// bare name here, and that is load-bearing rather than tidy: a default
+    /// would be resolved from `PATH`, so every test that reached this far
+    /// spawned the developer's own `codex` and had it register a marketplace
+    /// against a temporary directory in their real `~/.codex/config.toml`.
+    /// Substitutability is also the only way to assert the one property that
+    /// lives inside the program being run — that registration happens after
+    /// the config and the handoff are both in place.
     pub codex_program: PathBuf,
 }
 
@@ -124,12 +126,15 @@ impl Plan {
 
 /// Decide what an install would do, without touching anything.
 ///
+/// Every location the plan names comes from `machine`, which the CLI boundary
+/// resolved once — so a caller holding a [`Machine`] under a temporary root
+/// gets a plan that can only touch that root.
+///
 /// `executable` is the absolute path a hook will exec — passed in rather than
 /// read from [`std::env::current_exe`] here so the decision is testable
 /// against a path that is not the test runner's own binary.
 pub fn plan(
-    home: &Path,
-    config_path: PathBuf,
+    machine: &Machine,
     port: Option<u16>,
     auth: CodexAuth,
     executable: &Path,
@@ -139,15 +144,15 @@ pub fn plan(
         Some(port) => SocketAddr::from(([127, 0, 0, 1], port)),
         None => free_loopback_addr()?,
     };
-    let handoff_path = Handoff::path(home);
+    let handoff_path = Handoff::path(machine.home());
     Ok(Plan {
         proxy_addr,
         auth,
-        config_path,
-        plugin_root: plugin_root(home),
+        config_path: machine.codex_config_path().to_path_buf(),
+        plugin_root: plugin_root(machine.home()),
         hook_command: hook_command(executable, &handoff_path, harness_id),
         handoff_path,
-        codex_program: PathBuf::from("codex"),
+        codex_program: machine.codex_program().to_path_buf(),
     })
 }
 
@@ -223,44 +228,24 @@ fn plugin_files(hook_command: &str) -> Vec<(PathBuf, String)> {
 }
 
 /// Run one `plugin install` for a lifecycle-hook harness.
-pub fn run(args: &PluginInstallArgs, home: &Path) -> Result<()> {
-    run_at(args, home, codex_config_path(home))
-}
-
-/// The body of [`run`], against an explicit `config.toml`.
 ///
-/// The config path is a parameter rather than resolved inside because
-/// [`super::codex_home`] reads `$CODEX_HOME` from the ambient environment: a
-/// test that called the resolver would patch the developer's own Codex
-/// configuration on any machine where that variable happens to be set.
-pub fn run_at(args: &PluginInstallArgs, home: &Path, config_path: PathBuf) -> Result<()> {
-    run_with(args, home, config_path, PathBuf::from("codex"))
-}
-
-/// The body of [`run_at`], against an explicit `codex` binary.
-///
-/// Split for the reason the config path is: driving the plugin manager means
-/// running a program, and a test that had to find that program on `PATH` would
-/// be mutating process-global state shared with every other test in the
-/// binary.
-pub fn run_with(
-    args: &PluginInstallArgs,
-    home: &Path,
-    config_path: PathBuf,
-    codex_program: PathBuf,
-) -> Result<()> {
+/// There is no sibling that resolves `machine` internally, and that absence is
+/// the fix for a defect worth naming. This surface used to offer `run(args,
+/// home)` over `run_at(args, home, config_path)` over `run_with(args, home,
+/// config_path, codex_program)`, each layer defaulting one more location. The
+/// tests called the middle one, so they supplied a temporary `config.toml` and
+/// inherited the default `codex` — which `PATH` resolved to the developer's
+/// own CLI, which wrote a marketplace registration into the developer's real
+/// `~/.codex/config.toml` naming a temporary directory the test then deleted.
+/// A defaulting layer is exactly the thing a test reaches for and exactly the
+/// thing that lets it escape, so every location arrives in one value that the
+/// CLI boundary built.
+pub fn run(args: &PluginInstallArgs, machine: &Machine) -> Result<()> {
     let harness = super::resolve_hook_harness(&args.harness)?;
     let auth = resolve_auth(args.codex_auth.as_deref())?;
     let executable = std::env::current_exe().context(error::CurrentExeSnafu)?;
-    let mut plan = plan(
-        home,
-        config_path,
-        args.port,
-        auth,
-        &executable,
-        harness.id(),
-    )?;
-    plan.codex_program = codex_program;
+    let home = machine.home();
+    let plan = plan(machine, args.port, auth, &executable, harness.id())?;
 
     if args.dry_run {
         report_plan(&plan);
@@ -418,14 +403,10 @@ fn register_with_codex(plan: &Plan) {
 /// Ordered so a partial failure leaves the machine *less* captured rather than
 /// more: the provider goes first, because a `config.toml` still pointing at a
 /// port nothing serves is the one state that breaks the app itself.
-pub fn uninstall(args: &PluginUninstallArgs, home: &Path) -> Result<()> {
-    uninstall_at(args, home, codex_config_path(home))
-}
-
-/// The body of [`uninstall`], against an explicit `config.toml`. Split out for
-/// the reason [`run_at`] is.
-pub fn uninstall_at(args: &PluginUninstallArgs, home: &Path, config_path: PathBuf) -> Result<()> {
+pub fn uninstall(args: &PluginUninstallArgs, machine: &Machine) -> Result<()> {
     let harness = super::resolve_hook_harness(&args.harness)?;
+    let home = machine.home();
+    let config_path = machine.codex_config_path().to_path_buf();
     let state = state_dir(home);
     // The provider the *installer* wrote, when it is still recorded; the
     // compiled-in name otherwise, so a handoff removed by hand does not strand
@@ -804,31 +785,44 @@ mod tests {
 
     /// Where an installer under a temporary home writes codex's config.
     ///
-    /// Spelled here rather than taken from [`codex_config_path`] so no test
-    /// can be steered onto the developer's real `$CODEX_HOME`.
+    /// Spelled here rather than resolved so no test can be steered onto the
+    /// developer's real `$CODEX_HOME`.
     fn config_path(home: &Path) -> PathBuf {
         home.join(".codex").join("config.toml")
     }
 
+    /// A machine wholly contained by `home`, driven through a `codex` that is
+    /// not there.
+    ///
+    /// The absent CLI is the point rather than a shortcut. Registration is the
+    /// one step of an install that reaches outside the tree it was given, and
+    /// a `codex` that does not exist makes the manager report
+    /// [`ManagerRun::CliAbsent`] and run nothing — so these tests assert what
+    /// the installer *writes* without any of them mutating the Codex
+    /// configuration of the machine running the suite. The one test that does
+    /// care what registration ran substitutes a shim under its own temporary
+    /// home.
+    fn machine(home: &Path) -> Machine {
+        Machine::at(home, config_path(home), home.join("no-such-codex-cli"))
+    }
+
     fn install_at(args: &PluginInstallArgs, home: &Path) -> Result<()> {
-        run_at(args, home, config_path(home))
+        run(args, &machine(home))
     }
 
     fn uninstall_from(home: &Path) -> Result<()> {
-        uninstall_at(
+        uninstall(
             &PluginUninstallArgs {
                 harness: "codex-app".to_owned(),
                 dry_run: false,
             },
-            home,
-            config_path(home),
+            &machine(home),
         )
     }
 
     fn a_plan(home: &Path) -> Plan {
         plan(
-            home,
-            config_path(home),
+            &machine(home),
             Some(51520),
             CodexAuth::ChatGpt,
             Path::new("/opt/tapes ctl/bin/tapesctl"),
@@ -1191,8 +1185,7 @@ mod tests {
     fn the_api_key_endpoint_ends_at_the_v1_segment_and_the_plan_login_does_not() {
         let home = Path::new("/home/someone");
         let chatgpt = plan(
-            home,
-            config_path(home),
+            &machine(home),
             Some(1),
             CodexAuth::ChatGpt,
             Path::new("/x"),
@@ -1200,8 +1193,7 @@ mod tests {
         )
         .unwrap();
         let api_key = plan(
-            home,
-            config_path(home),
+            &machine(home),
             Some(1),
             CodexAuth::ApiKey,
             Path::new("/x"),
@@ -1241,8 +1233,7 @@ mod tests {
     fn a_port_is_chosen_when_none_is_named() {
         let home = Path::new("/home/someone");
         let plan = plan(
-            home,
-            config_path(home),
+            &machine(home),
             None,
             CodexAuth::ChatGpt,
             Path::new("/x"),
@@ -1336,7 +1327,11 @@ mod tests {
         .unwrap();
         std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        run_with(&install_args(false), home.path(), config.clone(), shim).unwrap();
+        run(
+            &install_args(false),
+            &machine(home.path()).with_codex_program(shim),
+        )
+        .unwrap();
 
         let lines: Vec<String> = std::fs::read_to_string(&observed)
             .expect("the installer never ran codex at all")

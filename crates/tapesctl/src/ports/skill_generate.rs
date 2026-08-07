@@ -353,7 +353,16 @@ mod tests {
             until: None,
             search: None,
             search_top: 3,
-            source_dir: None,
+            // Never `None`, which would make [`authoring_dir`] answer with the
+            // developer's real `~/.tapes/skills`. Every test using this
+            // fixture stops before the write — behind a live model call — so
+            // nothing reaches it today, and that is exactly the kind of
+            // protection that lapses silently the moment someone stubs the
+            // model out. A path that cannot be created fails such a test
+            // loudly instead of writing to the runner's home; a test that
+            // means to assert the write should name its own temporary
+            // directory here.
+            source_dir: Some(PathBuf::from("/nonexistent/tapesctl-test-skills")),
         }
     }
 
