@@ -770,13 +770,16 @@ fn report_plan(plan: &Plan) {
 /// let any installer make.
 fn report_next_steps(plan: &Plan, harness_id: &str) {
     println!();
-    println!("Finish in the Codex app (tapesctl cannot automate these):");
+    println!("Finish enabling capture (tapesctl cannot automate these):");
     println!(
-        "  1. Enable the {} plugin in the app's Installed list.",
+        "  1. In the Codex app, enable the {} plugin in the app's Installed list.",
         plan.plugin_spec()
     );
     println!(
-        "  2. Run /hooks and trust its hooks. Trust binds to the exact \
+        "  2. In the codex CLI — not the app — run /hooks and trust this \
+         plugin's hooks. The app has no /hooks command and its Hooks settings \
+         page does not list plugin hooks, but trust is shared state, so \
+         trusting once in the CLI covers the app too. Trust binds to the exact \
          hook-definition hash, so a reinstall requires trusting again."
     );
     println!();
