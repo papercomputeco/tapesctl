@@ -36,6 +36,7 @@ use tracing::info;
 
 use crate::cli::{PluginInstallArgs, PluginUninstallArgs};
 use crate::error::{Result, error};
+use crate::machine::Machine;
 
 /// Resolve a user-typed harness name against the shared registry.
 ///
@@ -227,20 +228,32 @@ fn restrict_permissions(_file: &std::fs::File, _path: &Path) -> Result<()> {
 }
 
 /// Run one `plugin install`.
+///
+/// The harness name is checked before this machine is resolved. A typo should
+/// be answered by naming the harnesses that do exist, and answering it needs
+/// nothing about the environment — so a misspelled install neither reads the
+/// home directory nor looks for a `codex` on `PATH`.
 pub fn run(args: PluginInstallArgs) -> Result<()> {
-    let home = dirs::home_dir().context(error::NoHomeDirSnafu)?;
-    run_in(&args, &home)
+    resolve(&args.harness)?;
+    run_in(&args, &Machine::resolve()?)
 }
 
-/// The body of [`run`], against an explicit home.
+/// The body of [`run`], against an explicit machine.
 ///
-/// Split out for the same reason [`install`] takes one: every case worth
+/// Split out for the same reason [`install`] takes a home: every case worth
 /// testing — the dry run that must write nothing, the harness with nothing to
 /// install — is about what does or does not appear on disk, and a test that
 /// asserted against the developer's real home would be both unreliable and
 /// destructive.
-fn run_in(args: &PluginInstallArgs, home: &Path) -> Result<()> {
+///
+/// It takes the whole [`Machine`] rather than just a home because one branch
+/// below hands off to the codex-app installer, which also patches a
+/// `config.toml` and drives the `codex` CLI. A home alone would leave those
+/// two to be defaulted downstream, which is how the installer's tests came to
+/// rewrite the developer's real Codex configuration.
+fn run_in(args: &PluginInstallArgs, machine: &Machine) -> Result<()> {
     let harness = resolve(&args.harness)?;
+    let home = machine.home();
 
     // A harness whose plugin is a set of manifest *templates* is not installed
     // by copying anything: the manifests have to be rendered around this
@@ -251,7 +264,7 @@ fn run_in(args: &PluginInstallArgs, home: &Path) -> Result<()> {
     // deliberately yield no artifacts and would otherwise read as "needs no
     // plugin".
     if matches!(harness.plugin(), PluginDelivery::HookManifestTemplates(_)) {
-        return crate::codex_app::install::run(args, home);
+        return crate::codex_app::install::run(args, machine);
     }
     // The flags that shape that install describe a durable endpoint and a
     // credential mode, neither of which a copied artifact has.
@@ -337,21 +350,23 @@ fn run_in(args: &PluginInstallArgs, home: &Path) -> Result<()> {
 
 /// Run one `plugin uninstall`.
 pub fn uninstall(args: PluginUninstallArgs) -> Result<()> {
-    let home = dirs::home_dir().context(error::NoHomeDirSnafu)?;
-    uninstall_in(&args, &home)
+    resolve(&args.harness)?;
+    uninstall_in(&args, &Machine::resolve()?)
 }
 
-/// The body of [`uninstall`], against an explicit home.
+/// The body of [`uninstall`], against an explicit machine.
 ///
 /// Removal is the mirror of installation and inherits its asymmetry: a copied
 /// artifact is a file to delete, while a hook plugin also wrote configuration
 /// into a file the *harness* owns. Only the second can leave a machine broken
-/// if it is half-undone, which is why it has its own path.
-fn uninstall_in(args: &PluginUninstallArgs, home: &Path) -> Result<()> {
+/// if it is half-undone, which is why it has its own path — and why it needs
+/// the same injected locations [`run_in`] does.
+fn uninstall_in(args: &PluginUninstallArgs, machine: &Machine) -> Result<()> {
     let harness = resolve(&args.harness)?;
+    let home = machine.home();
 
     if matches!(harness.plugin(), PluginDelivery::HookManifestTemplates(_)) {
-        return crate::codex_app::install::uninstall(args, home);
+        return crate::codex_app::install::uninstall(args, machine);
     }
 
     let artifacts = harness.plugin_artifacts();
@@ -389,6 +404,19 @@ fn uninstall_in(args: &PluginUninstallArgs, home: &Path) -> Result<()> {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    /// A machine wholly contained by `home`.
+    ///
+    /// The `codex` it names does not exist, so a test that strayed onto the
+    /// codex-app branch would find no CLI to drive rather than the
+    /// developer's own — see [`Machine`].
+    fn machine(home: &Path) -> Machine {
+        Machine::at(
+            home,
+            home.join(".codex").join("config.toml"),
+            home.join("no-such-codex-cli"),
+        )
+    }
     use tapes_harnesses::plugin::PI_GATEWAY_EXTENSION;
     use tapes_harnesses::plugin::pi;
 
@@ -573,7 +601,7 @@ mod tests {
             port: None,
             codex_auth: None,
         };
-        run_in(&args, home.path()).unwrap();
+        run_in(&args, &machine(home.path())).unwrap();
 
         assert!(
             superseded.exists(),
@@ -741,7 +769,7 @@ mod tests {
             port: None,
             codex_auth: None,
         };
-        run_in(&args, home.path()).unwrap();
+        run_in(&args, &machine(home.path())).unwrap();
         assert!(std::fs::read_dir(home.path()).unwrap().next().is_none());
     }
 
@@ -754,7 +782,7 @@ mod tests {
             port: None,
             codex_auth: None,
         };
-        run_in(&args, home.path()).unwrap();
+        run_in(&args, &machine(home.path())).unwrap();
 
         assert!(!PI_GATEWAY_EXTENSION.install_path(home.path()).exists());
         // Not even the directory: a dry run that created `~/.pi` would have
@@ -773,7 +801,7 @@ mod tests {
             port: None,
             codex_auth: None,
         };
-        run_in(&args, home.path()).unwrap();
+        run_in(&args, &machine(home.path())).unwrap();
         assert!(PI_GATEWAY_EXTENSION.install_path(home.path()).exists());
     }
 }

@@ -57,14 +57,14 @@ const PROVIDER: &str = "openai";
 /// Run one capture until interrupted.
 pub async fn run(args: CaptureArgs) -> Result<()> {
     let harness = codex_app::resolve_hook_harness(&args.harness)?;
-    let home = dirs::home_dir().context(error::NoHomeDirSnafu)?;
-    let handoff = Handoff::read(&Handoff::path(&home))?;
+    let machine = crate::machine::Machine::resolve()?;
+    let handoff = Handoff::read(&Handoff::path(machine.home()))?;
 
     // Before binding anything: is the harness still pointed here? A config
     // that names some other address produces a capture that runs perfectly and
     // records nothing, which is the failure users cannot diagnose. Refused
     // rather than warned, because the fix is one non-destructive command.
-    let auth = verify_config(&home, &handoff)?;
+    let auth = verify_config_at(machine.codex_config_path(), &handoff)?;
 
     let tapes_url = args
         .tapes_url
@@ -204,13 +204,11 @@ async fn bind(addr: SocketAddr) -> Result<tokio::net::TcpListener> {
 /// read-back half of the same grammar the installer wrote with — so "what the
 /// config says" and "what an install would write" cannot be two different
 /// answers.
-fn verify_config(home: &std::path::Path, handoff: &Handoff) -> Result<CodexAuth> {
-    verify_config_at(&codex_app::codex_config_path(home), handoff)
-}
-
-/// The body of [`verify_config`], against an explicit config path — resolving
-/// `$CODEX_HOME` reads the ambient environment, and a test that did so would
-/// answer differently on a machine where that variable happens to be set.
+///
+/// The config path is a parameter rather than resolved here: locating it means
+/// reading `$CODEX_HOME`, which [`crate::machine::Machine::resolve`] does once
+/// at the CLI boundary, so a test names its own file instead of answering
+/// differently on every machine the suite runs on.
 fn verify_config_at(path: &std::path::Path, handoff: &Handoff) -> Result<CodexAuth> {
     let path = path.to_path_buf();
     // Absent reads as empty, which the read-back reports as "no such provider"

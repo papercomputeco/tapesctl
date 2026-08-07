@@ -8,6 +8,7 @@ pub mod cli;
 pub mod codex_app;
 pub mod error;
 pub mod logging;
+pub mod machine;
 pub mod plugin;
 pub mod ports;
 pub mod start;
@@ -205,18 +206,32 @@ mod tests {
         // `sync` and `plugin install` both used to answer `NotImplemented`
         // here. Both are implemented now, and this is what would notice if a
         // future refactor quietly stubbed one again.
+        //
+        // The harness is deliberately one that does not exist. Only the real
+        // implementation answers an unknown name by listing the registry, so
+        // `UnknownHarness` proves the arm reaches it — and it proves that
+        // without dispatching an install, which would resolve the *runner's*
+        // home, `$CODEX_HOME`, and `codex` on `PATH`. A dispatched install
+        // once did exactly that, and the real `codex` it found rewrote the
+        // developer's own `~/.codex/config.toml`; `Machine::resolve` now
+        // refuses under `cfg(test)` so no test can repeat it. What an install
+        // actually writes is asserted in `plugin::tests` against a temporary
+        // home.
         let cli = Cli {
             verbose: 0,
             command: Some(Command::Plugin(PluginCommand::Install(PluginInstallArgs {
-                // A harness needing no plugin: reaches the implementation and
-                // reports, without writing to the runner's home.
-                harness: "claude".to_owned(),
+                harness: "not-a-harness".to_owned(),
                 dry_run: false,
                 port: None,
                 codex_auth: None,
             }))),
         };
-        assert!(!matches!(run(cli).await, Err(Error::NotImplemented { .. })));
+        let answered = run(cli).await;
+        assert!(!matches!(answered, Err(Error::NotImplemented { .. })));
+        assert!(
+            matches!(answered, Err(Error::UnknownHarness { .. })),
+            "got: {answered:?}"
+        );
     }
 
     #[tokio::test]
