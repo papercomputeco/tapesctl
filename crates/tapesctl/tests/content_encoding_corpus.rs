@@ -375,47 +375,30 @@ const OTHER_HOME: &str = "tapes pkg/capture/contentencoding.go";
 
 // --- gate 1: the oracle -----------------------------------------------------
 
-/// The one case this implementation does not satisfy, named rather than
-/// silently tolerated.
-///
-/// `divergence-empty-body-under-zstd` records — as *observed*, and flagged
-/// upstream as a suspected bug rather than promoted to a rule — that Go's zstd
-/// reader returns success with zero bytes for a zero-byte body, while its gzip
-/// reader errors on the same input. The case's own `contested.open` asks a Rust
-/// consumer to report what its binding does instead of assuming.
-///
-/// It errors: libzstd's streaming decoder calls a zero-byte input an incomplete
-/// frame. So this is the corpus's first genuine cross-language divergence, and
-/// the right place to resolve it is the reference implementation (make gzip and
-/// zstd agree), not here — teaching either decoder to return empty-for-empty to
-/// make a test green would silently swallow a body that was lost in flight,
-/// which is the failure the whole corpus exists to make loud.
-///
-/// Skipping it here is therefore deliberate and bounded: the exact behaviour
-/// this implementation has on that input is pinned by
-/// [`an_empty_body_is_an_error_under_both_codings_here`] below, so the skip
-/// cannot hide a later change on either side. When upstream resolves the pair,
-/// that test goes red, this list empties, and the case rejoins the oracle.
-const KNOWN_DIVERGENCE: &str = "divergence-empty-body-under-zstd.json";
+// There is no exemption list. There was one — `divergence-empty-body-under-zstd`
+// held the corpus's first genuine cross-language divergence, where Go's zstd
+// reader returned success with zero bytes for a zero-byte body while its gzip
+// reader errored on the same input, and this implementation errored under both.
+// It was resolved where the case argued it should be: the reference
+// implementation now states the empty-body rule above both decoder libraries, so
+// neither can decide it, and the case (renamed `contested-empty-body-under-zstd`)
+// pins the agreed rule that this decoder already had.
+//
+// Recorded rather than simply deleted, because it is the corpus working end to
+// end: an observed behaviour was flagged as suspect instead of promoted to a
+// rule, a second implementation answered the open question, and the answer moved
+// the reference implementation rather than either test.
 
 #[test]
 fn every_case_decodes_to_its_declared_outcome() {
     let cases = load_cases();
     assert_eq!(cases.len(), 27, "the vendored corpus is 27 cases");
-    assert!(
-        cases.iter().any(|(file, _)| file == KNOWN_DIVERGENCE),
-        "the known-divergence exemption names a case that is no longer in the corpus; \
-         delete the exemption",
-    );
 
     // Every case is checked, and the failures are reported together. A corpus
     // consumer that stopped at the first red case would report one drifted rule
     // at a time across as many runs as there are rules.
     let mut failed: Vec<String> = Vec::new();
     for (file, case) in &cases {
-        if file == KNOWN_DIVERGENCE {
-            continue;
-        }
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             check_case(file, case);
         }));
@@ -497,23 +480,21 @@ fn check_case(file: &str, case: &EncodingCase) {
     }
 }
 
-/// What this implementation actually does on a zero-byte body — the answer
-/// `divergence-empty-body-under-zstd`'s `contested.open` asks a Rust consumer
-/// for.
+/// What this implementation does on a zero-byte body, under both codings and
+/// as one statement.
 ///
-/// Both codings error here. Go's gzip reader errors too, but its zstd reader
-/// returns success with zero bytes, so the pair that upstream describes as
-/// "identical inputs, opposite outcomes, decided by which decoder the header
-/// happened to name" is a Go-internal inconsistency that this implementation
-/// does not reproduce: here the two codings already agree, and they agree on
-/// the answer the corpus's `contested` block argues is the right one.
+/// This was the answer that resolved the corpus's first cross-language
+/// divergence: the pair of cases recorded gzip erroring and zstd succeeding
+/// upstream, and this implementation erroring under both, which is what made
+/// the inconsistency Go-internal rather than a choice between implementations.
+/// The reference implementation now states the rule above both decoder
+/// libraries and the cases agree with what is asserted here.
 ///
-/// This test is the reason the oracle above may skip that case. It pins the
-/// divergence from both ends: it goes red if this decoder ever starts accepting
-/// an empty body, and the oracle's exemption goes stale the moment upstream
-/// changes the case. Neither implementation is bent to make the other's test
-/// green — see the case file's own `contested` block for why that would be the
-/// wrong repair.
+/// Kept now that the oracle covers both cases, because it says the thing the
+/// two cases only imply separately: the outcome does not depend on which coding
+/// the header named. A decoder that started returning empty-for-empty under one
+/// of them would silently swallow a body lost in flight — the failure the whole
+/// corpus exists to make loud — and this goes red for either.
 #[test]
 fn an_empty_body_is_an_error_under_both_codings_here() {
     for coding in ["gzip", "zstd"] {

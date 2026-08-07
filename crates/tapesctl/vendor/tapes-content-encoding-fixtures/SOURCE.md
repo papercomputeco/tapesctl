@@ -13,9 +13,9 @@ than quietly making a red test green against cases nobody upstream still has.
 
 * **Repo:** `tapes` (Paper Compute).
 * **Path within repo:** `fixtures/content-encoding/`.
-* **Current snapshot SHA:** `2c4607c87153342375bc0a67409290b3879ca866`
-  ("✨ feat(fixtures): pin that a concatenated stream decodes past its first
-  member") — the last commit to touch `fixtures/content-encoding`. 27 cases.
+* **Current snapshot SHA:** `b5ff59a5f6714c903aaf5278c46ef0031b272db5`
+  ("✨ feat(fixtures): specify the drop-reason taxonomy and its boundary
+  (#296)") — the last commit to touch `fixtures/content-encoding`. 27 cases.
   TODO: replace with a tagged fixture-cut id once tapes publishes versioned
   cuts (`fixtures/manifest.json` reserves the `cut` block for exactly that).
 
@@ -59,32 +59,32 @@ phrasing as the contract.
 
 ## Known divergence
 
-**`divergence-empty-body-under-zstd` does not hold here, and is exempted by
-name** in the oracle. The case records — as *observed* upstream, flagged there
-as a suspected bug rather than promoted to a rule — that Go's zstd reader
-returns success with zero bytes for a zero-byte body while its gzip reader
-errors on the same input. Its `contested.open` asks a Rust consumer to report
-what its binding does rather than assume.
+**None.** Every case in the corpus holds against this decoder, and the oracle
+carries no exemption list.
 
-The answer: **this implementation errors under both codings.** libzstd's
-streaming decoder calls a zero-byte input an incomplete frame. So the
-inconsistency upstream describes is Go-internal, and does not reproduce here —
-the two codings already agree in this implementation, on the answer the case's
-own `contested` block argues is the right one.
+There was one, and it is worth recording how it ended, because it is the corpus
+working exactly as designed. `divergence-empty-body-under-zstd` recorded — as
+*observed* upstream, flagged there as a suspected bug rather than promoted to a
+rule — that Go's zstd reader returned success with zero bytes for a zero-byte
+body while its gzip reader errored on the same input, and its `contested.open`
+asked a Rust consumer to report what its binding did rather than assume.
 
-That makes it the corpus's first genuine cross-language divergence, and the
-place to resolve it is the reference implementation (make Go's two codings
-agree), not this consumer. Teaching either decoder to return empty-for-empty in
-order to make a test green would silently swallow a body lost in flight, which
-is the failure the whole corpus exists to make loud. Note also
-`contested-empty-body-under-gzip`'s caller precondition: with a bodiless request
-never reaching the decoder, neither answer is reachable in production.
+This implementation errors under both codings: libzstd's streaming decoder calls
+a zero-byte input an incomplete frame. That answer made the inconsistency
+Go-internal rather than a choice between two implementations, which is what
+turned the case into the corpus's first genuine cross-language divergence — and
+it was resolved where the case itself argued it should be, in the reference
+implementation, which now states the empty-body rule above both decoder
+libraries so neither can decide it. The case is renamed
+`contested-empty-body-under-zstd` and pins the agreed rule.
 
-The exemption is bounded rather than a mute. `an_empty_body_is_an_error_under_both_codings_here`
-pins what this implementation actually does, so it goes red if this decoder ever
-starts accepting an empty body, and the exemption itself goes stale the moment
-upstream changes or renames the case. When upstream resolves the pair, that test
-changes, the exemption is deleted, and the case rejoins the oracle.
+Nothing here was bent to make it green: this decoder's behaviour is unchanged,
+and `an_empty_body_is_an_error_under_both_codings_here` still pins it — now as
+the statement the two cases only imply separately, that the outcome does not
+depend on which coding the header named. Note also
+`contested-empty-body-under-gzip`'s caller precondition, unchanged and still
+load-bearing: a bodiless request must never reach the decoder, so neither answer
+was reachable in production, which is why the repair was safe.
 
 ## How to refresh
 

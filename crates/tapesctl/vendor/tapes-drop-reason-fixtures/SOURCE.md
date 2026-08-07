@@ -13,8 +13,8 @@ than quietly making a red test green against cases nobody upstream still has.
 
 * **Repo:** `tapes` (Paper Compute).
 * **Path within repo:** `fixtures/drop-reason/`.
-* **Current snapshot SHA:** `34f0cf730b1ecb1d2741095632eb95ab4d6f166a`
-  ("✨ feat(fixtures): pin the two turn-eligibility gates as agreed policy") —
+* **Current snapshot SHA:** `f7b75aee42cc44646dd30884fba294c4d8ad23a9`
+  ("✨ feat(fixtures): make turn eligibility an executable agreement (#298)") —
   the last commit to touch `fixtures/drop-reason`. 14 cases.
   TODO: replace with a tagged fixture-cut id once tapes publishes versioned
   cuts (`fixtures/manifest.json` reserves the `cut` block for exactly that).
