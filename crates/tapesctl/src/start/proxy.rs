@@ -14,7 +14,9 @@
 //! * **No transparent decompression.** `reqwest` is built with no compression
 //!   feature, so a `Content-Encoding: gzip` response arrives — and is
 //!   forwarded — still encoded. See the dependency comment in the workspace
-//!   manifest.
+//!   manifest. The request body is likewise forwarded exactly as it arrived;
+//!   the decode in [`super::content_encoding`] runs on the capture copy only
+//!   and cannot alter a byte of what goes upstream.
 //! * **Framing headers are stripped on re-stream.** `Content-Length` and
 //!   `Transfer-Encoding` describe the *upstream's* framing; the body is being
 //!   re-framed by this server, so both are dropped and hyper recomputes them.
@@ -33,9 +35,16 @@
 //! # Capture degrades; forwarding does not
 //!
 //! Whenever capture cannot be done correctly — an oversize request body, a
-//! response past the raw cap, a request body that is not JSON — the turn is
-//! dropped from capture with a warning and the proxy keeps forwarding. The
-//! harness must never fail because telemetry could not be recorded.
+//! response past the raw cap, a request body this build cannot decode, a
+//! request body that is not JSON — the turn is dropped from capture with a
+//! warning and the proxy keeps forwarding. The harness must never fail because
+//! telemetry could not be recorded.
+//!
+//! Those last two are separate warnings on purpose. Reporting an undecodable
+//! encoding as "not JSON" describes the symptom of a body nobody tried to
+//! decode, and a reader who believes it goes looking at the harness's payload
+//! instead of at this proxy's decoder — which is how zstd request bodies stayed
+//! silently uncaptured (PCC-1126).
 //!
 //! Bodiless requests are the exception, and they are logged at debug rather
 //! than warn: a GET has nothing to capture by construction, so reporting it as
@@ -64,6 +73,7 @@ use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tracing::{debug, warn};
 use url::Url;
 
+use super::content_encoding::decode_content_encoding;
 use super::ingest::{
     IngestClient, SessionEnvelope, TurnMeta, TurnPayload, encode_raw_response, status_class,
 };
@@ -319,6 +329,10 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
     let capture = TurnCapture {
         state: state.clone(),
         request_body: peeked.whole_body().cloned(),
+        // The REQUEST's encoding, read from the inbound headers — not the
+        // response's, which `TurnMeta::content_encoding` below carries. The two
+        // are independent and routinely differ.
+        request_encoding: header_string(&parts.headers, http::header::CONTENT_ENCODING),
         session,
         meta: TurnMeta {
             request_id: uuid::Uuid::new_v4().to_string(),
@@ -687,6 +701,9 @@ struct TurnCapture {
     /// `None` when the request body exceeded the peek cap, which makes the turn
     /// undescribable and so uncapturable.
     request_body: Option<Bytes>,
+    /// The request's `Content-Encoding`, if it declared one. Those bytes are
+    /// forwarded untouched; this is what lets the capture copy be decoded.
+    request_encoding: Option<String>,
     session: Option<SessionEnvelope>,
     meta: TurnMeta,
     started: Instant,
@@ -727,38 +744,68 @@ impl TurnCapture {
             );
             return;
         };
-        // `RawValue` requires valid JSON. Validating here is not parsing for
-        // meaning — nothing reads a field — it is the minimum needed to embed
-        // the bytes verbatim in a JSON document.
-        let request = match RawValue::from_string(String::from_utf8_lossy(body).into_owned()) {
-            Ok(request) => request,
-            // An empty body on a method that never carries one is not a
-            // defect: it is what every GET on this endpoint looks like, and a
-            // harness makes several of those (model listing, auth probes) per
-            // session. Warning on them trains the reader to ignore the one
-            // severity that means "a turn you expected to see was dropped".
-            // But an empty body on a turn-shaped method (POST/PUT/PATCH) IS
-            // that dropped turn, so it keeps the warning.
-            Err(_)
-                if body.is_empty()
-                    && !matches!(self.meta.method.as_str(), "POST" | "PUT" | "PATCH") =>
-            {
-                debug!(
-                    request_id = %self.meta.request_id,
-                    method = %self.meta.method,
-                    "request had no body; nothing to capture",
-                );
-                return;
-            }
+        // An empty body on a method that never carries one is not a defect: it
+        // is what every GET on this endpoint looks like, and a harness makes
+        // several of those (model listing, auth probes) per session. Warning on
+        // them trains the reader to ignore the one severity that means "a turn
+        // you expected to see was dropped". But an empty body on a turn-shaped
+        // method (POST/PUT/PATCH) IS that dropped turn, so it falls through and
+        // keeps its warning below.
+        //
+        // Ahead of the decode, so a bodiless request whose headers still claim
+        // an encoding is not reported as a decode failure: there are no bytes
+        // for the claim to be about.
+        if body.is_empty() && !matches!(self.meta.method.as_str(), "POST" | "PUT" | "PATCH") {
+            debug!(
+                request_id = %self.meta.request_id,
+                method = %self.meta.method,
+                "request had no body; nothing to capture",
+            );
+            return;
+        }
+
+        // Compressed request bodies are decoded before they are validated,
+        // under the same rules the cloud capture route applies at the gateway.
+        // Skipping this is how a `content-encoding: zstd` harness — pi's Codex
+        // provider is one — forwarded perfectly while capturing nothing.
+        let decoded = match decode_content_encoding(body, self.request_encoding.as_deref()) {
+            Ok(decoded) => decoded,
             Err(err) => {
                 warn!(
                     error = %err,
+                    content_encoding = self.request_encoding.as_deref().unwrap_or_default(),
                     request_id = %self.meta.request_id,
-                    "request body is not JSON; turn forwarded but not captured",
+                    "request body could not be decoded; turn forwarded but not captured",
                 );
                 return;
             }
         };
+        if decoded.truncated {
+            // Not a drop — the turn below is still posted — but the body it
+            // carries is a prefix of what the harness sent, and a reader
+            // comparing it against the response deserves to know that.
+            debug!(
+                request_id = %self.meta.request_id,
+                content_encoding = self.request_encoding.as_deref().unwrap_or_default(),
+                "request body was salvaged from a truncated stream",
+            );
+        }
+
+        // `RawValue` requires valid JSON. Validating here is not parsing for
+        // meaning — nothing reads a field — it is the minimum needed to embed
+        // the bytes verbatim in a JSON document.
+        let request =
+            match RawValue::from_string(String::from_utf8_lossy(&decoded.bytes).into_owned()) {
+                Ok(request) => request,
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        request_id = %self.meta.request_id,
+                        "request body is not JSON; turn forwarded but not captured",
+                    );
+                    return;
+                }
+            };
 
         let payload = TurnPayload {
             provider: self.state.provider,

@@ -6,6 +6,12 @@
 //! Warning on them trains the reader to skim past the severity that matters,
 //! which is how the genuinely dropped turn goes unnoticed.
 //!
+//! The turns that ARE dropped must also say which of the reasons applies. A
+//! body in an encoding this build cannot decode and a body that is genuinely
+//! malformed are two different defects with two different fixes, and reporting
+//! the first as the second is what let every zstd request go uncaptured while
+//! the log calmly described the payload as invalid JSON.
+//!
 //! One test, deliberately: this binary installs a process-global subscriber and
 //! reads what it collected, so two tests running in parallel would interleave
 //! into the same buffer.
@@ -206,6 +212,43 @@ async fn a_bodiless_request_is_not_a_warning_but_a_malformed_one_still_is() {
         warns_after > warns_before,
         "an empty POST is a dropped turn and must add its own warn \
          (before: {warns_before}, after: {warns_after}): {after_empty_post}",
+    );
+
+    // And the fourth: a body in an encoding this build cannot decode. It is a
+    // dropped turn like the others, but it is a dropped turn for a different
+    // reason, and saying "not JSON" would send whoever reads the log to look at
+    // the harness's payload instead of at this proxy's decoder. `br` stands in
+    // for any such encoding; zstd used to be one of them, which is how a whole
+    // class of sessions captured nothing at all.
+    let response = client
+        .post(format!("http://{proxy}/v1/messages"))
+        .header("content-type", "application/json")
+        .header("content-encoding", "br")
+        .body("\u{1b}brotli-ish bytes")
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let _ = response.bytes().await.unwrap();
+
+    settle().await;
+
+    let after_undecodable = logs.contents();
+    assert!(
+        after_undecodable.contains("request body could not be decoded"),
+        "an undecodable encoding must warn in its own words: {after_undecodable}",
+    );
+    assert!(
+        after_undecodable.contains("br"),
+        "the warning must name the encoding that could not be read: {after_undecodable}",
+    );
+    assert_eq!(
+        after_undecodable
+            .matches("request body is not JSON")
+            .count(),
+        warns_after,
+        "an undecodable body must NOT be reported as malformed JSON — that \
+         conflation is what kept this invisible: {after_undecodable}",
     );
 }
 

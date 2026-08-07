@@ -75,6 +75,19 @@ http-body = "1"
 http-body-util = "0.1"
 base64 = "0.22"
 percent-encoding = "2"
+
+# --- content-encoding (capture-side decode only) ---
+# These decode the CAPTURE COPY of a request body; nothing forwarded is ever
+# touched (see the reqwest comment above, which is about the opposite hazard).
+# The set of encodings is deliberately the set the Go capture path decodes —
+# gzip and zstd — because a body one path can read and the other cannot is a
+# silent capture gap, which is exactly how zstd Codex traffic went unrecorded.
+#
+# flate2 rides its default pure-Rust backend: no C, and the release build cross
+# compiles four targets. zstd does compile vendored C, which is the price of
+# matching libzstd's behaviour rather than approximating it.
+flate2 = "1"
+zstd = "0.13"
 url = { version = "2", features = ["serde"] }
 
 # --- config / serde ---
@@ -107,6 +120,10 @@ time = { version = "0.3", features = ["formatting", "parsing", "serde", "macros"
 uuid = { version = "1", features = ["v4", "serde"] }
 
 # --- test ---
+# Recomputing the vendored fixture corpora's DIGEST seals, which is how a stale
+# or hand-edited vendored copy fails in this repo's CI rather than silently
+# testing cases nobody upstream still has. Test-only: nothing shipped hashes.
+sha2 = "0.10"
 tempfile = "3"
 test-case = "3"
 wiremock = "0.6"
