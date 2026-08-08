@@ -45,6 +45,37 @@ pub fn augment(base: Command, surface: &Surface) -> Command {
     tapes_cassette_client::command::augment(base, surface, with_tapes_url)
 }
 
+/// The sentence the top-level help always carries about cassette commands.
+///
+/// Without it the dynamic surface is invisible when it is empty, and an empty
+/// list of cassette commands looks exactly like a tool that does not have any —
+/// so `tapesctl --help` on a machine with no server configured reads as
+/// "cassettes unsupported" rather than "nothing to discover from yet".
+const CASSETTES_ARE_DISCOVERED: &str = "Cassette commands are served by your tapes deployment, not built into this \
+     binary: they are\ndiscovered from the server and listed above alongside the built-in commands.";
+
+/// Build the top-level help epilogue for one run's discovery result.
+///
+/// `server` is the URL discovery was pointed at, if any, and `surface` is what
+/// came back. The base sentence is unconditional; the second one exists because
+/// "no cassette commands" has two very different causes and the caller's next
+/// move differs — configure a server, versus look at why the configured one
+/// served nothing.
+#[must_use]
+pub fn epilogue(server: Option<&str>, surface: &Surface) -> String {
+    match server {
+        None => format!(
+            "{CASSETTES_ARE_DISCOVERED}\nNo server is configured, so none are listed; \
+             set --tapes-url or TAPES_URL to see them."
+        ),
+        Some(server) if surface.cassettes.is_empty() => format!(
+            "{CASSETTES_ARE_DISCOVERED}\nNo cassettes were discovered from {server}, \
+             so none are listed; re-run with -v for why."
+        ),
+        Some(_) => CASSETTES_ARE_DISCOVERED.to_owned(),
+    }
+}
+
 /// Run a matched cassette invocation.
 ///
 /// `matches` is the cassette-level match; its own subcommand names the method.
@@ -92,6 +123,53 @@ mod tests {
 
     fn root() -> Command {
         Command::new("tapesctl").subcommand(Command::new("sessions"))
+    }
+
+    #[test]
+    fn the_epilogue_says_cassettes_exist_even_with_nothing_to_list() {
+        // The whole point of the line: an empty cassette list must not be
+        // readable as "this build has no cassette support".
+        for text in [
+            epilogue(None, &Surface::default()),
+            epilogue(Some("http://tapes.example"), &Surface::default()),
+            epilogue(Some("http://tapes.example"), &hello_surface()),
+        ] {
+            assert!(text.contains("Cassette commands"), "got: {text}");
+        }
+    }
+
+    #[test]
+    fn the_epilogue_separates_no_server_from_a_server_that_served_none() {
+        // Two different next moves — configure a server, versus find out what
+        // the configured one did — so the help must not blur them together.
+        let unconfigured = epilogue(None, &Surface::default());
+        assert!(unconfigured.contains("TAPES_URL"), "got: {unconfigured}");
+
+        let empty = epilogue(Some("http://tapes.example"), &Surface::default());
+        assert!(
+            empty.contains("http://tapes.example"),
+            "the server that served nothing should be named: {empty}"
+        );
+        assert!(!empty.contains("No server is configured"), "got: {empty}");
+    }
+
+    #[test]
+    fn the_epilogue_stops_explaining_once_there_is_something_to_list() {
+        let listed = epilogue(Some("http://tapes.example"), &hello_surface());
+        assert!(!listed.contains("none are listed"), "got: {listed}");
+    }
+
+    #[test]
+    fn the_epilogue_reaches_the_rendered_help() {
+        // `after_help` is applied by the caller in `crate::resolve`; this is the
+        // check that the text clap renders is the text this module produced.
+        let surface = Surface::default();
+        let text = epilogue(None, &surface);
+        let rendered = augment(root(), &surface)
+            .after_help(text.clone())
+            .render_help()
+            .to_string();
+        assert!(rendered.contains(&text), "got: {rendered}");
     }
 
     #[test]

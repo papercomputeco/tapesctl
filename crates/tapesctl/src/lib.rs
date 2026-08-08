@@ -22,13 +22,26 @@ use cassette::Surface;
 use cli::{Cli, Command, PluginCommand, SkillCommand, StartArgs};
 pub use error::{Error, Result};
 
-/// The tapesctl canary. Printed when the binary is invoked with no subcommand;
-/// the release smoke test asserts on this exact string, so keep it stable.
+/// The tapesctl canary. The release smoke test asserts on this exact string,
+/// so keep it stable.
+///
+/// It used to be the whole of what a bare `tapesctl` printed, which cost the
+/// bare invocation its only chance to say what the tool does. `version` is
+/// where it belongs instead: that command's entire job is printing this
+/// binary's identity, it needs no server and no arguments, and it stays a
+/// single stable line a smoke test can pin — which is what the canary was
+/// being asked to be all along.
 const CANARY: &str = "All in all, just another tape in the stereo";
 
 /// The build version, stamped by cargo.
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+/// What `tapesctl version` prints: the build identity, then the canary.
+#[must_use]
+pub fn banner() -> String {
+    format!("tapesctl {}\n{CANARY}", version())
 }
 
 /// What one command line resolved to.
@@ -81,9 +94,16 @@ where
     S: Into<String> + Clone,
 {
     let argv: Vec<String> = argv.into_iter().map(Into::into).collect();
-    let surface = discover(&argv).await;
+    let server = cli::discovery_url(&argv);
+    let surface = discover(server.as_deref()).await;
 
-    let command = cassette::command::augment(Cli::command(), &surface);
+    // The epilogue is attached here rather than declared on `Cli`, because what
+    // it has to say depends on the discovery that just ran: the derive can only
+    // carry a constant, and a constant cannot tell a reader whether the missing
+    // cassette commands are missing because no server was named or because the
+    // named one served none.
+    let command = cassette::command::augment(Cli::command(), &surface)
+        .after_help(cassette::command::epilogue(server.as_deref(), &surface));
     let matches = command.get_matches_from(&argv);
 
     // A noun on the surface is a generated command; anything else is one of the
@@ -105,16 +125,18 @@ where
     }
 }
 
-/// The cassette surface for whatever server this command line names.
+/// The cassette surface for the server this command line names, if any.
 ///
 /// Never fails: with no server, an unparseable one, or an unreachable one, the
 /// result is simply no cassette nouns. The hand-written surface has to keep
-/// working on a machine that cannot reach any tapes server at all.
-async fn discover(argv: &[String]) -> Surface {
-    let Some(raw) = cli::discovery_url(argv) else {
+/// working on a machine that cannot reach any tapes server at all — which is
+/// also why the caller keeps the server around to explain the empty result in
+/// the help epilogue.
+async fn discover(raw: Option<&str>) -> Surface {
+    let Some(raw) = raw else {
         return Surface::default();
     };
-    let Ok(url) = Url::parse(&raw) else {
+    let Ok(url) = Url::parse(raw) else {
         tracing::debug!(%raw, "not a URL, so no cassettes were discovered");
         return Surface::default();
     };
@@ -137,31 +159,25 @@ pub async fn dispatch(invocation: Invocation) -> Result<()> {
 /// Dispatch a parsed CLI invocation.
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        None => {
-            println!("{CANARY}");
+        Command::Version => {
+            println!("{}", banner());
             Ok(())
         }
-        Some(Command::Version) => {
-            println!("tapesctl {}", version());
-            Ok(())
-        }
-        Some(Command::Start(args)) => start(args).await,
-        Some(Command::Capture(args)) => capture::run(args).await,
-        Some(Command::Sync(args)) => transcript::sync::run(args).await,
-        Some(Command::Sessions(command)) => api::sessions(command).await,
-        Some(Command::Traces(command)) => api::traces(command).await,
-        Some(Command::Spans(command)) => api::spans(command).await,
-        Some(Command::Search(args)) => ports::search::run(args).await,
-        Some(Command::Export(args)) => ports::export::run(args).await,
-        Some(Command::Seed(args)) => ports::seed::run(args).await,
-        Some(Command::Skill(SkillCommand::Generate(args))) => {
-            ports::skill_generate::run(args).await
-        }
-        Some(Command::Skill(SkillCommand::List(args))) => ports::skill_list::run(args),
-        Some(Command::Skill(SkillCommand::Sync(args))) => ports::skill::run(args),
-        Some(Command::Plugin(PluginCommand::Install(args))) => plugin::run(args),
-        Some(Command::Plugin(PluginCommand::Uninstall(args))) => plugin::uninstall(args),
-        Some(Command::Plugin(PluginCommand::Hook(args))) => codex_app::hook::run(&args).await,
+        Command::Start(args) => start(args).await,
+        Command::Capture(args) => capture::run(args).await,
+        Command::Sync(args) => transcript::sync::run(args).await,
+        Command::Sessions(command) => api::sessions(command).await,
+        Command::Traces(command) => api::traces(command).await,
+        Command::Spans(command) => api::spans(command).await,
+        Command::Search(args) => ports::search::run(args).await,
+        Command::Export(args) => ports::export::run(args).await,
+        Command::Seed(args) => ports::seed::run(args).await,
+        Command::Skill(SkillCommand::Generate(args)) => ports::skill_generate::run(args).await,
+        Command::Skill(SkillCommand::List(args)) => ports::skill_list::run(args),
+        Command::Skill(SkillCommand::Sync(args)) => ports::skill::run(args),
+        Command::Plugin(PluginCommand::Install(args)) => plugin::run(args),
+        Command::Plugin(PluginCommand::Uninstall(args)) => plugin::uninstall(args),
+        Command::Plugin(PluginCommand::Hook(args)) => codex_app::hook::run(&args).await,
     }
 }
 
@@ -181,22 +197,54 @@ async fn start(args: StartArgs) -> Result<()> {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use clap::Parser;
     use cli::{ApiArgs, PluginInstallArgs, SeedArgs, SessionIdArgs, SessionsCommand};
 
-    #[tokio::test]
-    async fn no_subcommand_is_ok() {
-        let cli = Cli {
-            verbose: 0,
-            command: None,
-        };
-        assert!(run(cli).await.is_ok());
+    #[test]
+    fn a_bare_invocation_is_answered_with_help_rather_than_a_silent_success() {
+        // The canary used to be all a bare `tapesctl` said, so the one moment a
+        // newcomer had the tool's attention was spent on a joke. clap owns the
+        // answer now; this is what would notice if the required subcommand were
+        // ever relaxed back to an optional one.
+        let error =
+            Cli::try_parse_from(["tapesctl"]).expect_err("a bare invocation should not parse");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand,
+        );
+        assert!(
+            error.to_string().contains("Usage: tapesctl"),
+            "the answer should be the usage: {error}"
+        );
+    }
+
+    #[test]
+    fn flags_without_a_subcommand_do_not_dispatch_either() {
+        // `-v` is an argument, so it clears `arg_required_else_help`; the
+        // required subcommand is what still stops the run.
+        let error =
+            Cli::try_parse_from(["tapesctl", "-v"]).expect_err("`-v` alone should not parse");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingSubcommand,
+            "got: {error}"
+        );
+    }
+
+    #[test]
+    fn the_canary_survives_in_the_version_banner() {
+        // It is the string the release smoke test pins, so its home moving must
+        // not be its wording changing.
+        let banner = banner();
+        assert!(banner.contains(CANARY), "got: {banner}");
+        assert!(banner.contains(version()), "got: {banner}");
     }
 
     #[tokio::test]
     async fn version_is_ok() {
         let cli = Cli {
             verbose: 0,
-            command: Some(Command::Version),
+            command: Command::Version,
         };
         assert!(run(cli).await.is_ok());
     }
@@ -219,12 +267,12 @@ mod tests {
         // home.
         let cli = Cli {
             verbose: 0,
-            command: Some(Command::Plugin(PluginCommand::Install(PluginInstallArgs {
+            command: Command::Plugin(PluginCommand::Install(PluginInstallArgs {
                 harness: "not-a-harness".to_owned(),
                 dry_run: false,
                 port: None,
                 codex_auth: None,
-            }))),
+            })),
         };
         let answered = run(cli).await;
         assert!(!matches!(answered, Err(Error::NotImplemented { .. })));
@@ -239,10 +287,10 @@ mod tests {
         // Not on a connection attempt: with no URL there is nowhere to connect.
         let cli = Cli {
             verbose: 0,
-            command: Some(Command::Sessions(SessionsCommand::Get(SessionIdArgs {
+            command: Command::Sessions(SessionsCommand::Get(SessionIdArgs {
                 api: ApiArgs { tapes_url: None },
                 id: "s-1".to_owned(),
-            }))),
+            })),
         };
         assert!(matches!(run(cli).await, Err(Error::MissingTapesUrl)));
     }
@@ -251,9 +299,9 @@ mod tests {
     async fn seed_without_a_server_fails_on_the_missing_url() {
         let cli = Cli {
             verbose: 0,
-            command: Some(Command::Seed(SeedArgs {
+            command: Command::Seed(SeedArgs {
                 api: ApiArgs { tapes_url: None },
-            })),
+            }),
         };
         assert!(matches!(run(cli).await, Err(Error::MissingTapesUrl)));
     }
