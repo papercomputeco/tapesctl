@@ -26,9 +26,48 @@ pub struct Cli {
     #[arg(short, long, global = true, action = clap::ArgAction::Count)]
     pub verbose: u8,
 
+    /// Base URL of the tapes server, for every command that talks to one.
+    ///
+    /// Global so it can be given once, before the subcommand, and so it is
+    /// documented in the top-level help rather than only in each leaf's.
+    ///
+    /// # Why no `env = "TAPES_URL"` here
+    ///
+    /// Deliberate, and the leaf declarations still carry it — this is not the
+    /// flag losing its environment fallback. clap counts an environment-sourced
+    /// value as an argument the user supplied, and `arg_required_else_help`
+    /// only prints help when *no* argument was supplied. Binding `TAPES_URL` at
+    /// the top level would therefore mean that anyone with the variable
+    /// exported got `error: requires a subcommand` from a bare `tapesctl`
+    /// instead of the help it now prints — a regression triggered by the
+    /// environment, not by anything they typed. A default value carries no such
+    /// weight (clap ranks it as non-explicit), which is why the configured
+    /// server can be installed here as one; see [`crate::parser`].
+    #[arg(
+        long,
+        global = true,
+        value_name = "URL",
+        help = "Base URL of the tapes server. Falls back to TAPES_URL, then to the configured default",
+        long_help = "Base URL of the tapes server.\n\n\
+                     Falls back to the TAPES_URL environment variable, and then to the default \
+                     configured with `tapesctl config set tapes-url <url>`. With none of the three, \
+                     commands that need a server refuse to run rather than guess a host."
+    )]
+    pub tapes_url: Option<String>,
+
     #[command(subcommand)]
     pub command: Command,
 }
+
+/// The argument id `--tapes-url` is known by, everywhere it is declared.
+///
+/// The derive takes it from the field name, so the hand-built declarations —
+/// [`Cli::tapes_url`] here and the one decorated onto every generated cassette
+/// method — have to spell the same id, not merely the same `--tapes-url`. Two
+/// ids sharing one long name is a clap conflict the moment the global one
+/// propagates into a command that declares the other, and the global one now
+/// propagates everywhere.
+pub const TAPES_URL_ARG: &str = "tapes_url";
 
 /// The flag, and the environment variable behind it, that name a server.
 const TAPES_URL_FLAG: &str = "--tapes-url";
@@ -175,6 +214,10 @@ pub enum Command {
     /// Install or manage harness capture plugins.
     #[command(subcommand)]
     Plugin(PluginCommand),
+
+    /// Read and write the answers you should only have to give once.
+    #[command(subcommand)]
+    Config(ConfigCommand),
 
     /// Print version information.
     Version,
@@ -685,6 +728,45 @@ pub struct PluginUninstallArgs {
     pub dry_run: bool,
 }
 
+/// `tapesctl config` subcommands.
+///
+/// Key/value rather than a flag per setting — `config set tapes-url <url>`,
+/// not `config set --tapes-url <url>` — so the surface does not have to grow a
+/// verb, a flag, and a printer for every future key. `git config` and `gh
+/// config` are the same shape, which is most of why it is this one.
+#[derive(Debug, Subcommand)]
+pub enum ConfigCommand {
+    /// Set one configuration key.
+    Set(ConfigSetArgs),
+
+    /// Print one configuration key, or every key that is set.
+    Get(ConfigGetArgs),
+
+    /// Print the path of the configuration file, whether or not it exists.
+    ///
+    /// The answer to "where would I edit this by hand", and the one thing that
+    /// is still worth printing when the file will not parse.
+    Path,
+}
+
+/// Arguments for `tapesctl config set`.
+#[derive(Debug, Args)]
+pub struct ConfigSetArgs {
+    /// The key to set. Today: `tapes-url`.
+    pub key: String,
+
+    /// The value to store.
+    pub value: String,
+}
+
+/// Arguments for `tapesctl config get`.
+#[derive(Debug, Args)]
+pub struct ConfigGetArgs {
+    /// The key to print. Omitted, every key that is set is printed as
+    /// `<key> = <value>`.
+    pub key: Option<String>,
+}
+
 /// Arguments for `tapesctl plugin hook`.
 #[derive(Debug, Args)]
 pub struct PluginHookArgs {
@@ -718,6 +800,106 @@ mod tests {
 
     fn parse(args: &[&str]) -> Cli {
         Cli::try_parse_from(args).unwrap()
+    }
+
+    #[test]
+    fn the_server_can_be_named_before_the_subcommand_and_still_reaches_it() {
+        // The point of the global: `--tapes-url` given once, at the front,
+        // where a shell alias or a wrapper script would put it.
+        let cli = parse(&["tapesctl", "--tapes-url", "http://x", "sessions", "list"]);
+        assert_eq!(cli.tapes_url.as_deref(), Some("http://x"));
+        match cli.command {
+            Command::Sessions(SessionsCommand::List(args)) => {
+                assert_eq!(
+                    args.api.tapes_url.as_deref(),
+                    Some("http://x"),
+                    "a global value must reach the leaf that consumes it",
+                );
+            }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_server_named_at_the_leaf_still_wins_and_still_works() {
+        // The spelling every existing script uses. It has to keep working, and
+        // it has to beat the global — the more specific position is the one the
+        // user meant.
+        let cli = parse(&[
+            "tapesctl",
+            "--tapes-url",
+            "http://global",
+            "sessions",
+            "list",
+            "--tapes-url",
+            "http://leaf",
+        ]);
+        match cli.command {
+            Command::Sessions(SessionsCommand::List(args)) => {
+                assert_eq!(args.api.tapes_url.as_deref(), Some("http://leaf"));
+            }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    /// The global flag deliberately does not bind `TAPES_URL`, and this is the
+    /// guard on that: clap treats an environment-sourced value as an argument
+    /// the user supplied, so a top-level `env` binding would make a bare
+    /// `tapesctl` answer "requires a subcommand" instead of help on every
+    /// machine with the variable exported. The leaf declarations carry the
+    /// binding, so the fallback itself is unaffected.
+    #[test]
+    fn the_global_server_flag_leaves_the_environment_to_the_leaves() {
+        let command = Cli::command();
+        let global = command
+            .get_arguments()
+            .find(|arg| arg.get_id() == TAPES_URL_ARG)
+            .expect("the global flag should exist");
+        assert!(global.is_global_set());
+        assert!(
+            global.get_env().is_none(),
+            "binding TAPES_URL here would cost the bare invocation its help",
+        );
+
+        let leaf = command
+            .find_subcommand("seed")
+            .and_then(|sub| {
+                sub.get_arguments()
+                    .find(|arg| arg.get_id() == TAPES_URL_ARG)
+                    .cloned()
+            })
+            .expect("a leaf should declare the flag itself");
+        assert_eq!(leaf.get_env(), Some(std::ffi::OsStr::new(TAPES_URL_ENV)));
+    }
+
+    #[test]
+    fn config_reads_and_writes_one_key_at_a_time() {
+        let cli = parse(&["tapesctl", "config", "set", "tapes-url", "http://x"]);
+        match cli.command {
+            Command::Config(ConfigCommand::Set(args)) => {
+                assert_eq!(args.key, "tapes-url");
+                assert_eq!(args.value, "http://x");
+            }
+            other => panic!("got: {other:?}"),
+        }
+
+        // `get` with no key is the whole file, which is why the key is optional
+        // here and required in `set`.
+        match parse(&["tapesctl", "config", "get"]).command {
+            Command::Config(ConfigCommand::Get(args)) => assert_eq!(args.key, None),
+            other => panic!("got: {other:?}"),
+        }
+        assert!(
+            Cli::try_parse_from(["tapesctl", "config", "set", "tapes-url"]).is_err(),
+            "a set with no value would have nothing to store",
+        );
+    }
+
+    #[test]
+    fn config_needs_no_server() {
+        // It writes a local file. Requiring --tapes-url to configure
+        // --tapes-url would be a circle.
+        assert!(Cli::try_parse_from(["tapesctl", "config", "path"]).is_ok());
     }
 
     #[test]

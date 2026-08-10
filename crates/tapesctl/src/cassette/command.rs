@@ -19,15 +19,24 @@ use crate::error::{Result, error};
 use tapes_cassette_client::command::resolve_invocation;
 
 /// The flag every generated method carries, mirroring [`crate::cli::ApiArgs`].
-const TAPES_URL: &str = "tapes-url";
+const TAPES_URL_FLAG: &str = "tapes-url";
 
 /// The decorator applied to every generated method command: tapesctl's server
 /// flag, exactly as the pre-extraction synthesis hard-coded it.
+///
+/// The id is [`crate::cli::TAPES_URL_ARG`] rather than the flag's own spelling,
+/// which is the difference between this declaration and the global one being
+/// *the same argument* and being two arguments that happen to share a long
+/// name. Under the second reading clap propagates the global into this command,
+/// finds no id like it, and mounts a second `--tapes-url` — a duplicate that
+/// panics the parser build. Under the first it skips the propagation, and the
+/// value the user gave at either position, or the configured default, reaches
+/// here.
 fn with_tapes_url(command: Command) -> Command {
     command.arg(
-        Arg::new(TAPES_URL)
-            .long(TAPES_URL)
-            .env("TAPES_URL")
+        Arg::new(crate::cli::TAPES_URL_ARG)
+            .long(TAPES_URL_FLAG)
+            .env(crate::cli::TAPES_URL_ENV)
             .action(ArgAction::Set)
             .value_name("URL")
             .help("Base URL of the tapes server"),
@@ -66,7 +75,8 @@ pub fn epilogue(server: Option<&str>, surface: &Surface) -> String {
     match server {
         None => format!(
             "{CASSETTES_ARE_DISCOVERED}\nNo server is configured, so none are listed; \
-             set --tapes-url or TAPES_URL to see them."
+             pass --tapes-url, set TAPES_URL, or\nrun `tapesctl config set tapes-url <url>` \
+             to see them from here on."
         ),
         Some(server) if surface.cassettes.is_empty() => format!(
             "{CASSETTES_ARE_DISCOVERED}\nNo cassettes were discovered from {server}, \
@@ -89,7 +99,7 @@ pub async fn dispatch(surface: &Surface, name: &str, matches: &ArgMatches) -> Re
     // added through the decorator, and is read back off the method's matches.
     let raw = matches
         .subcommand()
-        .and_then(|(_, method_matches)| method_matches.get_one::<String>(TAPES_URL))
+        .and_then(|(_, method_matches)| method_matches.get_one::<String>(crate::cli::TAPES_URL_ARG))
         .context(error::MissingTapesUrlSnafu)?;
     let client = ApiClient::new(Url::parse(raw).context(error::TapesUrlSnafu)?);
 

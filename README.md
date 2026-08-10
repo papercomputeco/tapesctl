@@ -13,6 +13,38 @@ consumes, so capture fidelity is identical between `tapesctl start` and
 
 See the "Tapes and Cassettes" RFC for the full design.
 
+## Naming your server
+
+Every command that talks to a tapes deployment needs to know where it is. There
+are three ways to say so, and they are consulted in this order:
+
+```bash
+tapesctl --tapes-url http://localhost:8081 sessions list   # 1. the flag
+export TAPES_URL=http://localhost:8081                     # 2. the environment
+tapesctl config set tapes-url http://localhost:8081        # 3. once, for good
+```
+
+`--tapes-url` is global: give it before the subcommand, as above, or after it,
+where it has always worked. The third form writes `~/.tapes/config.toml` and is
+the one worth doing — a configured server is what makes `tapesctl --help` list
+the cassette commands your deployment serves, in every new shell, without an
+export.
+
+```bash
+tapesctl config get           # every key that is set
+tapesctl config get tapes-url # one of them, bare, for scripts
+tapesctl config path          # where the file is, whether or not it exists
+```
+
+`config set` edits the file in place rather than rewriting it, so your comments,
+your ordering, and any keys this build does not know about — a key a newer
+tapesctl wrote, say — all survive. The server must be an `http` or `https` URL;
+anything else is refused when you set it rather than on every command afterwards.
+
+With none of the three, commands that need a server refuse to run and say so.
+They do not fall back to a guessed `localhost` port: a capture pointed at
+whatever happened to be listening is worse than one that did not start.
+
 ## Capture
 
 ```bash
@@ -70,7 +102,8 @@ tapesctl spans get <trace-id> <span-id>
 ```
 
 Each prints the server's JSON verbatim, so it composes with `jq`. Every command
-takes `--tapes-url`, falling back to `TAPES_URL`.
+takes `--tapes-url`; see [Naming your server](#naming-your-server) for the two
+ways not to have to pass it.
 
 ```bash
 tapesctl export <session-id> -o bundle.jsonl
@@ -144,8 +177,14 @@ Discovery is a **runtime** step, not a build-time one: which cassettes exist is
 deployment configuration, so a compiled-in list would be one deployment's
 cassettes frozen into everyone's binary. The discovered surface is cached per
 server and revalidated on a timer (`ETag`/`If-None-Match`), so `--help` stays
-instant and keeps working offline. Point it elsewhere with `--tapes-url` /
-`TAPES_URL`; override the cache location with `TAPESCTL_CACHE_DIR`.
+instant and keeps working offline. Point it elsewhere with any of the three
+sources in [Naming your server](#naming-your-server); override the cache
+location with `TAPESCTL_CACHE_DIR`.
+
+Because the listing comes from a server, `tapesctl --help` on a machine that
+names none is a shorter help page than the same binary would print with one
+configured — which is the strongest reason to run `tapesctl config set
+tapes-url` once.
 
 Without a reachable server there are simply no cassette nouns — the commands
 above this section are unaffected. Deploying and configuring cassettes is an
@@ -199,6 +238,7 @@ publish to `download.tapes.dev` via the `release` / `nightly` Dagger functions.
   - `api/` — the `<resource> <method>` read client.
   - `cassette/` — the generated `<cassette> <method>` surface: discovery, the
     spec reducer, the cache, and clap synthesis.
+  - `config.rs` — `~/.tapes/config.toml`: the answers you give once.
   - `ports/` — commands ported from the Go `tapes` CLI.
 
 Shared client-side harness knowledge lives in its own repository,
