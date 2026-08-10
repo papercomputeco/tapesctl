@@ -43,33 +43,137 @@ fn with_tapes_url(command: Command) -> Command {
     )
 }
 
-/// Add a subcommand for every cassette on the surface.
+/// The fixed noun the whole generated surface hangs off.
+pub const NOUN: &str = "cassettes";
+
+/// Help for the bare noun — where a user with no server configured lands, so it
+/// has to explain that the emptiness is about their machine, not this build.
+const LONG_ABOUT: &str = "\
+Call cassette methods served by your tapes deployment.
+
+Cassettes are API extensions your deployment serves under /v1/cassettes; their \
+commands are discovered from the server at runtime, so the set listed here is \
+whatever your deployment actually serves — not a list compiled into this \
+binary. A server has to be named for anything to be listed: pass --tapes-url, \
+set TAPES_URL, or configure one with `tapesctl config set tapes-url <url>`. \
+Recently discovered commands keep working from a local cache while the server \
+is unreachable.";
+
+/// Mount the `cassettes` noun, populated with what was discovered.
 ///
-/// Cassette nouns are appended to the static ones rather than replacing them,
-/// and a cassette whose name collides with a built-in command is skipped: a
+/// Always mounted, even with nothing to put under it, so `tapesctl cassettes`
+/// is never a clap unknown-command: an empty noun answers with the help above,
+/// which explains what would fill it. Costs no I/O.
+///
+/// This is the canonical spelling, and it is `paperctl`'s: both clients drive
+/// the same generated surface from the same crate, so `<client> cassettes
+/// <name> <method>` transfers between them unchanged.
+#[must_use]
+pub fn mount(base: Command, surface: &Surface) -> Command {
+    let noun = Command::new(NOUN)
+        .about("Call cassette methods served by your tapes deployment")
+        .long_about(LONG_ABOUT)
+        // Without a cassette there is nothing to call, and the listing — or the
+        // explanation of why it is empty — is a better answer than an error.
+        .arg_required_else_help(true)
+        .subcommand_required(true);
+    let noun = tapes_cassette_client::command::augment(noun, &admissible(surface), with_tapes_url);
+    base.subcommand(noun)
+}
+
+/// The name clap materializes a subcommand for after everything here has run.
+const CLAP_HELP: &str = "help";
+
+/// The surface minus any cassette that would collide with clap's own machinery.
+///
+/// `augment` refuses to generate over a subcommand its base already has, but
+/// clap materializes its `help` subcommand later than that check can see — so a
+/// cassette named `help` produces a duplicate, and clap answers a duplicate by
+/// panicking. A deployment's choice of name must never be able to crash
+/// someone's CLI.
+///
+/// Applied by *both* mounts, which is the whole reason it is a function. It
+/// first guarded only the noun, on the reading that the top level already had a
+/// visible `help` for `augment`'s check to find. It does not: `Cli::command()`
+/// is unbuilt when the check runs, so `help` is no more present there than
+/// under the noun, and a cassette named `help` reached the same panic through
+/// the hidden top-level alias. Two mount paths meant two chances to forget;
+/// there is now one filter and both go through it.
+fn admissible(surface: &Surface) -> Surface {
+    Surface {
+        cassettes: surface
+            .cassettes
+            .iter()
+            .filter(|cassette| {
+                let shadows_help = cassette.name == CLAP_HELP;
+                if shadows_help {
+                    tracing::debug!(
+                        cassette = %cassette.name,
+                        "a cassette named like the built-in help was not generated",
+                    );
+                }
+                !shadows_help
+            })
+            .cloned()
+            .collect(),
+    }
+}
+
+/// Add a top-level subcommand for every cassette on the surface, hidden.
+///
+/// The spelling `tapesctl <cassette> <method>` was the original one and still
+/// works; it is simply no longer advertised. Hiding rather than removing is a
+/// deliberate one-release grace period: these nouns are what every existing
+/// script and muscle memory types, and a name that is discovered from a server
+/// cannot be deprecated with a compiler warning — the first sign of removal
+/// would be someone's automation failing. Help and documentation now say
+/// [`NOUN`] everywhere, so nothing teaches the old spelling to anyone new.
+///
+/// A cassette whose name collides with a built-in command is still skipped: a
 /// server must not be able to redefine what `tapesctl sessions` means on
-/// someone's machine.
+/// someone's machine. That check is also why the hiding is computed by
+/// difference rather than from the surface — the set actually generated is not
+/// the set offered, and hiding a name that was skipped would hide a built-in.
+///
+/// It runs through [`admissible`] for the same reason [`mount`] does. The
+/// built-in check cannot cover `help` here either: it reads the subcommands the
+/// base *declares*, and clap adds its own `help` later than that.
 #[must_use]
 pub fn augment(base: Command, surface: &Surface) -> Command {
-    tapes_cassette_client::command::augment(base, surface, with_tapes_url)
+    let before: Vec<String> = base
+        .get_subcommands()
+        .map(|sub| sub.get_name().to_owned())
+        .collect();
+    let augmented =
+        tapes_cassette_client::command::augment(base, &admissible(surface), with_tapes_url);
+    let generated: Vec<String> = augmented
+        .get_subcommands()
+        .map(|sub| sub.get_name().to_owned())
+        .filter(|name| !before.contains(name))
+        .collect();
+    generated.into_iter().fold(augmented, |command, name| {
+        command.mut_subcommand(name, |sub| sub.hide(true))
+    })
 }
 
 /// The sentence the top-level help always carries about cassette commands.
 ///
-/// Without it the dynamic surface is invisible when it is empty, and an empty
-/// list of cassette commands looks exactly like a tool that does not have any —
-/// so `tapesctl --help` on a machine with no server configured reads as
-/// "cassettes unsupported" rather than "nothing to discover from yet".
+/// The noun is always mounted, so the top-level help no longer has an empty
+/// space where cassettes would be — but it does have a `cassettes` entry whose
+/// contents come from somewhere the reader cannot see. This is what says so:
+/// that the set under it is the deployment's, not the build's, which is the
+/// difference between "cassettes unsupported" and "nothing to discover from
+/// yet".
 const CASSETTES_ARE_DISCOVERED: &str = "Cassette commands are served by your tapes deployment, not built into this \
-     binary: they are\ndiscovered from the server and listed above alongside the built-in commands.";
+     binary: they\nare discovered from the server and mounted under `tapesctl cassettes`.";
 
 /// Build the top-level help epilogue for one run's discovery result.
 ///
 /// `server` is the URL discovery was pointed at, if any, and `surface` is what
 /// came back. The base sentence is unconditional; the second one exists because
 /// "no cassette commands" has two very different causes and the caller's next
-/// move differs — configure a server, versus look at why the configured one
-/// served nothing.
+/// move differs — name a server, versus look at why the named one served
+/// nothing.
 #[must_use]
 pub fn epilogue(server: Option<&str>, surface: &Surface) -> String {
     match server {
@@ -82,7 +186,7 @@ pub fn epilogue(server: Option<&str>, surface: &Surface) -> String {
             "{CASSETTES_ARE_DISCOVERED}\nNo cassettes were discovered from {server}, \
              so none are listed; re-run with -v for why."
         ),
-        Some(_) => CASSETTES_ARE_DISCOVERED.to_owned(),
+        Some(_) => format!("{CASSETTES_ARE_DISCOVERED}\nRun `tapesctl cassettes` to list them."),
     }
 }
 
@@ -170,6 +274,21 @@ mod tests {
     }
 
     #[test]
+    fn every_epilogue_names_the_canonical_spelling_and_no_other() {
+        // The cassettes are no longer listed at the top level, so the epilogue
+        // is where a reader learns where they went. It is also the only place
+        // the old spelling could survive by accident.
+        for text in [
+            epilogue(None, &Surface::default()),
+            epilogue(Some("http://tapes.example"), &Surface::default()),
+            epilogue(Some("http://tapes.example"), &hello_surface()),
+        ] {
+            assert!(text.contains(NOUN), "got: {text}");
+            assert!(!text.contains("listed above"), "got: {text}");
+        }
+    }
+
+    #[test]
     fn the_epilogue_reaches_the_rendered_help() {
         // `after_help` is applied by the caller in `crate::resolve`; this is the
         // check that the text clap renders is the text this module produced.
@@ -180,6 +299,136 @@ mod tests {
             .render_help()
             .to_string();
         assert!(rendered.contains(&text), "got: {rendered}");
+    }
+
+    #[test]
+    fn the_noun_is_mounted_whether_or_not_anything_was_discovered() {
+        // With nothing under it, `tapesctl cassettes` must still be a command —
+        // an unknown-command error would blame the user for the server's
+        // absence.
+        let empty = mount(root(), &Surface::default());
+        let noun = empty
+            .get_subcommands()
+            .find(|sub| sub.get_name() == NOUN)
+            .expect("the noun must always exist");
+        assert_eq!(noun.get_subcommands().count(), 0);
+
+        let populated = mount(root(), &hello_surface());
+        let names: Vec<&str> = populated
+            .get_subcommands()
+            .find(|sub| sub.get_name() == NOUN)
+            .map(|noun| noun.get_subcommands().map(Command::get_name).collect())
+            .unwrap();
+        assert!(names.contains(&"hello-world"), "got: {names:?}");
+    }
+
+    #[test]
+    fn the_noun_answers_a_bare_invocation_with_its_listing() {
+        // `tapesctl cassettes` with no method is a request to see what there
+        // is, not a mistake.
+        let error = mount(root(), &hello_surface())
+            .try_get_matches_from(["tapesctl", NOUN])
+            .expect_err("the bare noun should not dispatch");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand,
+            "got: {error}",
+        );
+        assert!(error.to_string().contains("hello-world"), "got: {error}");
+    }
+
+    #[test]
+    fn a_cassette_named_like_clap_s_own_help_is_not_generated_by_either_mount() {
+        // clap materializes `help` after `augment`'s collision check can see
+        // it, at the noun *and* at the top level, so a cassette by that name
+        // would panic the parser build — a crash a deployment could cause by
+        // its choice of name alone.
+        //
+        // Both paths are exercised, separately and together, and against the
+        // real derived `Cli` rather than the stub: this filter guarded only the
+        // noun at first, on the assumption that the top level already had a
+        // `help` for the built-in check to catch. It does not — `Cli::command()`
+        // is unbuilt when that check runs — so the hidden alias reached the
+        // panic anyway. A stub base would not have shown that.
+        let surface = surface_from(
+            "help",
+            &json!({"paths": {"/v1/cassettes/help/x": {"get": {"operationId": "getX"}}}}),
+        );
+        mount(real_cli(), &surface).debug_assert();
+        augment(real_cli(), &surface).debug_assert();
+        // And the composition `crate::parser` actually builds.
+        augment(mount(real_cli(), &surface), &surface).debug_assert();
+
+        // Nothing named `help` was generated at either level; clap's own is
+        // what survives.
+        let built = augment(mount(real_cli(), &surface), &surface);
+        assert_eq!(
+            built
+                .get_subcommands()
+                .filter(|sub| sub.get_name() == "help")
+                .count(),
+            0,
+            "the cassette must not have been mounted as a top-level alias",
+        );
+        assert_eq!(
+            built
+                .get_subcommands()
+                .find(|sub| sub.get_name() == NOUN)
+                .map(|noun| noun.get_subcommands().count()),
+            Some(0),
+            "nor under the noun",
+        );
+    }
+
+    fn real_cli() -> Command {
+        <crate::cli::Cli as clap::CommandFactory>::command()
+    }
+
+    #[test]
+    fn the_top_level_spelling_still_parses_but_is_no_longer_advertised() {
+        // One release of grace: a name discovered from a server cannot be
+        // deprecated with a compiler warning, so the first sign of removal
+        // would be someone's automation failing.
+        let mut command = augment(root(), &hello_surface());
+        let generated = command
+            .find_subcommand("hello-world")
+            .expect("the alias should still be there");
+        assert!(generated.is_hide_set(), "but it should not be listed");
+        assert!(
+            !command
+                .render_long_help()
+                .to_string()
+                .contains("hello-world"),
+            "and the help is what teaches the canonical spelling",
+        );
+        assert!(
+            command
+                .try_get_matches_from([
+                    "tapesctl",
+                    "hello-world",
+                    "get-hello",
+                    "--tapes-url",
+                    "http://x"
+                ])
+                .is_ok(),
+        );
+    }
+
+    #[test]
+    fn hiding_the_aliases_never_hides_a_built_in() {
+        // A cassette whose name collides with a built-in is skipped, so the set
+        // generated is not the set offered; hiding from the surface rather than
+        // from the difference would have hidden `sessions` itself.
+        let surface = surface_from(
+            "sessions",
+            &json!({"paths": {"/v1/cassettes/sessions/x": {"get": {"operationId": "getX"}}}}),
+        );
+        let command = augment(root(), &surface);
+        let sessions = command
+            .get_subcommands()
+            .find(|sub| sub.get_name() == "sessions")
+            .expect("the built-in must survive");
+        assert!(!sessions.is_hide_set());
     }
 
     #[test]

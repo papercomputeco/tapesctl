@@ -163,8 +163,10 @@ where
 ///
 /// The `<resource> <method>` surface is hand-written here for the core data
 /// model — sessions, traces, spans. It sits alongside the *generated*
-/// `<cassette> <method>` surface, which is discovered from `/v1/cassettes` at
-/// runtime and covers resources this binary cannot know about at compile time;
+/// `cassettes <name> <method>` surface, which is discovered from `/v1/cassettes`
+/// at runtime and covers resources this binary cannot know about at compile
+/// time. That one is mounted onto this enum's command rather than declared in
+/// it, because a variant has to exist at compile time and a cassette does not;
 /// see [`crate::cassette`].
 #[derive(Debug, Subcommand)]
 pub enum Command {

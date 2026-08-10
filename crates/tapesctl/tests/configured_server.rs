@@ -85,7 +85,8 @@ async fn a_configured_server_is_enough_to_list_and_call_what_it_serves() {
     let bare = ["tapesctl".to_owned()];
     let (unconfigured, surface) = tapesctl::build_parser(&bare, &Config::default()).await;
     assert!(surface.cassettes.is_empty());
-    let help = unconfigured.clone().render_long_help().to_string();
+    let mut unconfigured = unconfigured;
+    let help = unconfigured.render_long_help().to_string();
     assert!(
         help.contains("No server is configured"),
         "the epilogue must explain the empty list: {help}",
@@ -94,7 +95,12 @@ async fn a_configured_server_is_enough_to_list_and_call_what_it_serves() {
         help.contains("config set tapes-url"),
         "and it must teach the durable fix, not only the per-run ones: {help}",
     );
-    assert!(!help.contains("hello-world"), "got: {help}");
+    let listing = unconfigured
+        .find_subcommand_mut(tapesctl::cassette::command::NOUN)
+        .expect("the noun is mounted whether or not anything was discovered")
+        .render_long_help()
+        .to_string();
+    assert!(!listing.contains("hello-world"), "got: {listing}");
 
     // --- configure one, and the same help lists its cassettes -------------
     let config = Config {
@@ -107,18 +113,24 @@ async fn a_configured_server_is_enough_to_list_and_call_what_it_serves() {
         "the configured server should have been discovered from",
     );
 
-    let help = configured.clone().render_long_help().to_string();
-    assert!(
-        help.contains("hello-world"),
-        "the cassette must be listed: {help}",
-    );
-    assert!(
-        help.contains("The smallest API that is still a tapes cassette."),
-        "with the description discovery gave it: {help}",
-    );
+    let mut configured = configured;
+    let help = configured.render_long_help().to_string();
     assert!(
         !help.contains("No server is configured"),
         "a configured server is a server; the line is now a lie: {help}",
+    );
+    let listing = configured
+        .find_subcommand_mut(tapesctl::cassette::command::NOUN)
+        .expect("the noun is always mounted")
+        .render_long_help()
+        .to_string();
+    assert!(
+        listing.contains("hello-world"),
+        "the cassette must be listed: {listing}",
+    );
+    assert!(
+        listing.contains("The smallest API that is still a tapes cassette."),
+        "with the description discovery gave it: {listing}",
     );
 
     // --- and a command that names no server reaches the configured one ----
@@ -141,9 +153,15 @@ async fn a_configured_server_is_enough_to_list_and_call_what_it_serves() {
         .mount(&server)
         .await;
     let matches = configured
-        .try_get_matches_from(["tapesctl", "hello-world", "get-hello"])
+        .try_get_matches_from([
+            "tapesctl",
+            tapesctl::cassette::command::NOUN,
+            "hello-world",
+            "get-hello",
+        ])
         .expect("the generated command should parse without a server flag");
-    let (name, cassette_matches) = matches.subcommand().unwrap();
+    let (_, noun_matches) = matches.subcommand().unwrap();
+    let (name, cassette_matches) = noun_matches.subcommand().unwrap();
     tapesctl::cassette::command::dispatch(&surface, name, cassette_matches)
         .await
         .expect("the configured server should be where the call goes");
