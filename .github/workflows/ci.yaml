@@ -1,5 +1,19 @@
 name: CI
 
+# A pull request from a fork gets no secrets and no access to this org's paid
+# runner pool. Two consequences are handled throughout this file:
+#
+#   * `runs-on` falls back to a GitHub-hosted runner. A job that asks for a
+#     Depot label it cannot be given does not fail — it queues until it times
+#     out hours later, which reads to a contributor as "CI is stuck", so the
+#     fallback is what makes fork CI report at all.
+#   * `secrets.DAGGER_CLOUD_TOKEN` interpolates to the empty string, which
+#     Dagger treats as "no cloud account" rather than as a bad credential.
+#     Builds run; they just publish no cloud trace.
+#
+# The fork test is spelled out rather than factored into `env`, because the
+# `env` context is not available to `runs-on`.
+
 on:
   push:
     branches: [main]
@@ -18,7 +32,7 @@ concurrency:
 jobs:
   check:
     name: Lint & Test
-    runs-on: depot-ubuntu-24.04
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-24.04' || 'depot-ubuntu-24.04' }}
 
     steps:
       - name: Checkout repository
@@ -41,7 +55,7 @@ jobs:
 
   build:
     name: Build
-    runs-on: depot-ubuntu-24.04
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-24.04' || 'depot-ubuntu-24.04' }}
 
     steps:
       - name: Checkout repository
@@ -87,23 +101,30 @@ jobs:
   smoke:
     name: Smoke Test (${{ matrix.os }})
     needs: build
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && matrix.fork_runner || matrix.runner }}
 
     strategy:
       fail-fast: false
       matrix:
+        # `fork_runner` is the GitHub-hosted equivalent used when the pull
+        # request comes from a fork. The macOS rows already run on hosted
+        # runners, so for them the two labels are deliberately the same.
         include:
           - os: macOS 15 (arm64)
             runner: macos-15
+            fork_runner: macos-15
             artifact: darwin-arm64-binaries
           - os: macOS 15 (amd64)
             runner: macos-15-intel
+            fork_runner: macos-15-intel
             artifact: darwin-amd64-binaries
           - os: Linux (amd64)
             runner: depot-ubuntu-24.04
+            fork_runner: ubuntu-24.04
             artifact: linux-amd64-binaries
           - os: Linux (arm64)
             runner: depot-ubuntu-24.04-arm
+            fork_runner: ubuntu-24.04-arm
             artifact: linux-arm64-binaries
 
     steps:
