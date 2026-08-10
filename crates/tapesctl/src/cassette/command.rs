@@ -81,21 +81,31 @@ pub fn mount(base: Command, surface: &Surface) -> Command {
     base.subcommand(noun)
 }
 
-/// The surface minus any cassette that would collide with clap's own machinery
-/// under the noun.
+/// The name clap materializes a subcommand for after everything here has run.
+const CLAP_HELP: &str = "help";
+
+/// The surface minus any cassette that would collide with clap's own machinery.
 ///
 /// `augment` refuses to generate over a subcommand its base already has, but
 /// clap materializes its `help` subcommand later than that check can see — so a
-/// deployment serving a cassette named `help` would produce a duplicate, and
-/// clap answers a duplicate by panicking. A deployment's choice of name must
-/// never be able to crash someone's CLI.
+/// cassette named `help` produces a duplicate, and clap answers a duplicate by
+/// panicking. A deployment's choice of name must never be able to crash
+/// someone's CLI.
+///
+/// Applied by *both* mounts, which is the whole reason it is a function. It
+/// first guarded only the noun, on the reading that the top level already had a
+/// visible `help` for `augment`'s check to find. It does not: `Cli::command()`
+/// is unbuilt when the check runs, so `help` is no more present there than
+/// under the noun, and a cassette named `help` reached the same panic through
+/// the hidden top-level alias. Two mount paths meant two chances to forget;
+/// there is now one filter and both go through it.
 fn admissible(surface: &Surface) -> Surface {
     Surface {
         cassettes: surface
             .cassettes
             .iter()
             .filter(|cassette| {
-                let shadows_help = cassette.name == "help";
+                let shadows_help = cassette.name == CLAP_HELP;
                 if shadows_help {
                     tracing::debug!(
                         cassette = %cassette.name,
@@ -124,13 +134,18 @@ fn admissible(surface: &Surface) -> Surface {
 /// someone's machine. That check is also why the hiding is computed by
 /// difference rather than from the surface — the set actually generated is not
 /// the set offered, and hiding a name that was skipped would hide a built-in.
+///
+/// It runs through [`admissible`] for the same reason [`mount`] does. The
+/// built-in check cannot cover `help` here either: it reads the subcommands the
+/// base *declares*, and clap adds its own `help` later than that.
 #[must_use]
 pub fn augment(base: Command, surface: &Surface) -> Command {
     let before: Vec<String> = base
         .get_subcommands()
         .map(|sub| sub.get_name().to_owned())
         .collect();
-    let augmented = tapes_cassette_client::command::augment(base, surface, with_tapes_url);
+    let augmented =
+        tapes_cassette_client::command::augment(base, &admissible(surface), with_tapes_url);
     let generated: Vec<String> = augmented
         .get_subcommands()
         .map(|sub| sub.get_name().to_owned())
@@ -323,15 +338,50 @@ mod tests {
     }
 
     #[test]
-    fn a_cassette_named_like_clap_s_own_help_is_not_generated() {
-        // clap materializes `help` under the noun after `augment`'s collision
-        // check can see it, so the duplicate would panic the parser build — a
-        // crash a deployment could cause by its choice of name alone.
+    fn a_cassette_named_like_clap_s_own_help_is_not_generated_by_either_mount() {
+        // clap materializes `help` after `augment`'s collision check can see
+        // it, at the noun *and* at the top level, so a cassette by that name
+        // would panic the parser build — a crash a deployment could cause by
+        // its choice of name alone.
+        //
+        // Both paths are exercised, separately and together, and against the
+        // real derived `Cli` rather than the stub: this filter guarded only the
+        // noun at first, on the assumption that the top level already had a
+        // `help` for the built-in check to catch. It does not — `Cli::command()`
+        // is unbuilt when that check runs — so the hidden alias reached the
+        // panic anyway. A stub base would not have shown that.
         let surface = surface_from(
             "help",
             &json!({"paths": {"/v1/cassettes/help/x": {"get": {"operationId": "getX"}}}}),
         );
-        mount(root(), &surface).debug_assert();
+        mount(real_cli(), &surface).debug_assert();
+        augment(real_cli(), &surface).debug_assert();
+        // And the composition `crate::parser` actually builds.
+        augment(mount(real_cli(), &surface), &surface).debug_assert();
+
+        // Nothing named `help` was generated at either level; clap's own is
+        // what survives.
+        let built = augment(mount(real_cli(), &surface), &surface);
+        assert_eq!(
+            built
+                .get_subcommands()
+                .filter(|sub| sub.get_name() == "help")
+                .count(),
+            0,
+            "the cassette must not have been mounted as a top-level alias",
+        );
+        assert_eq!(
+            built
+                .get_subcommands()
+                .find(|sub| sub.get_name() == NOUN)
+                .map(|noun| noun.get_subcommands().count()),
+            Some(0),
+            "nor under the noun",
+        );
+    }
+
+    fn real_cli() -> Command {
+        <crate::cli::Cli as clap::CommandFactory>::command()
     }
 
     #[test]
