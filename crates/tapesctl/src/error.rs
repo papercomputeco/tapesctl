@@ -116,16 +116,44 @@ pub enum Error {
 
     /// The configuration file is not valid TOML, or has a value of the wrong
     /// shape.
-    ///
-    /// Reported rather than silently discarded on the write path: `config set`
-    /// reads the file before rewriting it, and a parse failure treated as "no
-    /// configuration" would quietly delete every other key the user had set.
     #[snafu(display("the config at {} is not valid: {source}", path.display()))]
     ConfigParse {
         /// The file that would not parse.
         path: PathBuf,
         /// Underlying parse failure.
         source: toml::de::Error,
+    },
+
+    /// The configuration file could not be parsed for editing.
+    ///
+    /// A separate failure from [`Error::ConfigParse`] because a separate parser
+    /// produces it: writing edits the document in place rather than
+    /// re-serializing a model, so the write path parses for structure where the
+    /// read path parses for meaning. Reported rather than treated as an empty
+    /// document, because a `config set` that started from "empty" would replace
+    /// the file and take every key it could not read down with it.
+    #[snafu(display("the config at {} could not be edited: {source}", path.display()))]
+    ConfigEdit {
+        /// The file that would not parse.
+        path: PathBuf,
+        /// Underlying parse failure.
+        source: toml_edit::TomlError,
+    },
+
+    /// A configured URL names a scheme nothing here can dial.
+    ///
+    /// Refused at the point it is set rather than at the point it is used: the
+    /// value is stored once and read by every later command, so a bad scheme
+    /// accepted here fails everything afterwards, in a way that reads like the
+    /// server being down rather than like the typo it is.
+    #[snafu(display(
+        "{key} must be an http or https URL; {scheme:?} is not a scheme this client can call"
+    ))]
+    ConfigUrlScheme {
+        /// The configuration key being set.
+        key: String,
+        /// The scheme that was given.
+        scheme: String,
     },
 
     /// The configuration file could not be written.
@@ -135,13 +163,6 @@ pub enum Error {
         path: PathBuf,
         /// Underlying IO failure.
         source: std::io::Error,
-    },
-
-    /// The configuration could not be rendered back to TOML.
-    #[snafu(display("could not render the config"))]
-    ConfigRender {
-        /// Underlying serialization failure.
-        source: toml::ser::Error,
     },
 
     /// `--tapes-url` was not a URL.

@@ -36,6 +36,11 @@ tapesctl config get tapes-url # one of them, bare, for scripts
 tapesctl config path          # where the file is, whether or not it exists
 ```
 
+`config set` edits the file in place rather than rewriting it, so your comments,
+your ordering, and any keys this build does not know about — a key a newer
+tapesctl wrote, say — all survive. The server must be an `http` or `https` URL;
+anything else is refused when you set it rather than on every command afterwards.
+
 With none of the three, commands that need a server refuse to run and say so.
 They do not fall back to a guessed `localhost` port: a capture pointed at
 whatever happened to be listening is worse than one that did not start.

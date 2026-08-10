@@ -70,35 +70,49 @@ pub struct Config {
     pub tapes_url: Option<String>,
 }
 
+/// Refuse a key this build does not have.
+///
+/// Separate from [`Config`] because the write path needs it without a model:
+/// `config set` never deserializes the file it is about to edit, so the key
+/// check cannot ride along on a struct field.
+pub fn check_key(key: &str) -> Result<()> {
+    if KEYS.contains(&key) {
+        return Ok(());
+    }
+    error::UnknownConfigKeySnafu {
+        key,
+        known: KEYS.join(", "),
+    }
+    .fail()
+}
+
 impl Config {
     /// Read one key, as the string `config get` prints.
     ///
     /// `None` distinguishes "known key, not set" from an unknown key, which is
     /// an error.
     pub fn get(&self, key: &str) -> Result<Option<&str>> {
-        match key {
-            TAPES_URL_KEY => Ok(self.tapes_url.as_deref()),
-            other => error::UnknownConfigKeySnafu {
-                key: other,
-                known: KEYS.join(", "),
-            }
-            .fail(),
+        check_key(key)?;
+        // One key today, so this reads as an `if`; it becomes a `match` when
+        // there are two. `check_key` above is what makes the fallthrough safe —
+        // an unknown key has already been refused by the time it is reached.
+        if key == TAPES_URL_KEY {
+            return Ok(self.tapes_url.as_deref());
         }
+        Ok(None)
     }
 
-    /// Set one key from its command-line spelling.
+    /// Set one key from its command-line spelling, in memory.
+    ///
+    /// The in-memory half only. Persisting goes through [`write_key`], which
+    /// edits the file rather than re-serializing this model — see there for why
+    /// that distinction is the whole point.
     pub fn set(&mut self, key: &str, value: String) -> Result<()> {
-        match key {
-            TAPES_URL_KEY => {
-                self.tapes_url = Some(value);
-                Ok(())
-            }
-            other => error::UnknownConfigKeySnafu {
-                key: other,
-                known: KEYS.join(", "),
-            }
-            .fail(),
+        check_key(key)?;
+        if key == TAPES_URL_KEY {
+            self.tapes_url = Some(value);
         }
+        Ok(())
     }
 
     /// Every set key, in help order, for a `config get` with no key named.
@@ -151,13 +165,64 @@ pub fn load_or_default(path: &Path) -> Config {
     }
 }
 
-/// Write the configuration, creating `~/.tapes` if this is the first key.
-pub fn write(path: &Path, config: &Config) -> Result<()> {
+/// Set one key in the file, leaving everything else in it exactly as it was.
+///
+/// # Why this is not "serialize [`Config`] back"
+///
+/// Because [`Config`] is deliberately not the whole file. Reading tolerates
+/// keys this build has never heard of, so that a file written by a newer
+/// tapesctl cannot stop an older one from starting — but a write that rendered
+/// the model would emit only the fields the model has, and every one of those
+/// tolerated keys would be gone. The forward-compatibility promise would then
+/// hold for reading and break for writing, which is the same as not holding: a
+/// user running two versions would silently lose the newer one's settings the
+/// first time the older one set anything.
+///
+/// So the document is parsed, one key is replaced in place, and the rest —
+/// unknown keys, ordering, comments, the user's own formatting — is carried
+/// through untouched.
+pub fn write_key(path: &Path, key: &str, value: &str) -> Result<()> {
+    let existing = match std::fs::read_to_string(path) {
+        // No file yet is an empty document to add the first key to, not an
+        // error: this is the state every user starts in.
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(source) => return Err(source).context(error::ConfigReadSnafu { path }),
+        Ok(text) => text,
+    };
+
+    // The guard against clobbering. A file that will not parse is refused
+    // rather than replaced, because "replace" here means "delete whatever the
+    // user had".
+    let mut document: toml_edit::DocumentMut =
+        existing.parse().context(error::ConfigEditSnafu { path })?;
+    document[key] = toml_edit::value(value);
+
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).context(error::ConfigWriteSnafu { path: parent })?;
     }
-    let rendered = toml::to_string_pretty(config).context(error::ConfigRenderSnafu)?;
-    std::fs::write(path, rendered).context(error::ConfigWriteSnafu { path })
+    std::fs::write(path, document.to_string()).context(error::ConfigWriteSnafu { path })
+}
+
+/// The URL schemes a configured server can actually be called over.
+const CALLABLE_SCHEMES: [&str; 2] = ["http", "https"];
+
+/// Refuse a URL that parses but could never be dialled.
+///
+/// `Url::parse` is a syntax check, not a usability one: `ftp://tapes.example`
+/// and `file:///etc/passwd` are both perfectly well-formed URLs and neither is
+/// something this client can send a request to. Caught here, the user is told
+/// once, at the moment they typed it; accepted here, every later command fails
+/// in a way that reads like the server being unreachable.
+fn check_url(key: &str, value: &str) -> Result<()> {
+    let parsed = Url::parse(value).context(error::TapesUrlSnafu)?;
+    if CALLABLE_SCHEMES.contains(&parsed.scheme()) {
+        return Ok(());
+    }
+    error::ConfigUrlSchemeSnafu {
+        key,
+        scheme: parsed.scheme(),
+    }
+    .fail()
 }
 
 /// Dispatch `tapesctl config <method>`.
@@ -199,19 +264,21 @@ pub fn run_in(command: &ConfigCommand, path: &Path) -> Result<()> {
             Ok(())
         }
         ConfigCommand::Set(args) => {
-            // Validated before it is stored: a value that is not a URL fails
-            // here, once, naming the flag it would have fed — rather than on
-            // every command run afterwards, where it would look like the
-            // server was at fault.
+            // Both checks run before anything is written: an unknown key and an
+            // uncallable URL are each a typo the user should hear about once,
+            // now — not on every command afterwards, where a stored bad value
+            // reads like the server being at fault.
+            check_key(&args.key)?;
             if args.key == TAPES_URL_KEY {
-                let _ = Url::parse(&args.value).context(error::TapesUrlSnafu)?;
+                check_url(&args.key, &args.value)?;
             }
-            // Read before write: an unparseable file is an error rather than an
-            // empty configuration to overwrite, so `config set` can never be the
-            // command that loses the keys it was not asked about.
-            let mut config = read(path)?;
-            config.set(&args.key, args.value.clone())?;
-            write(path, &config)?;
+            // Deliberately not `read` first. The file is edited in place rather
+            // than re-serialized (see `write_key`), which both preserves keys
+            // this build does not know and lets `config set` repair a known key
+            // holding a wrong-typed value — the file being unreadable must not
+            // disable the command that fixes it. Structurally broken TOML is
+            // still refused, by the parse inside `write_key`.
+            write_key(path, &args.key, &args.value)?;
             println!("{} = {}", args.key, args.value);
             Ok(())
         }
@@ -263,9 +330,91 @@ mod tests {
     }
 
     #[test]
+    fn a_url_this_client_could_never_call_is_refused_and_the_scheme_is_named() {
+        // Parsing is a syntax check, not a usability one: these are all
+        // well-formed URLs and none of them is something a tapes request can be
+        // sent to. The scheme is in the message because it is the part the user
+        // has to change.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        for (value, scheme) in [
+            ("ftp://tapes.example", "ftp"),
+            ("file:///etc/passwd", "file"),
+            ("ws://tapes.example", "ws"),
+        ] {
+            let err = run_in(&set(TAPES_URL_KEY, value), &path).unwrap_err();
+            let rendered = format!("{err}");
+            assert!(rendered.contains(scheme), "got: {rendered}");
+            assert!(rendered.contains("http"), "got: {rendered}");
+            assert!(!path.exists(), "nothing should have been written");
+        }
+
+        // And the two that work still do.
+        for value in ["http://tapes.example", "https://tapes.example"] {
+            assert!(run_in(&set(TAPES_URL_KEY, value), &path).is_ok());
+        }
+    }
+
+    #[test]
+    fn setting_one_key_leaves_a_newer_builds_keys_alone() {
+        // The forward-compatibility promise the read path makes, kept on the
+        // write path too. Reading tolerates unknown keys; a write that rendered
+        // the parsed model would emit only the fields this build has and delete
+        // the rest — so a user running two versions would lose the newer one's
+        // settings the first time the older one set anything.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "# a comment the user wrote\n\
+             tapes-url = \"http://old.example\"\n\
+             something-later = 3\n\
+             \n\
+             [a-table-from-the-future]\n\
+             nested = true\n",
+        )
+        .unwrap();
+
+        run_in(&set(TAPES_URL_KEY, "http://new.example"), &path).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("something-later = 3"), "got: {text}");
+        assert!(text.contains("[a-table-from-the-future]"), "got: {text}");
+        assert!(text.contains("nested = true"), "got: {text}");
+        assert!(
+            text.contains("# a comment the user wrote"),
+            "editing in place keeps the user's own text too: {text}",
+        );
+        assert_eq!(
+            read(&path).unwrap().tapes_url.as_deref(),
+            Some("http://new.example"),
+            "and the key that was set is the one that changed",
+        );
+    }
+
+    #[test]
+    fn setting_a_key_can_repair_a_value_of_the_wrong_type() {
+        // A file that is structurally fine but holds a wrong-typed value makes
+        // `read` fail — so if `set` read first, the file being broken would
+        // disable the only command that fixes it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "tapes-url = 3\n").unwrap();
+        assert!(read(&path).is_err());
+
+        run_in(&set(TAPES_URL_KEY, "http://tapes.example"), &path).unwrap();
+        assert_eq!(
+            read(&path).unwrap().tapes_url.as_deref(),
+            Some("http://tapes.example"),
+        );
+    }
+
+    #[test]
     fn setting_a_key_over_a_file_that_will_not_parse_is_refused() {
-        // Otherwise the read would degrade to an empty configuration and the
-        // write would drop every other key the user had set.
+        // "Replace it" would mean "delete whatever the user had", and a file
+        // that does not parse is exactly the file whose contents cannot be
+        // recovered afterwards.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         std::fs::write(&path, "tapes-url = ").unwrap();
@@ -313,17 +462,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nested").join("config.toml");
 
-        let mut config = Config::default();
-        config
-            .set(TAPES_URL_KEY, "http://tapes.example".to_owned())
-            .unwrap();
-        write(&path, &config).unwrap();
+        write_key(&path, TAPES_URL_KEY, "http://tapes.example").unwrap();
 
         // The flag, the `config set` key, and the TOML key are one spelling.
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("tapes-url"), "got: {text}");
 
-        assert_eq!(read(&path).unwrap(), config);
+        assert_eq!(
+            read(&path).unwrap().tapes_url.as_deref(),
+            Some("http://tapes.example"),
+        );
     }
 
     #[test]

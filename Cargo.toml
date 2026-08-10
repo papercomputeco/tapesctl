@@ -108,6 +108,18 @@ serde_json = "1"
 # embedded with `include_str!` — never untrusted data.
 serde_yaml = "0.9"
 toml = "0.8"
+# The *writer* for `~/.tapes/config.toml`, where `toml` above is the reader.
+#
+# Two crates for one file needs a reason, and it is that they answer different
+# questions. `toml` deserializes a document into a model, which is exactly right
+# for reading and exactly wrong for writing: serializing the model back emits
+# only what the model has fields for, so a `config set` from an older build
+# would delete every key a newer one had written — and would flatten the user's
+# comments and ordering while it was at it. toml_edit keeps the parsed document
+# and edits one key in place, so everything it does not understand survives
+# untouched. Already in the tree as a transitive dependency of `toml`, so this
+# pin costs no new download.
+toml_edit = "0.22"
 
 # --- errors ---
 snafu = "0.8"
