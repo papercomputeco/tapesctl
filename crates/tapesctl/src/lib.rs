@@ -82,9 +82,9 @@ impl Invocation {
 
 /// Build the parser — cassette nouns included — and parse one command line.
 ///
-/// Discovery happens before parsing because the generated nouns have to be in
-/// the parser for `tapesctl <cassette> ...` to parse at all, and for
-/// `tapesctl --help` to list them. It is cheap in the common case: the surface
+/// Discovery happens before parsing because the generated commands have to be
+/// in the parser for `tapesctl cassettes <name> <method>` to parse at all, and
+/// for `tapesctl cassettes` to list them. It is cheap in the common case: the surface
 /// comes from [`cassette::cache`] and only reaches the network when that has
 /// gone stale.
 ///
@@ -99,17 +99,26 @@ where
     let (command, surface) = build_parser(&argv, config).await;
     let matches = command.get_matches_from(&argv);
 
-    // A noun on the surface is a generated command; anything else is one of the
-    // derived ones. Built-ins win the name — `augment` never generates over one.
-    if let Some((name, cassette_matches)) = matches.subcommand() {
-        if surface.cassette(name).is_some() {
-            return Invocation::Cassette {
-                verbose: matches.get_count("verbose"),
-                name: name.to_owned(),
-                matches: Box::new(cassette_matches.clone()),
-                surface: Box::new(surface),
-            };
+    // Two ways to reach a generated command, and they resolve to the same thing:
+    // the canonical `tapesctl cassettes <name> <method>`, and the hidden
+    // top-level `tapesctl <name> <method>` the surface used to be spelled as.
+    // Built-ins win the name in both — neither `mount` nor `augment` generates
+    // over one.
+    let verbose = matches.get_count("verbose");
+    let generated = match matches.subcommand() {
+        Some((cassette::command::NOUN, noun_matches)) => noun_matches.subcommand(),
+        Some((name, cassette_matches)) if surface.cassette(name).is_some() => {
+            Some((name, cassette_matches))
         }
+        _ => None,
+    };
+    if let Some((name, cassette_matches)) = generated {
+        return Invocation::Cassette {
+            verbose,
+            name: name.to_owned(),
+            matches: Box::new(cassette_matches.clone()),
+            surface: Box::new(surface),
+        };
     }
 
     match Cli::from_arg_matches(&matches) {
@@ -144,8 +153,14 @@ fn parser(surface: &Surface, server: Option<&str>, configured: Option<&str>) -> 
     // carry a constant, and a constant cannot tell a reader whether the missing
     // cassette commands are missing because no server was named or because the
     // named one served none.
-    let command = cassette::command::augment(Cli::command(), surface)
-        .after_help(cassette::command::epilogue(server, surface));
+    //
+    // The noun is mounted before the hidden top-level aliases are added, so a
+    // deployment that serves a cassette actually named `cassettes` finds the
+    // name taken and lands under the noun like every other — rather than
+    // replacing the noun and taking its siblings with it.
+    let command =
+        cassette::command::augment(cassette::command::mount(Cli::command(), surface), surface)
+            .after_help(cassette::command::epilogue(server, surface));
 
     // The configured server enters as clap's *default* for the global flag, so
     // the precedence is clap's own rather than a second implementation of it: a
@@ -333,13 +348,46 @@ mod tests {
         );
     }
 
+    /// Both spellings have to arrive at the same place, because for one release
+    /// they are the same command: the canonical `cassettes hello-world
+    /// get-hello` and the hidden `hello-world get-hello` it replaced.
     #[test]
-    fn the_generated_surface_and_the_global_flag_are_one_argument_not_two() {
-        // Two ids sharing `--tapes-url` is a duplicate the moment the global
-        // propagates into a generated method, and clap answers a duplicate by
-        // panicking — a crash a user would trigger just by pointing tapesctl at
-        // their own server.
-        let surface = Surface {
+    fn both_spellings_resolve_to_the_same_generated_invocation() {
+        for argv in [
+            vec![
+                "tapesctl".to_owned(),
+                cassette::command::NOUN.to_owned(),
+                "hello-world".to_owned(),
+                "get-hello".to_owned(),
+                "--tapes-url".to_owned(),
+                "http://x".to_owned(),
+            ],
+            vec![
+                "tapesctl".to_owned(),
+                "hello-world".to_owned(),
+                "get-hello".to_owned(),
+                "--tapes-url".to_owned(),
+                "http://x".to_owned(),
+            ],
+        ] {
+            // `resolve` would reach the network for a URL it has no cache for,
+            // so the parse is driven directly off a known surface instead.
+            let surface = hello_surface();
+            let matches = parser(&surface, Some("http://x"), None)
+                .try_get_matches_from(&argv)
+                .unwrap();
+            let (name, cassette_matches) = match matches.subcommand() {
+                Some((cassette::command::NOUN, noun)) => noun.subcommand(),
+                other => other,
+            }
+            .expect("both spellings should reach a cassette");
+            assert_eq!(name, "hello-world");
+            assert!(cassette_matches.subcommand_name() == Some("get-hello"));
+        }
+    }
+
+    fn hello_surface() -> Surface {
+        Surface {
             cassettes: vec![cassette::spec::reduce(
                 "hello-world",
                 None,
@@ -347,16 +395,32 @@ mod tests {
                     "get": {"operationId": "getHello"}
                 }}}),
             )],
-        };
+        }
+    }
+
+    #[test]
+    fn the_generated_surface_and_the_global_flag_are_one_argument_not_two() {
+        // Two ids sharing `--tapes-url` is a duplicate the moment the global
+        // propagates into a generated method, and clap answers a duplicate by
+        // panicking — a crash a user would trigger just by pointing tapesctl at
+        // their own server.
+        let surface = hello_surface();
         parser(&surface, Some("http://x"), Some("http://x")).debug_assert();
 
         // And the configured default reaches the generated method, which reads
-        // the flag off its own matches.
+        // the flag off its own matches — through the noun, which is one more
+        // level for it to propagate down.
         let matches = parser(&surface, Some("http://x"), Some("http://configured"))
-            .try_get_matches_from(["tapesctl", "hello-world", "get-hello"])
+            .try_get_matches_from([
+                "tapesctl",
+                cassette::command::NOUN,
+                "hello-world",
+                "get-hello",
+            ])
             .unwrap();
         let method = matches
             .subcommand()
+            .and_then(|(_, noun)| noun.subcommand())
             .and_then(|(_, cassette)| cassette.subcommand())
             .map(|(_, method)| method)
             .unwrap();

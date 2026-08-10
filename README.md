@@ -26,9 +26,8 @@ tapesctl config set tapes-url http://localhost:8081        # 3. once, for good
 
 `--tapes-url` is global: give it before the subcommand, as above, or after it,
 where it has always worked. The third form writes `~/.tapes/config.toml` and is
-the one worth doing — a configured server is what makes `tapesctl --help` list
-the cassette commands your deployment serves, in every new shell, without an
-export.
+the one worth doing — a configured server is what makes `tapesctl cassettes`
+list what your deployment serves, in every new shell, without an export.
 
 ```bash
 tapesctl config get           # every key that is set
@@ -157,16 +156,24 @@ directory you selected is refused rather than followed.
 
 A tapes deployment can serve **cassettes** — independently built API extensions
 mounted under `/v1/cassettes/<name>`. `tapesctl` discovers whichever ones your
-server serves and turns them into commands, so the generated nouns and their
+server serves and mounts them under `tapesctl cassettes`, so the noun and its
 `--help` *are* the cassette listing:
 
 ```bash
-tapesctl --help                            # lists the cassettes this server serves
-tapesctl hello-world --help                # lists that cassette's methods
-tapesctl hello-world get-hello
-tapesctl hello-world create-hello --body '{"hello":"hi"}'
-tapesctl hello-world create-hello --body @row.json
+tapesctl cassettes                                     # what this server serves
+tapesctl cassettes hello-world --help                  # that cassette's methods
+tapesctl cassettes hello-world get-hello
+tapesctl cassettes hello-world create-hello --body '{"hello":"hi"}'
+tapesctl cassettes hello-world create-hello --body @row.json
 ```
+
+`paperctl` spells it the same way — both clients drive the same generated
+surface from the same crate, so `<client> cassettes <name> <method>` transfers
+between them unchanged.
+
+Cassettes used to mount as top-level nouns (`tapesctl hello-world get-hello`).
+That spelling still parses and will keep working through the next release; it is
+simply no longer listed, and everything here names the `cassettes` form.
 
 Method names are each operation's `operationId`, kebab-cased. Path parameters
 become positional arguments and query parameters become flags, both taken from
@@ -181,13 +188,12 @@ instant and keeps working offline. Point it elsewhere with any of the three
 sources in [Naming your server](#naming-your-server); override the cache
 location with `TAPESCTL_CACHE_DIR`.
 
-Because the listing comes from a server, `tapesctl --help` on a machine that
-names none is a shorter help page than the same binary would print with one
-configured — which is the strongest reason to run `tapesctl config set
-tapes-url` once.
+Because the listing comes from a server, `tapesctl cassettes` on a machine that
+names none lists nothing at all — which is the strongest reason to run
+`tapesctl config set tapes-url` once.
 
-Without a reachable server there are simply no cassette nouns — the commands
-above this section are unaffected. Deploying and configuring cassettes is an
+Without a reachable server the noun is still there and lists nothing — the
+commands above this section are unaffected. Deploying and configuring cassettes is an
 operator task and is not part of this surface.
 
 ## Install
@@ -236,8 +242,8 @@ publish to `download.tapes.dev` via the `release` / `nightly` Dagger functions.
   - `start/` — the just-in-time capture proxy (the wire lane).
   - `transcript/` — the transcript lane: live tailer and `sync` sweep.
   - `api/` — the `<resource> <method>` read client.
-  - `cassette/` — the generated `<cassette> <method>` surface: discovery, the
-    spec reducer, the cache, and clap synthesis.
+  - `cassette/` — the generated `cassettes <name> <method>` surface: discovery,
+    the spec reducer, the cache, and clap synthesis.
   - `config.rs` — `~/.tapes/config.toml`: the answers you give once.
   - `ports/` — commands ported from the Go `tapes` CLI.
 

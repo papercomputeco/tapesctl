@@ -128,16 +128,30 @@ async fn a_server_s_cassettes_become_commands_and_survive_it_going_away() {
         "operation ids become kebab-case methods, in a stable order",
     );
 
-    // --- the nouns and their help are the cassette listing ----------------
-    let mut command = command::augment(Cli::command(), &surface);
+    // --- the `cassettes` noun and its help are the cassette listing -------
+    let mut command = command::augment(command::mount(Cli::command(), &surface), &surface);
     let help = command.render_long_help().to_string();
     assert!(
-        help.contains("hello-world"),
-        "the cassette must appear in the top-level help: {help}",
+        help.contains(command::NOUN),
+        "the top-level help must name the noun the surface hangs off: {help}",
     );
     assert!(
-        help.contains("The smallest API that is still a tapes cassette."),
-        "its description comes from discovery: {help}",
+        !help.contains("hello-world"),
+        "and must not list the cassettes themselves — that is the noun's job: {help}",
+    );
+
+    let listing = command
+        .find_subcommand_mut(command::NOUN)
+        .expect("the noun is always mounted")
+        .render_long_help()
+        .to_string();
+    assert!(
+        listing.contains("hello-world"),
+        "the cassette must be listed under the noun: {listing}",
+    );
+    assert!(
+        listing.contains("The smallest API that is still a tapes cassette."),
+        "its description comes from discovery: {listing}",
     );
 
     // --- a generated command parses like a hand-written one ---------------
@@ -145,6 +159,7 @@ async fn a_server_s_cassettes_become_commands_and_survive_it_going_away() {
         .clone()
         .try_get_matches_from([
             "tapesctl",
+            command::NOUN,
             "hello-world",
             "get-hello-row",
             "row-7",
@@ -154,8 +169,23 @@ async fn a_server_s_cassettes_become_commands_and_survive_it_going_away() {
             &server.uri(),
         ])
         .expect("the generated command should parse");
-    let (name, cassette_matches) = matches.subcommand().unwrap();
+    let (_, noun_matches) = matches.subcommand().unwrap();
+    let (name, cassette_matches) = noun_matches.subcommand().unwrap();
     assert_eq!(name, "hello-world");
+
+    // --- and the spelling it replaced still works, unlisted ---------------
+    let legacy = command
+        .clone()
+        .try_get_matches_from([
+            "tapesctl",
+            "hello-world",
+            "get-hello-row",
+            "row-7",
+            "--tapes-url",
+            &server.uri(),
+        ])
+        .expect("the top-level spelling must keep parsing for one release");
+    assert_eq!(legacy.subcommand().unwrap().0, "hello-world");
 
     // --- and it calls the route the spec named ----------------------------
     Mock::given(method("GET"))
@@ -173,6 +203,7 @@ async fn a_server_s_cassettes_become_commands_and_survive_it_going_away() {
             .clone()
             .try_get_matches_from([
                 "tapesctl",
+                command::NOUN,
                 "hello-world",
                 "create-hello",
                 "--tapes-url",
