@@ -20,6 +20,7 @@ path = "src/main.rs"
 tapes-harnesses = { workspace = true }
 tapes-capture = { workspace = true }
 tapes-cassette-client = { workspace = true }
+tapes-read-contract = { workspace = true }
 arc-swap = { workspace = true }
 axum = { workspace = true }
 base64 = { workspace = true }

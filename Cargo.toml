@@ -27,21 +27,30 @@ repository = "https://github.com/papercomputeco/tapesctl"
 # proxy/attribution work lands with the versions already agreed — mirrors the
 # convention in `platform/paper`.
 [workspace.dependencies]
-# --- shared harness knowledge (its own repo since the split) ---
+# --- shared client-side crates (their own repo since the split) ---
 # Session attribution, launch recipes, transcript discovery, and the
-# X-Tapes-* envelope live in the tapes-harnesses repository, consumed by
-# both tapesctl and paperd so the two capture paths cannot drift apart.
-# Pinned by revision like any other vendored contract.
+# X-Tapes-* envelope live in the tapes-crates repository (named
+# tapes-harnesses until it grew past harness knowledge), consumed by both
+# tapesctl and paperd so the two capture paths cannot drift apart. Pinned by
+# revision like any other vendored contract.
 #
-# Both entries below are the same repository and are now deliberately the SAME
-# rev. They had drifted apart — `tapes-harnesses` sat several commits behind the
-# `tapes-cassette-client` pin — which meant one repository was vendored twice at
-# two different points in its history. That is worth avoiding on its own, and it
-# had a concrete cost here: the peer-socket rescan fix (harnesses #13) was in the
-# newer rev only, so tapesctl's proxy still failed closed on a first-scan miss
-# and the capture suite flaked under parallel load. Keep them equal.
+# Every entry below is the same repository, at the SAME rev, spelled with the
+# SAME URL — and all three properties are load-bearing.
 #
-tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "7187065e2adc0db5b119cd689fd877f0b2ec9aa9" }
+# Same rev: they had drifted apart once — `tapes-harnesses` sat several commits
+# behind the `tapes-cassette-client` pin — which meant one repository was
+# vendored twice at two different points in its history. That is worth avoiding
+# on its own, and it had a concrete cost: the peer-socket rescan fix
+# (harnesses #13) was in the newer rev only, so tapesctl's proxy still failed
+# closed on a first-scan miss and the capture suite flaked under parallel load.
+#
+# Same URL: Cargo keys a git source on the URL string, not on what it resolves
+# to. Spelling the old name for some entries and the new one for others would
+# make one repository two sources, and `tapes-read-contract`'s `Call` would
+# stop being `tapes-cassette-client`'s `Call` — a type error whose message
+# names two identical-looking types.
+#
+tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-crates", rev = "8a40d7f79ff218c9bf2bb32552c7330106f0f2a3" }
 
 # The harness-agnostic half of capture — the X-Tapes-* envelope, the
 # capture-gateway environment contract, and the peer-trust ancestry check — in
@@ -50,7 +59,7 @@ tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-harnesses", r
 # and reaching them through the harness registry would say they were harness
 # knowledge. Same repository, same rev as the crates above, for the reasons
 # given there.
-tapes-capture = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "7187065e2adc0db5b119cd689fd877f0b2ec9aa9" }
+tapes-capture = { git = "https://github.com/papercomputeco/tapes-crates", rev = "8a40d7f79ff218c9bf2bb32552c7330106f0f2a3" }
 
 # The generated cassette-surface machinery (discovery decode, OpenAPI
 # reduction, the on-disk surface cache, clap command synthesis, and the
@@ -58,7 +67,23 @@ tapes-capture = { git = "https://github.com/papercomputeco/tapes-harnesses", rev
 # repository since the PCC-1104 split, so every capture client generates the
 # same surface the same way. Pinned by revision like the crate above — and at
 # the same rev as it, for the reasons given there.
-tapes-cassette-client = { git = "https://github.com/papercomputeco/tapes-harnesses", rev = "7187065e2adc0db5b119cd689fd877f0b2ec9aa9" }
+tapes-cassette-client = { git = "https://github.com/papercomputeco/tapes-crates", rev = "8a40d7f79ff218c9bf2bb32552c7330106f0f2a3" }
+
+# The published tapes read contract itself — the vendored `tapes-api.yaml`, its
+# provenance and seal check, the reduction of it into an operation table, the
+# request assembly that follows, and the operation-coverage gate. It lived in
+# `crates/tapesctl/contracts/` and `src/api/contract.rs` until PCC-1146; it
+# lives there now so paperd builds against the same copy of the same release
+# asset rather than a second one nothing compares.
+#
+# What did NOT move is `EXPOSED_OPERATIONS` / `UNEXPOSED_OPERATIONS`: those
+# describe this CLI's surface, and a shared table would make the gate report on
+# the union of two clients and stop protecting whichever one differs. See
+# `src/api/contract.rs`.
+#
+# Same repository, same rev, same URL as the crates above, for the reasons
+# given there.
+tapes-read-contract = { git = "https://github.com/papercomputeco/tapes-crates", rev = "8a40d7f79ff218c9bf2bb32552c7330106f0f2a3" }
 
 # --- CLI ---
 # `string` lets a Command/Arg be named by an owned String rather than only by a

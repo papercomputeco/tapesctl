@@ -38,7 +38,7 @@ lint: fmt-check clippy	## Run all lint checks (fmt + clippy)
 
 check: build clippy test	## Build + lint + test
 
-contracts-check:	## Verify the vendored tapes contracts against their recorded fingerprints (and a tapes checkout, when present)
+contracts-check:	## Verify the vendored tapes ingest contract against its recorded fingerprint (and a tapes checkout, when present)
 	./scripts/contracts-check.sh
 
 run:	## Run the tapesctl CLI (e.g. `make run ARGS="version"`)
