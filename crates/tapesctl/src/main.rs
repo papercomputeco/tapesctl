@@ -23,10 +23,18 @@ async fn main() -> ExitCode {
         .is_some_and(|argument| argument == "start");
     tapesctl::logging::init(hands_over_terminal, tapesctl::cli::verbosity(&argv));
 
+    // The CLI boundary, and the only place the configured defaults are read
+    // from the machine: everything below takes the loaded value. A machine with
+    // no home directory has no configuration file either, which is the same
+    // state as an empty one — the flag and the environment still work.
+    let config = tapesctl::machine::Machine::resolve()
+        .map(|machine| tapesctl::config::load_or_default(machine.tapes_config_path()))
+        .unwrap_or_default();
+
     // `resolve` rather than `Cli::parse`: the cassette nouns are discovered from
     // the server before the command line is parsed, so that
     // `tapesctl <cassette> <method>` parses and `--help` lists them.
-    let invocation = tapesctl::resolve(argv).await;
+    let invocation = tapesctl::resolve(argv, &config).await;
 
     match tapesctl::dispatch(invocation).await {
         Ok(()) => ExitCode::SUCCESS,

@@ -82,8 +82,67 @@ pub enum Error {
     /// No server was named. On the capture side there would be nowhere to send
     /// turns, and failing loudly beats running a session that captures nothing;
     /// on the read side there is nothing to query.
-    #[snafu(display("no tapes server URL: pass --tapes-url or set TAPES_URL"))]
+    ///
+    /// The message names all three sources rather than only the flag, because
+    /// the answer a user most often wants is the one they only have to give
+    /// once. A guessed `http://localhost:8080` is still refused: guessing is
+    /// how a capture ends up pointed at whatever happens to be listening.
+    #[snafu(display(
+        "no tapes server URL: pass --tapes-url, set TAPES_URL, or configure a \
+         default with `tapesctl config set tapes-url <url>`"
+    ))]
     MissingTapesUrl,
+
+    /// `tapesctl config` was given a key it does not have.
+    ///
+    /// The known keys are listed rather than described: the set is small and a
+    /// typo is the overwhelmingly likely cause.
+    #[snafu(display("unknown config key {key:?} (known keys: {known})"))]
+    UnknownConfigKey {
+        /// What the user asked for.
+        key: String,
+        /// The keys this build knows, comma-separated.
+        known: String,
+    },
+
+    /// The configuration file exists but is not readable.
+    #[snafu(display("could not read the config at {}", path.display()))]
+    ConfigRead {
+        /// Where the read was attempted.
+        path: PathBuf,
+        /// Underlying IO failure.
+        source: std::io::Error,
+    },
+
+    /// The configuration file is not valid TOML, or has a value of the wrong
+    /// shape.
+    ///
+    /// Reported rather than silently discarded on the write path: `config set`
+    /// reads the file before rewriting it, and a parse failure treated as "no
+    /// configuration" would quietly delete every other key the user had set.
+    #[snafu(display("the config at {} is not valid: {source}", path.display()))]
+    ConfigParse {
+        /// The file that would not parse.
+        path: PathBuf,
+        /// Underlying parse failure.
+        source: toml::de::Error,
+    },
+
+    /// The configuration file could not be written.
+    #[snafu(display("could not write the config at {}", path.display()))]
+    ConfigWrite {
+        /// Where the write was attempted.
+        path: PathBuf,
+        /// Underlying IO failure.
+        source: std::io::Error,
+    },
+
+    /// The configuration could not be rendered back to TOML.
+    #[snafu(display("could not render the config"))]
+    ConfigRender {
+        /// Underlying serialization failure.
+        source: toml::ser::Error,
+    },
 
     /// `--tapes-url` was not a URL.
     #[snafu(display("invalid tapes URL"))]
