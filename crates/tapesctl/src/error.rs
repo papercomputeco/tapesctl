@@ -869,6 +869,53 @@ pub enum Error {
     },
 }
 
+/// Map the shared read-contract machinery's errors onto the variants this CLI
+/// surfaced before the PCC-1146 extraction, one to one, so every user-facing
+/// message is byte-identical to what the in-tree implementation printed.
+///
+/// The variants moved but their wording did not: a user who runs a command
+/// naming an operation the contract does not have reads the same sentence as
+/// before, and the tests that assert on those sentences did not have to move
+/// with the code.
+impl From<tapes_read_contract::Error> for Error {
+    fn from(error: tapes_read_contract::Error) -> Self {
+        use tapes_read_contract::Error as Contract;
+        match error {
+            Contract::VendoredContract { surface } => Self::VendoredContract { surface },
+            Contract::ContractOperation { operation } => Self::ContractOperation { operation },
+            Contract::ContractParameter {
+                operation,
+                parameter,
+            } => Self::ContractParameter {
+                operation,
+                parameter,
+            },
+            Contract::ContractPathParameter {
+                operation,
+                parameter,
+            } => Self::ContractPathParameter {
+                operation,
+                parameter,
+            },
+            Contract::Url { source } => Self::ApiUrl { source },
+            Contract::NotABase => Self::NotABase,
+            Contract::Decode { source } => Self::ApiDecode { source },
+            // The shared enum is `#[non_exhaustive]`: a variant added there
+            // must reach a user as *something* rather than failing this
+            // build, but it also must not be silently folded into an
+            // unrelated message. `ApiContract` is the "the contract layer
+            // said something this build predates" variant, which is exactly
+            // what such a case is.
+            other => {
+                tracing::warn!(error = %other, "unmapped read-contract error");
+                Self::ApiContract {
+                    detail: "the shared read contract reported a condition this build predates",
+                }
+            }
+        }
+    }
+}
+
 /// Map the shared cassette machinery's errors onto the variants this CLI
 /// surfaced before the PCC-1104 extraction, one to one, so every user-facing
 /// message is byte-identical to what the in-tree implementation printed.

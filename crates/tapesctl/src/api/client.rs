@@ -18,12 +18,13 @@
 //!
 //! The request side is where a client can be wrong in a way the server cannot
 //! correct — and it is no longer hand-written either. Every core method here
-//! resolves its operation in [`crate::api::contract`] (the vendored
-//! `contracts/tapes-api.yaml`, reduced by the same reducer the cassette
-//! surface uses) and assembles a [`Call`] from the contract's verb, path
-//! template, and declared parameters. What remains modelled locally is which
-//! parameters each command *sends* and their client-side defaults; the routes
-//! themselves are the contract's.
+//! resolves its operation in [`tapes_read_contract`] (the vendored tapes read
+//! contract, reduced by the same reducer the cassette surface uses) and
+//! assembles a [`Call`] from the contract's verb, path template, and declared
+//! parameters. What remains modelled locally is which parameters each command
+//! *sends* and their client-side defaults; the routes themselves are the
+//! contract's, and since PCC-1146 the contract is one copy shared with the
+//! other client rather than this repository's own.
 //!
 //! # No auth
 //!
@@ -224,7 +225,7 @@ impl ApiClient {
     ///
     /// Every hand-written URL builder this client used to carry is this line
     /// now: the verb, the path template, and the parameter routing all come
-    /// from `contracts/tapes-api.yaml`.
+    /// from the vendored contract in [`tapes_read_contract`].
     async fn call_operation(
         &self,
         operation_id: &str,

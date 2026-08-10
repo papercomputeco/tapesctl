@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
-# Verify the vendored tapes contracts are exactly the published bytes.
+# Verify the vendored tapes ingest contract is exactly the published bytes.
+#
+# Only the ingest surface is checked here. The read contract moved to the
+# `tapes-read-contract` crate in the tapes-crates repository (PCC-1146), which
+# owns its provenance and runs the same two gates on it in its own CI; this
+# repository inherits that check through its pin.
 #
 # Two gates, in order:
 #
-#   1. The vendored files still carry the fingerprints recorded in
-#      contracts/PROVENANCE.md — a hand-edit of a vendored document fails
+#   1. The vendored file still carries the fingerprint recorded in
+#      contracts/PROVENANCE.md — a hand-edit of the vendored document fails
 #      here even with no network and no tapes checkout on the machine.
-#   2. Fetch the contract assets from the pinned tapes release and byte-diff
-#      them against the vendored copies — a vendoring that does not match the
+#   2. Fetch the contract asset from the pinned tapes release and byte-diff
+#      it against the vendored copy — a vendoring that does not match the
 #      published release fails here.
 #
-# Gate 2 prefers the release assets (the published source of truth):
+# Gate 2 prefers the release asset (the published source of truth):
 #
-#   https://github.com/papercomputeco/tapes/releases/download/<tag>/tapes-api-<tag>.yaml
 #   https://github.com/papercomputeco/tapes/releases/download/<tag>/tapes-ingest-<tag>.yaml
 #
 # The tag defaults to the pin recorded in PROVENANCE.md; override with
@@ -23,7 +27,7 @@
 # the authoritative verdict.
 #
 # Fallback for offline work or development against an unreleased tapes commit:
-# set TAPES_REPO=/path/to/tapes to re-emit both contracts from that checkout
+# set TAPES_REPO=/path/to/tapes to re-emit the contract from that checkout
 # (needs its Go toolchain) and diff the emission instead. When the fetch fails
 # and no checkout is available, gate 2 is skipped with a notice so gate 1
 # still runs everywhere — except mid-refresh, where a skipped gate 2 is a
@@ -52,26 +56,25 @@ fi
 fail=0
 
 # --- gate 1: recorded fingerprints -------------------------------------------
-for name in tapes-api.yaml tapes-ingest.yaml; do
-  recorded="$(grep -oE "\`${name}\` sha256 \`[0-9a-f]{64}\`" "${provenance}" \
-    | grep -oE '[0-9a-f]{64}')"
-  actual="$(shasum -a 256 "${vendored}/${name}" | awk '{print $1}')"
-  if [ "${recorded}" != "${actual}" ]; then
-    if [ "${refresh}" = 1 ]; then
-      echo "notice: ${name} does not match the fingerprint recorded in PROVENANCE.md" >&2
-      echo "  recorded: ${recorded}" >&2
-      echo "  actual:   ${actual}" >&2
-      echo "  expected during a refresh to ${TAPES_CONTRACT_TAG}; update PROVENANCE.md before landing" >&2
-    else
-      echo "FAIL: ${name} does not match the fingerprint recorded in PROVENANCE.md" >&2
-      echo "  recorded: ${recorded}" >&2
-      echo "  actual:   ${actual}" >&2
-      fail=1
-    fi
+name=tapes-ingest.yaml
+recorded="$(grep -oE "\`${name}\` sha256 \`[0-9a-f]{64}\`" "${provenance}" \
+  | grep -oE '[0-9a-f]{64}')"
+actual="$(shasum -a 256 "${vendored}/${name}" | awk '{print $1}')"
+if [ "${recorded}" != "${actual}" ]; then
+  if [ "${refresh}" = 1 ]; then
+    echo "notice: ${name} does not match the fingerprint recorded in PROVENANCE.md" >&2
+    echo "  recorded: ${recorded}" >&2
+    echo "  actual:   ${actual}" >&2
+    echo "  expected during a refresh to ${TAPES_CONTRACT_TAG}; update PROVENANCE.md before landing" >&2
   else
-    echo "ok: ${name} matches its recorded fingerprint"
+    echo "FAIL: ${name} does not match the fingerprint recorded in PROVENANCE.md" >&2
+    echo "  recorded: ${recorded}" >&2
+    echo "  actual:   ${actual}" >&2
+    fail=1
   fi
-done
+else
+  echo "ok: ${name} matches its recorded fingerprint"
+fi
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
@@ -99,19 +102,15 @@ emit_and_diff() {
 
   (
     cd "${tapes_repo}"
-    GOEXPERIMENT=jsonv2 go run ./cli/tapes dev openapi api --docs-root . --out "${tmp}/tapes-api.yaml"
-    GOEXPERIMENT=jsonv2 go run ./cli/tapes dev openapi ingest --docs-root . --out "${tmp}/tapes-ingest.yaml"
+    GOEXPERIMENT=jsonv2 go run ./cli/tapes dev openapi ingest --docs-root . --out "${tmp}/${name}"
   )
 
-  local name
-  for name in tapes-api.yaml tapes-ingest.yaml; do
-    if ! diff -u "${vendored}/${name}" "${tmp}/${name}"; then
-      echo "FAIL: vendored ${name} differs from the emission at ${head_commit}" >&2
-      fail=1
-    else
-      echo "ok: ${name} matches the re-emission"
-    fi
-  done
+  if ! diff -u "${vendored}/${name}" "${tmp}/${name}"; then
+    echo "FAIL: vendored ${name} differs from the emission at ${head_commit}" >&2
+    fail=1
+  else
+    echo "ok: ${name} matches the re-emission"
+  fi
 }
 
 if [ -n "${TAPES_REPO:-}" ]; then
@@ -131,39 +130,28 @@ if [ -z "${tag}" ]; then
 fi
 
 base="https://github.com/papercomputeco/tapes/releases/download/${tag}"
-fetched=1
-for surface in api ingest; do
-  if ! curl -fsSL --retry 2 -o "${tmp}/tapes-${surface}.yaml" \
-    "${base}/tapes-${surface}-${tag}.yaml"; then
-    fetched=0
-    break
+if curl -fsSL --retry 2 -o "${tmp}/${name}" "${base}/tapes-ingest-${tag}.yaml"; then
+  if ! diff -u "${vendored}/${name}" "${tmp}/${name}"; then
+    echo "FAIL: vendored ${name} differs from the ${tag} release asset" >&2
+    fail=1
+  else
+    echo "ok: ${name} matches the ${tag} release asset"
   fi
-done
-
-if [ "${fetched}" = 1 ]; then
-  for name in tapes-api.yaml tapes-ingest.yaml; do
-    if ! diff -u "${vendored}/${name}" "${tmp}/${name}"; then
-      echo "FAIL: vendored ${name} differs from the ${tag} release asset" >&2
-      fail=1
-    else
-      echo "ok: ${name} matches the ${tag} release asset"
-    fi
-  done
   exit "${fail}"
 fi
 
-# Fetch failed (offline, or the tag's assets are missing): fall back to a
+# Fetch failed (offline, or the tag's asset is missing): fall back to a
 # checkout beside this repo when one exists.
 fallback_repo="${here}/../tapes"
 if [ -f "${fallback_repo}/cli/tapes/main.go" ]; then
-  echo "notice: could not fetch the ${tag} release assets; falling back to re-emission from ${fallback_repo}"
+  echo "notice: could not fetch the ${tag} release asset; falling back to re-emission from ${fallback_repo}"
   emit_and_diff "${fallback_repo}"
 elif [ "${refresh}" = 1 ]; then
-  echo "FAIL: mid-refresh, but the ${tag} release assets could not be fetched and no tapes" >&2
+  echo "FAIL: mid-refresh, but the ${tag} release asset could not be fetched and no tapes" >&2
   echo "      checkout exists at ${fallback_repo} (set TAPES_REPO) — nothing authoritative ran" >&2
   fail=1
 else
-  echo "notice: could not fetch the ${tag} release assets and no tapes checkout at ${fallback_repo} (set TAPES_REPO); skipping the byte diff"
+  echo "notice: could not fetch the ${tag} release asset and no tapes checkout at ${fallback_repo} (set TAPES_REPO); skipping the byte diff"
 fi
 
 exit "${fail}"
