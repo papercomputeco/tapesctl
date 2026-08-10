@@ -44,7 +44,7 @@ repository = "https://github.com/papercomputeco/tapesctl"
 # stop being `tapes-cassette-client`'s `Call` — a type error whose message
 # names two identical-looking types.
 #
-tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-crates", rev = "cc81a66e7498ce00db0e2a3f0a7c7862accb434f" }
+tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-crates", rev = "8a40d7f79ff218c9bf2bb32552c7330106f0f2a3" }
 
 # The harness-agnostic half of capture — the X-Tapes-* envelope, the
 # capture-gateway environment contract, and the peer-trust ancestry check — in
@@ -53,7 +53,7 @@ tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-crates", rev 
 # and reaching them through the harness registry would say they were harness
 # knowledge. Same repository, same rev as the crates above, for the reasons
 # given there.
-tapes-capture = { git = "https://github.com/papercomputeco/tapes-crates", rev = "cc81a66e7498ce00db0e2a3f0a7c7862accb434f" }
+tapes-capture = { git = "https://github.com/papercomputeco/tapes-crates", rev = "8a40d7f79ff218c9bf2bb32552c7330106f0f2a3" }
 
 # The generated cassette-surface machinery (discovery decode, OpenAPI
 # reduction, the on-disk surface cache, clap command synthesis, and the
@@ -61,7 +61,7 @@ tapes-capture = { git = "https://github.com/papercomputeco/tapes-crates", rev = 
 # repository since the PCC-1104 split, so every capture client generates the
 # same surface the same way. Pinned by revision like the crate above — and at
 # the same rev as it, for the reasons given there.
-tapes-cassette-client = { git = "https://github.com/papercomputeco/tapes-crates", rev = "cc81a66e7498ce00db0e2a3f0a7c7862accb434f" }
+tapes-cassette-client = { git = "https://github.com/papercomputeco/tapes-crates", rev = "8a40d7f79ff218c9bf2bb32552c7330106f0f2a3" }
 
 # The published tapes read contract itself — the vendored `tapes-api.yaml`, its
 # provenance and seal check, the reduction of it into an operation table, the
@@ -77,7 +77,7 @@ tapes-cassette-client = { git = "https://github.com/papercomputeco/tapes-crates"
 #
 # Same repository, same rev, same URL as the crates above, for the reasons
 # given there.
-tapes-read-contract = { git = "https://github.com/papercomputeco/tapes-crates", rev = "cc81a66e7498ce00db0e2a3f0a7c7862accb434f" }
+tapes-read-contract = { git = "https://github.com/papercomputeco/tapes-crates", rev = "8a40d7f79ff218c9bf2bb32552c7330106f0f2a3" }
 
 # --- CLI ---
 # `string` lets a Command/Arg be named by an owned String rather than only by a
