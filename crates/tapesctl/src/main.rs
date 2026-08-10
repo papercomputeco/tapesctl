@@ -1,10 +1,9 @@
 //! `tapesctl` — the Tapes client CLI.
 //!
-//! See the "Tapes and Cassettes" RFC for the intended surface. Every
-//! hand-written command dispatches to a real implementation; what is still to
-//! come is the *generated* `<cassette> <method>` surface, which arrives with
-//! `/v1/cassettes` discovery in Track 4 and covers resources this binary cannot
-//! know about at compile time.
+//! See the "Tapes and Cassettes" RFC for the intended surface. Alongside the
+//! hand-written commands sits the *generated* `cassettes <name> <method>`
+//! surface, discovered from `/v1/cassettes` at runtime, which covers resources
+//! this binary cannot know about at compile time.
 
 use std::process::ExitCode;
 
@@ -23,10 +22,18 @@ async fn main() -> ExitCode {
         .is_some_and(|argument| argument == "start");
     tapesctl::logging::init(hands_over_terminal, tapesctl::cli::verbosity(&argv));
 
-    // `resolve` rather than `Cli::parse`: the cassette nouns are discovered from
-    // the server before the command line is parsed, so that
-    // `tapesctl <cassette> <method>` parses and `--help` lists them.
-    let invocation = tapesctl::resolve(argv).await;
+    // The CLI boundary, and the only place the configured defaults are read
+    // from the machine: everything below takes the loaded value. A machine with
+    // no home directory has no configuration file either, which is the same
+    // state as an empty one — the flag and the environment still work.
+    let config = tapesctl::machine::Machine::resolve()
+        .map(|machine| tapesctl::config::load_or_default(machine.tapes_config_path()))
+        .unwrap_or_default();
+
+    // `resolve` rather than `Cli::parse`: the cassette commands are discovered
+    // from the server before the command line is parsed, so that
+    // `tapesctl cassettes <name> <method>` parses and the noun lists them.
+    let invocation = tapesctl::resolve(argv, &config).await;
 
     match tapesctl::dispatch(invocation).await {
         Ok(()) => ExitCode::SUCCESS,

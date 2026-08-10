@@ -1,5 +1,13 @@
 name: Check PR
 
+# See the header of ci.yaml for why `runs-on` is a fork-aware expression.
+#
+# The two checks below are deliberately not treated the same for a fork.
+# A conventional title is something any contributor can supply, so it stays
+# enforced. A Linear magic word cannot be: the issue tracker it names is not
+# readable — let alone writable — from outside the organisation, so demanding
+# one would be a gate an external contributor has no way to pass.
+
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
@@ -18,7 +26,7 @@ concurrency:
 jobs:
   check-pr-title:
     name: Check PR Title
-    runs-on: depot-ubuntu-24.04
+    runs-on: ${{ github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'depot-ubuntu-24.04' }}
 
     steps:
       - name: Checkout repository
@@ -42,18 +50,38 @@ jobs:
 
   check-linear-magic-word:
     name: Check Linear Magic Word
-    runs-on: depot-ubuntu-24.04
+    runs-on: ${{ github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'depot-ubuntu-24.04' }}
 
+    # The fork branch is a step-level `if:` inside one job rather than a
+    # job-level `if:` on two jobs, so this check reports the same name and a
+    # real conclusion on every pull request. A job skipped by a job-level `if:`
+    # reports "skipped", and whether that satisfies a required status check
+    # depends on branch-protection configuration — a dependency worth not
+    # having.
     steps:
+      - name: Note that the Linear check does not apply to forks
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          {
+            echo "### Linear magic word: not required"
+            echo
+            echo "This pull request comes from a fork, so the Linear issue"
+            echo "reference this check normally enforces is not expected."
+            echo "Maintainers link the issue when they triage the change."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Checkout repository
+        if: github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/checkout@v4
 
       - name: Install Dagger
+        if: github.event.pull_request.head.repo.full_name == github.repository
         uses: dagger/dagger-for-github@v8.2.0
         with:
           version: ${{ env.DAGGER_VERSION }}
 
       - name: Check Linear magic word
+        if: github.event.pull_request.head.repo.full_name == github.repository
         run: |
           dagger call -m github.com/papercomputeco/daggerverse/ghcontrib \
               --token=env://GH_TOKEN \

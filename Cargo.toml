@@ -4,13 +4,19 @@ members = [
     "crates/tapesctl",
 ]
 
-# Intentionally unlicensed while the repo is closed source — no LICENSE file and
-# no `license` field. A license will be chosen before open-sourcing. `publish`
-# is off so an unlicensed crate can't be pushed to crates.io by accident.
+# Dual-licensed under MIT OR Apache-2.0 — see LICENSE-MIT and LICENSE-APACHE.
+# The same pair the shared harness crates carry, so a consumer vendoring both
+# reasons about one license, not two.
+#
+# `publish` stays false until the first deliberate crates.io release; flip it
+# together with that release PR. It is no longer a guard against publishing an
+# unlicensed crate — that reason expired with the license above — only against
+# publishing before anyone has decided to.
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
+license = "MIT OR Apache-2.0"
 publish = false
 authors = ["Paper Compute"]
 repository = "https://github.com/papercomputeco/tapesctl"
@@ -133,6 +139,18 @@ serde_json = "1"
 # embedded with `include_str!` — never untrusted data.
 serde_yaml = "0.9"
 toml = "0.8"
+# The *writer* for `~/.tapes/config.toml`, where `toml` above is the reader.
+#
+# Two crates for one file needs a reason, and it is that they answer different
+# questions. `toml` deserializes a document into a model, which is exactly right
+# for reading and exactly wrong for writing: serializing the model back emits
+# only what the model has fields for, so a `config set` from an older build
+# would delete every key a newer one had written — and would flatten the user's
+# comments and ordering while it was at it. toml_edit keeps the parsed document
+# and edits one key in place, so everything it does not understand survives
+# untouched. Already in the tree as a transitive dependency of `toml`, so this
+# pin costs no new download.
+toml_edit = "0.22"
 
 # --- errors ---
 snafu = "0.8"

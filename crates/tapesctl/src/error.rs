@@ -82,8 +82,88 @@ pub enum Error {
     /// No server was named. On the capture side there would be nowhere to send
     /// turns, and failing loudly beats running a session that captures nothing;
     /// on the read side there is nothing to query.
-    #[snafu(display("no tapes server URL: pass --tapes-url or set TAPES_URL"))]
+    ///
+    /// The message names all three sources rather than only the flag, because
+    /// the answer a user most often wants is the one they only have to give
+    /// once. A guessed `http://localhost:8080` is still refused: guessing is
+    /// how a capture ends up pointed at whatever happens to be listening.
+    #[snafu(display(
+        "no tapes server URL: pass --tapes-url, set TAPES_URL, or configure a \
+         default with `tapesctl config set tapes-url <url>`"
+    ))]
     MissingTapesUrl,
+
+    /// `tapesctl config` was given a key it does not have.
+    ///
+    /// The known keys are listed rather than described: the set is small and a
+    /// typo is the overwhelmingly likely cause.
+    #[snafu(display("unknown config key {key:?} (known keys: {known})"))]
+    UnknownConfigKey {
+        /// What the user asked for.
+        key: String,
+        /// The keys this build knows, comma-separated.
+        known: String,
+    },
+
+    /// The configuration file exists but is not readable.
+    #[snafu(display("could not read the config at {}", path.display()))]
+    ConfigRead {
+        /// Where the read was attempted.
+        path: PathBuf,
+        /// Underlying IO failure.
+        source: std::io::Error,
+    },
+
+    /// The configuration file is not valid TOML, or has a value of the wrong
+    /// shape.
+    #[snafu(display("the config at {} is not valid: {source}", path.display()))]
+    ConfigParse {
+        /// The file that would not parse.
+        path: PathBuf,
+        /// Underlying parse failure.
+        source: toml::de::Error,
+    },
+
+    /// The configuration file could not be parsed for editing.
+    ///
+    /// A separate failure from [`Error::ConfigParse`] because a separate parser
+    /// produces it: writing edits the document in place rather than
+    /// re-serializing a model, so the write path parses for structure where the
+    /// read path parses for meaning. Reported rather than treated as an empty
+    /// document, because a `config set` that started from "empty" would replace
+    /// the file and take every key it could not read down with it.
+    #[snafu(display("the config at {} could not be edited: {source}", path.display()))]
+    ConfigEdit {
+        /// The file that would not parse.
+        path: PathBuf,
+        /// Underlying parse failure.
+        source: toml_edit::TomlError,
+    },
+
+    /// A configured URL names a scheme nothing here can dial.
+    ///
+    /// Refused at the point it is set rather than at the point it is used: the
+    /// value is stored once and read by every later command, so a bad scheme
+    /// accepted here fails everything afterwards, in a way that reads like the
+    /// server being down rather than like the typo it is.
+    #[snafu(display(
+        "{key} must be an http or https URL; {scheme:?} is not a scheme this client can call"
+    ))]
+    ConfigUrlScheme {
+        /// The configuration key being set.
+        key: String,
+        /// The scheme that was given.
+        scheme: String,
+    },
+
+    /// The configuration file could not be written.
+    #[snafu(display("could not write the config at {}", path.display()))]
+    ConfigWrite {
+        /// Where the write was attempted.
+        path: PathBuf,
+        /// Underlying IO failure.
+        source: std::io::Error,
+    },
 
     /// `--tapes-url` was not a URL.
     #[snafu(display("invalid tapes URL"))]

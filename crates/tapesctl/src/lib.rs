@@ -6,6 +6,7 @@ pub mod capture;
 pub mod cassette;
 pub mod cli;
 pub mod codex_app;
+pub mod config;
 pub mod error;
 pub mod logging;
 pub mod machine;
@@ -20,6 +21,7 @@ use url::Url;
 use api::client::ApiClient;
 use cassette::Surface;
 use cli::{Cli, Command, PluginCommand, SkillCommand, StartArgs};
+use config::Config;
 pub use error::{Error, Result};
 
 /// The tapesctl canary. The release smoke test asserts on this exact string,
@@ -80,48 +82,98 @@ impl Invocation {
 
 /// Build the parser — cassette nouns included — and parse one command line.
 ///
-/// Discovery happens before parsing because the generated nouns have to be in
-/// the parser for `tapesctl <cassette> ...` to parse at all, and for
-/// `tapesctl --help` to list them. It is cheap in the common case: the surface
+/// Discovery happens before parsing because the generated commands have to be
+/// in the parser for `tapesctl cassettes <name> <method>` to parse at all, and
+/// for `tapesctl cassettes` to list them. It is cheap in the common case: the surface
 /// comes from [`cassette::cache`] and only reaches the network when that has
 /// gone stale.
 ///
 /// Exits the process on a parse error or on `--help`, which is what
 /// `clap::Parser::parse` does and what the caller already expects.
-pub async fn resolve<I, S>(argv: I) -> Invocation
+pub async fn resolve<I, S>(argv: I, config: &Config) -> Invocation
 where
     I: IntoIterator<Item = S>,
     S: Into<String> + Clone,
 {
     let argv: Vec<String> = argv.into_iter().map(Into::into).collect();
-    let server = cli::discovery_url(&argv);
-    let surface = discover(server.as_deref()).await;
-
-    // The epilogue is attached here rather than declared on `Cli`, because what
-    // it has to say depends on the discovery that just ran: the derive can only
-    // carry a constant, and a constant cannot tell a reader whether the missing
-    // cassette commands are missing because no server was named or because the
-    // named one served none.
-    let command = cassette::command::augment(Cli::command(), &surface)
-        .after_help(cassette::command::epilogue(server.as_deref(), &surface));
+    let (command, surface) = build_parser(&argv, config).await;
     let matches = command.get_matches_from(&argv);
 
-    // A noun on the surface is a generated command; anything else is one of the
-    // derived ones. Built-ins win the name — `augment` never generates over one.
-    if let Some((name, cassette_matches)) = matches.subcommand() {
-        if surface.cassette(name).is_some() {
-            return Invocation::Cassette {
-                verbose: matches.get_count("verbose"),
-                name: name.to_owned(),
-                matches: Box::new(cassette_matches.clone()),
-                surface: Box::new(surface),
-            };
+    // Two ways to reach a generated command, and they resolve to the same thing:
+    // the canonical `tapesctl cassettes <name> <method>`, and the hidden
+    // top-level `tapesctl <name> <method>` the surface used to be spelled as.
+    // Built-ins win the name in both — neither `mount` nor `augment` generates
+    // over one.
+    let verbose = matches.get_count("verbose");
+    let generated = match matches.subcommand() {
+        Some((cassette::command::NOUN, noun_matches)) => noun_matches.subcommand(),
+        Some((name, cassette_matches)) if surface.cassette(name).is_some() => {
+            Some((name, cassette_matches))
         }
+        _ => None,
+    };
+    if let Some((name, cassette_matches)) = generated {
+        return Invocation::Cassette {
+            verbose,
+            name: name.to_owned(),
+            matches: Box::new(cassette_matches.clone()),
+            surface: Box::new(surface),
+        };
     }
 
     match Cli::from_arg_matches(&matches) {
         Ok(cli) => Invocation::Static(Box::new(cli)),
         Err(error) => error.exit(),
+    }
+}
+
+/// Discover this command line's cassettes and build the parser that knows them.
+///
+/// Split out of [`resolve`] so the help a real run prints can be *rendered* by
+/// a test: `get_matches_from` answers `--help` by exiting the process, which
+/// leaves nothing to assert on.
+pub async fn build_parser(argv: &[String], config: &Config) -> (clap::Command, Surface) {
+    // Flag, then environment, then the configured default — the same three
+    // sources, in the same order, that the parse below applies to every command
+    // that needs a server. Discovery has to resolve them itself because it runs
+    // before the parse that would otherwise do it.
+    let server = cli::discovery_url(argv).or_else(|| config.tapes_url.clone());
+    let surface = discover(server.as_deref()).await;
+    (
+        parser(&surface, server.as_deref(), config.tapes_url.as_deref()),
+        surface,
+    )
+}
+
+/// The parser for one run: the derived surface, the cassettes discovered for
+/// it, and the configured server as the last-resort default.
+fn parser(surface: &Surface, server: Option<&str>, configured: Option<&str>) -> clap::Command {
+    // The epilogue is attached here rather than declared on `Cli`, because what
+    // it has to say depends on the discovery that just ran: the derive can only
+    // carry a constant, and a constant cannot tell a reader whether the missing
+    // cassette commands are missing because no server was named or because the
+    // named one served none.
+    //
+    // The noun is mounted before the hidden top-level aliases are added, so a
+    // deployment that serves a cassette actually named `cassettes` finds the
+    // name taken and lands under the noun like every other — rather than
+    // replacing the noun and taking its siblings with it.
+    let command =
+        cassette::command::augment(cassette::command::mount(Cli::command(), surface), surface)
+            .after_help(cassette::command::epilogue(server, surface));
+
+    // The configured server enters as clap's *default* for the global flag, so
+    // the precedence is clap's own rather than a second implementation of it: a
+    // default loses to an environment variable, which loses to an argument, and
+    // clap propagates the winner into every subcommand that shares the id —
+    // including the generated cassette methods. A default also does not count
+    // as an argument the user supplied, so a bare `tapesctl` still answers with
+    // help on a machine that has one configured.
+    match configured {
+        Some(configured) => command.mut_arg(cli::TAPES_URL_ARG, |arg| {
+            arg.default_value(configured.to_owned())
+        }),
+        None => command,
     }
 }
 
@@ -178,6 +230,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Plugin(PluginCommand::Install(args)) => plugin::run(args),
         Command::Plugin(PluginCommand::Uninstall(args)) => plugin::uninstall(args),
         Command::Plugin(PluginCommand::Hook(args)) => codex_app::hook::run(&args).await,
+        Command::Config(command) => config::run(&command),
     }
 }
 
@@ -231,6 +284,154 @@ mod tests {
         );
     }
 
+    /// The configured server is not a fourth way of saying `--tapes-url`; it is
+    /// the way that survives a new shell. This is the whole of what the config
+    /// file buys, at the seam where it is applied.
+    #[test]
+    fn a_configured_server_reaches_a_command_that_names_none() {
+        let matches = parser(&Surface::default(), None, Some("http://configured"))
+            .try_get_matches_from(["tapesctl", "sessions", "list"])
+            .unwrap();
+        let cli = Cli::from_arg_matches(&matches).unwrap();
+        match cli.command {
+            Command::Sessions(SessionsCommand::List(args)) => {
+                assert_eq!(args.api.tapes_url.as_deref(), Some("http://configured"));
+            }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_argument_still_beats_the_configured_server() {
+        // The precedence is clap's own — a default loses to an argument — which
+        // is why it is expressed as a default rather than resolved by hand.
+        for argv in [
+            [
+                "tapesctl",
+                "--tapes-url",
+                "http://typed",
+                "sessions",
+                "list",
+            ],
+            [
+                "tapesctl",
+                "sessions",
+                "list",
+                "--tapes-url",
+                "http://typed",
+            ],
+        ] {
+            let matches = parser(&Surface::default(), None, Some("http://configured"))
+                .try_get_matches_from(argv)
+                .unwrap();
+            match Cli::from_arg_matches(&matches).unwrap().command {
+                Command::Sessions(SessionsCommand::List(args)) => {
+                    assert_eq!(args.api.tapes_url.as_deref(), Some("http://typed"));
+                }
+                other => panic!("got: {other:?}"),
+            }
+        }
+    }
+
+    /// PCC-1143's answer to a bare invocation has to survive a machine that has
+    /// a server configured. A default value is not an argument the user
+    /// supplied, and this is what would notice if that ever stopped being true.
+    #[test]
+    fn a_configured_server_does_not_cost_the_bare_invocation_its_help() {
+        let error = parser(&Surface::default(), None, Some("http://configured"))
+            .try_get_matches_from(["tapesctl"])
+            .expect_err("a bare invocation should not parse");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand,
+            "got: {error}",
+        );
+    }
+
+    /// Both spellings have to arrive at the same place, because for one release
+    /// they are the same command: the canonical `cassettes hello-world
+    /// get-hello` and the hidden `hello-world get-hello` it replaced.
+    #[test]
+    fn both_spellings_resolve_to_the_same_generated_invocation() {
+        for argv in [
+            vec![
+                "tapesctl".to_owned(),
+                cassette::command::NOUN.to_owned(),
+                "hello-world".to_owned(),
+                "get-hello".to_owned(),
+                "--tapes-url".to_owned(),
+                "http://x".to_owned(),
+            ],
+            vec![
+                "tapesctl".to_owned(),
+                "hello-world".to_owned(),
+                "get-hello".to_owned(),
+                "--tapes-url".to_owned(),
+                "http://x".to_owned(),
+            ],
+        ] {
+            // `resolve` would reach the network for a URL it has no cache for,
+            // so the parse is driven directly off a known surface instead.
+            let surface = hello_surface();
+            let matches = parser(&surface, Some("http://x"), None)
+                .try_get_matches_from(&argv)
+                .unwrap();
+            let (name, cassette_matches) = match matches.subcommand() {
+                Some((cassette::command::NOUN, noun)) => noun.subcommand(),
+                other => other,
+            }
+            .expect("both spellings should reach a cassette");
+            assert_eq!(name, "hello-world");
+            assert!(cassette_matches.subcommand_name() == Some("get-hello"));
+        }
+    }
+
+    fn hello_surface() -> Surface {
+        Surface {
+            cassettes: vec![cassette::spec::reduce(
+                "hello-world",
+                None,
+                &serde_json::json!({"paths": {"/v1/cassettes/hello-world/hello": {
+                    "get": {"operationId": "getHello"}
+                }}}),
+            )],
+        }
+    }
+
+    #[test]
+    fn the_generated_surface_and_the_global_flag_are_one_argument_not_two() {
+        // Two ids sharing `--tapes-url` is a duplicate the moment the global
+        // propagates into a generated method, and clap answers a duplicate by
+        // panicking — a crash a user would trigger just by pointing tapesctl at
+        // their own server.
+        let surface = hello_surface();
+        parser(&surface, Some("http://x"), Some("http://x")).debug_assert();
+
+        // And the configured default reaches the generated method, which reads
+        // the flag off its own matches — through the noun, which is one more
+        // level for it to propagate down.
+        let matches = parser(&surface, Some("http://x"), Some("http://configured"))
+            .try_get_matches_from([
+                "tapesctl",
+                cassette::command::NOUN,
+                "hello-world",
+                "get-hello",
+            ])
+            .unwrap();
+        let method = matches
+            .subcommand()
+            .and_then(|(_, noun)| noun.subcommand())
+            .and_then(|(_, cassette)| cassette.subcommand())
+            .map(|(_, method)| method)
+            .unwrap();
+        assert_eq!(
+            method
+                .get_one::<String>(cli::TAPES_URL_ARG)
+                .map(String::as_str),
+            Some("http://configured"),
+        );
+    }
+
     #[test]
     fn the_canary_survives_in_the_version_banner() {
         // It is the string the release smoke test pins, so its home moving must
@@ -244,6 +445,7 @@ mod tests {
     async fn version_is_ok() {
         let cli = Cli {
             verbose: 0,
+            tapes_url: None,
             command: Command::Version,
         };
         assert!(run(cli).await.is_ok());
@@ -267,6 +469,7 @@ mod tests {
         // home.
         let cli = Cli {
             verbose: 0,
+            tapes_url: None,
             command: Command::Plugin(PluginCommand::Install(PluginInstallArgs {
                 harness: "not-a-harness".to_owned(),
                 dry_run: false,
@@ -287,6 +490,7 @@ mod tests {
         // Not on a connection attempt: with no URL there is nowhere to connect.
         let cli = Cli {
             verbose: 0,
+            tapes_url: None,
             command: Command::Sessions(SessionsCommand::Get(SessionIdArgs {
                 api: ApiArgs { tapes_url: None },
                 id: "s-1".to_owned(),
@@ -299,6 +503,7 @@ mod tests {
     async fn seed_without_a_server_fails_on_the_missing_url() {
         let cli = Cli {
             verbose: 0,
+            tapes_url: None,
             command: Command::Seed(SeedArgs {
                 api: ApiArgs { tapes_url: None },
             }),

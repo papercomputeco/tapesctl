@@ -1,9 +1,11 @@
-//! The generated `tapesctl <cassette> <method>` surface.
+//! The generated `tapesctl cassettes <name> <method>` surface.
 //!
 //! A tapes deployment serves *cassettes*: independently built API extensions
 //! that core reverse-proxies under `/v1/cassettes/<name>`. This module turns the
-//! set a server actually serves into subcommands, so `tapesctl summary reports`
-//! works against a server whose cassettes this binary has never heard of.
+//! set a server actually serves into subcommands, so `tapesctl cassettes summary
+//! reports` works against a server whose cassettes this binary has never heard
+//! of. `paperctl` mounts the same generated surface under the same noun, so the
+//! spelling transfers between the two clients.
 //!
 //! # Generated at runtime, not at build time
 //!

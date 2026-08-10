@@ -16,11 +16,17 @@
 //! to delete. The suite quietly broke the machine it ran on, and the damage
 //! outlived the run.
 //!
-//! So the three are gathered into one value, resolved by [`Machine::resolve`]
+//! So they are gathered into one value, resolved by [`Machine::resolve`]
 //! at the CLI boundary and passed down from there. Nothing below that boundary
 //! consults the environment, which is the property worth having: a caller
 //! holding a [`Machine`] built with [`Machine::at`] can write only where that
 //! value points.
+//!
+//! tapesctl's own `~/.tapes/config.toml` joined them for the same reason
+//! rather than a different one. It is the first file this binary writes on its
+//! *own* behalf, and `tapesctl config set` is a command a test naturally wants
+//! to run end to end — which, resolved ambiently, would have meant a test
+//! rewriting the developer's real configured server.
 //!
 //! # Why not steer the environment instead
 //!
@@ -46,6 +52,15 @@ pub struct Machine {
     home: PathBuf,
     codex_config_path: PathBuf,
     codex_program: PathBuf,
+    tapes_config_path: PathBuf,
+}
+
+/// `~/.tapes/config.toml`, relative to a home directory.
+///
+/// A function rather than a constant so both constructors derive it the same
+/// way, and so the one place that names the file is greppable.
+fn tapes_config_path_in(home: &Path) -> PathBuf {
+    home.join(".tapes").join("config.toml")
 }
 
 impl Machine {
@@ -96,6 +111,7 @@ impl Machine {
                 std::env::var_os("CODEX_HOME").as_deref(),
             );
             Ok(Self {
+                tapes_config_path: tapes_config_path_in(&home),
                 home,
                 codex_config_path,
                 // Bare, so the user's `PATH` resolves the same binary they
@@ -112,14 +128,23 @@ impl Machine {
     /// is precisely the defect. Point it at a path that does not exist to
     /// assert against an install that finds no CLI, or at a shim to observe
     /// what the installer would have run.
+    ///
+    /// tapesctl's own `config.toml` is not a fourth argument, because unlike
+    /// the Codex ones it has no environment override to model: it is always
+    /// `.tapes/config.toml` under whichever home this machine names, so a
+    /// caller that passes a temporary home already has a temporary config
+    /// file. [`Machine::with_tapes_config_path`] moves it for the cases that
+    /// need the two to differ.
     #[must_use]
     pub fn at(
         home: impl Into<PathBuf>,
         codex_config_path: impl Into<PathBuf>,
         codex_program: impl Into<PathBuf>,
     ) -> Self {
+        let home = home.into();
         Self {
-            home: home.into(),
+            tapes_config_path: tapes_config_path_in(&home),
+            home,
             codex_config_path: codex_config_path.into(),
             codex_program: codex_program.into(),
         }
@@ -143,10 +168,27 @@ impl Machine {
         &self.codex_program
     }
 
+    /// tapesctl's own configuration file: `~/.tapes/config.toml`.
+    ///
+    /// It sits beside the logs, the authored skills, and the codex-app state
+    /// this client already keeps under `~/.tapes`, so a user has one directory
+    /// to look in, back up, or delete.
+    #[must_use]
+    pub fn tapes_config_path(&self) -> &Path {
+        &self.tapes_config_path
+    }
+
     /// The same machine driven through a different `codex`.
     #[must_use]
     pub fn with_codex_program(mut self, codex_program: impl Into<PathBuf>) -> Self {
         self.codex_program = codex_program.into();
+        self
+    }
+
+    /// The same machine reading and writing a different `config.toml`.
+    #[must_use]
+    pub fn with_tapes_config_path(mut self, tapes_config_path: impl Into<PathBuf>) -> Self {
+        self.tapes_config_path = tapes_config_path.into();
         self
     }
 }
@@ -165,6 +207,24 @@ mod tests {
             Path::new("/elsewhere/config.toml")
         );
         assert_eq!(machine.codex_program(), Path::new("/nowhere/codex"));
+    }
+
+    /// The property the config commands rely on: a machine built at a
+    /// temporary home writes its `config.toml` inside that home, so a test can
+    /// exercise `config set` without touching the developer's own.
+    #[test]
+    fn the_config_file_follows_the_home_it_was_given() {
+        let machine = Machine::at("/home/someone", "/elsewhere/config.toml", "/nowhere/codex");
+        assert_eq!(
+            machine.tapes_config_path(),
+            Path::new("/home/someone/.tapes/config.toml"),
+        );
+        assert_eq!(
+            machine
+                .with_tapes_config_path("/tmp/other.toml")
+                .tapes_config_path(),
+            Path::new("/tmp/other.toml"),
+        );
     }
 
     /// The guard that would have caught the defect this type exists for: a
