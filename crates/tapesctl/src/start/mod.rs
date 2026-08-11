@@ -67,6 +67,7 @@ pub mod content_encoding;
 pub mod ingest;
 pub mod peek;
 pub mod proxy;
+pub mod tally;
 pub mod turn_policy;
 
 use std::collections::HashMap;
@@ -106,6 +107,7 @@ use crate::transcript::codex_anchors;
 use crate::transcript::tailer::{self, SessionTracker};
 use ingest::IngestClient;
 use proxy::ProxyState;
+use tally::{CaptureCounts, CaptureTally};
 
 /// Header this client asks Codex to stamp so concurrent Codex processes on one
 /// loopback endpoint can be told apart.
@@ -880,7 +882,11 @@ pub async fn run(args: StartArgs) -> Result<()> {
     let launched_pid = Arc::new(AtomicI32::new(NO_LAUNCHED_PID));
 
     let tracker = SessionTracker::new();
+    // Held here as well as in the state: the capture tasks write it, and this
+    // function reads it after shutdown to decide what the exit summary may say.
+    let tally = Arc::new(CaptureTally::new());
     let state = ProxyState {
+        tally: Arc::clone(&tally),
         upstream: config.upstream.clone(),
         ingest: IngestClient::new(&config.tapes_url)?,
         transcript_tracker: tracker.clone(),
@@ -984,6 +990,7 @@ pub async fn run(args: StartArgs) -> Result<()> {
     print_exit_summary(
         config.web_url.as_ref(),
         session_rx.try_recv().ok().as_deref(),
+        tally.snapshot(),
     );
 
     let status = status?;
@@ -1069,14 +1076,35 @@ fn announce_capture() {
 }
 
 /// What this session was, printed once the terminal belongs to the caller again.
-fn print_exit_summary(web_url: Option<&Url>, session_id: Option<&str>) {
-    match session_id {
-        Some(id) => print_session_link(web_url, id),
+///
+/// Three outcomes, and they are deliberately not collapsed:
+///
+/// * nothing captured — benign, and the only case that may say so;
+/// * captured and attributed — the session link, as before;
+/// * captured and unattributed — turns landed under `unknown`, which is a bug
+///   in attribution and is reported as one rather than as silence.
+///
+/// The mixed case gets the link *and* the warning: the link is true, and it is
+/// incomplete, because some of this session's turns are not filed under it.
+fn print_exit_summary(web_url: Option<&Url>, session_id: Option<&str>, counts: CaptureCounts) {
+    match tally::exit_summary_for(session_id, counts) {
         // Not an error: a harness can be launched and quit without ever calling
         // a model. Saying so beats printing nothing and leaving the user to
         // wonder whether capture was ever on.
-        None => println!("tapesctl: no turns were captured"),
+        tally::ExitSummary::NothingCaptured => println!("tapesctl: no turns were captured"),
+        tally::ExitSummary::Session(id) => print_session_link(web_url, &id),
+        tally::ExitSummary::Unattributed(counts) => {
+            println!("{}", tally::unattributed_line(counts));
+        }
     }
+
+    // stderr, and unconditional on the count rather than on the branch above:
+    // a launch that files any turn under `unknown` has lost data the caller
+    // cannot find by name, and that is worth surfacing every time.
+    if counts.has_unattributed() {
+        eprintln!("{}", tally::unattributed_warning(counts));
+    }
+
     if let Some(path) = logging::active_log_file() {
         println!("tapesctl: logs at {}", path.display());
     }

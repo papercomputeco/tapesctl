@@ -48,6 +48,29 @@ async fn start_harness(response: ResponseTemplate) -> Harness {
     start_harness_as(response, false, own_pid()).await
 }
 
+/// The session id a launched-Claude capture in this file files its turns under.
+const LAUNCHED_CLAUDE_SID: &str = "3f1c0b52-7b0e-4a6e-9a1f-2c0d1e4b8a77";
+
+/// A capture of a harness this process "launched": a `<pid>.json` session file
+/// for our own PID, which is exactly what a live `claude` writes and what the
+/// peer-PID lookup reads to name a turn's session.
+///
+/// This is the attributed counterpart to [`start_harness`], whose watchers see
+/// an empty directory and therefore file every turn under `unknown`. Both
+/// shapes are needed: byte fidelity is worth testing without attribution, but
+/// *only* testing it that way is how a capture that silently stopped
+/// attributing would still pass.
+async fn start_launched_claude_harness(response: ResponseTemplate) -> Harness {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(response)
+        .mount(&upstream)
+        .await;
+    let upstream_url = Url::parse(&upstream.uri()).unwrap();
+    proxy_for_with_claude_session(upstream, upstream_url, false, own_pid(), true).await
+}
+
 /// This process's PID, as the launched harness's.
 ///
 /// The requests in these tests are issued by the test process itself, so naming
@@ -97,6 +120,23 @@ async fn proxy_for(
     self_attributing: bool,
     launched_pid: i32,
 ) -> Harness {
+    proxy_for_with_claude_session(
+        upstream,
+        upstream_url,
+        self_attributing,
+        launched_pid,
+        false,
+    )
+    .await
+}
+
+async fn proxy_for_with_claude_session(
+    upstream: MockServer,
+    upstream_url: Url,
+    self_attributing: bool,
+    launched_pid: i32,
+    launched_claude: bool,
+) -> Harness {
     let ingest = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/ingest"))
@@ -104,18 +144,37 @@ async fn proxy_for(
         .mount(&ingest)
         .await;
 
-    // Watchers over empty temp dirs: no harness is actually running, so every
-    // request lands on the unattributed path. That is deliberate here — these
-    // tests are about byte fidelity, and attribution has its own tests in the
-    // shared crate.
+    // Watchers over temp dirs. Empty by default: no harness is actually
+    // running, so every request lands on the unattributed path. That is
+    // deliberate for the byte-fidelity tests, which are about the bytes.
+    //
+    // `launched_claude` seeds the one file that changes the answer — the
+    // `<pid>.json` a live `claude` writes for its own PID — so the same proxy
+    // can also be exercised on the attributed path, which is the one a real
+    // `start claude` runs on.
     let claude_dir = tempfile::tempdir().unwrap();
     let codex_dir = tempfile::tempdir().unwrap();
+    if launched_claude {
+        std::fs::write(
+            claude_dir.path().join(format!("{launched_pid}.json")),
+            serde_json::json!({
+                "pid": launched_pid,
+                "sessionId": LAUNCHED_CLAUDE_SID,
+                "cwd": "/tmp/tapesctl-launched-claude",
+                "version": "2.1.161",
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
     let attribution = AttributionState::new(
         spawn_watcher(claude_dir.path().to_path_buf()),
         spawn_codex_watcher(codex_dir.path().to_path_buf()),
     );
 
     let state = ProxyState {
+        // Counted but never read here; the exit summary is `start`'s.
+        tally: Arc::new(tapesctl::start::tally::CaptureTally::new()),
         upstream: upstream_url,
         ingest: IngestClient::new(&Url::parse(&ingest.uri()).unwrap()).unwrap(),
         attribution: Arc::new(attribution),
@@ -712,11 +771,26 @@ async fn post_as_self_attributing_harness_with_nonce(
     session_id: Option<&str>,
     nonce: Option<&str>,
 ) -> reqwest::Response {
+    post_as_named_self_attributing_harness(proxy, "pi", session_id, nonce).await
+}
+
+/// As above, for a named self-attributing harness.
+///
+/// `pi` and `opencode` share this lane entirely — the proxy believes an
+/// envelope on the strength of the nonce and the peer, never on which harness
+/// stamped it — so naming the harness is what keeps the lane from being tested
+/// only through one of its members.
+async fn post_as_named_self_attributing_harness(
+    proxy: SocketAddr,
+    harness_id: &str,
+    session_id: Option<&str>,
+    nonce: Option<&str>,
+) -> reqwest::Response {
     let mut request = reqwest::Client::new()
         .post(format!("http://{proxy}/v1/messages"))
         .header("content-type", "application/json")
-        .header("user-agent", "pi/0.1")
-        .header("x-tapes-harness-id", "pi");
+        .header("user-agent", format!("{harness_id}/0.1"))
+        .header("x-tapes-harness-id", harness_id.to_owned());
     if let Some(session_id) = session_id {
         request = request.header("x-tapes-harness-session-id", session_id);
     }
@@ -736,6 +810,61 @@ async fn post_as_self_attributing_harness(
     session_id: Option<&str>,
 ) -> reqwest::Response {
     post_as_self_attributing_harness_with_nonce(proxy, session_id, Some(TEST_NONCE)).await
+}
+
+#[tokio::test]
+async fn a_launched_claude_turn_is_filed_under_the_session_that_was_launched() {
+    // The invariant every `start` lane owes: a captured turn is not enough, it
+    // has to be captured *as* the session that was launched. The rest of this
+    // file proves byte fidelity over watchers that see no harness, where the
+    // right answer is `unknown` — so without this test a capture that quietly
+    // stopped resolving sessions would still pass every assertion here, and
+    // every turn would land under `unknown` in production.
+    let harness = start_launched_claude_harness(
+        ResponseTemplate::new(200)
+            .set_body_string(SSE_BODY)
+            .insert_header("content-type", "text/event-stream"),
+    )
+    .await;
+
+    let _ = post_through_proxy(harness.proxy, r#"{"model":"claude-sonnet-4"}"#)
+        .await
+        .text()
+        .await;
+
+    let turn = await_captured_turn(&harness.ingest).await;
+    assert_eq!(
+        turn["session"]["harness_id"], "claude",
+        "a launched claude turn must be filed under claude, not the unknown \
+         sentinel: {turn}",
+    );
+    assert_eq!(
+        turn["session"]["harness_session_id"], LAUNCHED_CLAUDE_SID,
+        "a launched claude turn must be filed under the launched session's own \
+         id: {turn}",
+    );
+}
+
+#[tokio::test]
+async fn a_launched_claude_turn_carries_the_launched_sessions_facts() {
+    // The session block is what ingest files the row by, so the identity fields
+    // travelling with it are part of the same invariant: a turn attributed to
+    // the right session but carrying another session's cwd is still a misfile.
+    let harness = start_launched_claude_harness(
+        ResponseTemplate::new(200)
+            .set_body_string("ok")
+            .insert_header("content-type", "application/json"),
+    )
+    .await;
+
+    let _ = post_through_proxy(harness.proxy, r#"{"model":"claude-sonnet-4"}"#)
+        .await
+        .text()
+        .await;
+
+    let turn = await_captured_turn(&harness.ingest).await;
+    assert_eq!(turn["session"]["cwd"], "/tmp/tapesctl-launched-claude");
+    assert_eq!(turn["session"]["harness_version"], "2.1.161");
 }
 
 #[tokio::test]
@@ -765,6 +894,42 @@ async fn a_self_attributing_harness_is_filed_under_the_session_it_named() {
     let turn = await_captured_turn(&harness.ingest).await;
     assert_eq!(turn["session"]["harness_id"], "pi");
     assert_eq!(turn["session"]["harness_session_id"], "pi-session-7");
+}
+
+#[tokio::test]
+async fn a_launched_opencode_turn_is_filed_under_the_session_it_named() {
+    // The other member of the self-attributing lane. It shares pi's code path,
+    // which is exactly why it is worth naming: a change that special-cased pi
+    // would leave opencode filing every turn under `unknown` with the pi test
+    // still green.
+    let harness = start_harness_as(
+        ResponseTemplate::new(200)
+            .set_body_string("ok")
+            .insert_header("content-type", "application/json"),
+        true,
+        own_pid(),
+    )
+    .await;
+
+    let _ = post_as_named_self_attributing_harness(
+        harness.proxy,
+        "opencode",
+        Some("opencode-session-3"),
+        Some(TEST_NONCE),
+    )
+    .await
+    .text()
+    .await;
+
+    let turn = await_captured_turn(&harness.ingest).await;
+    assert_eq!(
+        turn["session"]["harness_id"], "opencode",
+        "a launched opencode turn must be filed under opencode: {turn}",
+    );
+    assert_eq!(
+        turn["session"]["harness_session_id"], "opencode-session-3",
+        "a launched opencode turn must be filed under the session it named: {turn}",
+    );
 }
 
 #[tokio::test]

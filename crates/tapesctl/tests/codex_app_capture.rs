@@ -81,6 +81,8 @@ async fn start_harness() -> Harness {
 
     let sessions = Arc::new(DesktopSessions::new(SECRET));
     let state = ProxyState {
+        // Counted but never read here; the exit summary is `start`'s.
+        tally: Arc::new(tapesctl::start::tally::CaptureTally::new()),
         upstream: Url::parse(&format!("{}{UPSTREAM_PREFIX}", upstream.uri())).unwrap(),
         ingest: IngestClient::new(&Url::parse(&ingest.uri()).unwrap()).unwrap(),
         attribution: Arc::new(attribution),

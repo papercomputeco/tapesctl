@@ -92,6 +92,10 @@ pub async fn run(args: CaptureArgs) -> Result<()> {
     let state = ProxyState {
         upstream: upstream.clone(),
         ingest: IngestClient::new(&tapes_url)?,
+        // `capture` serves a long-lived daemon rather than one launch, and
+        // prints no exit summary — the tally is kept so the capture path has a
+        // single shape, and nothing reads it here.
+        tally: Arc::new(crate::start::tally::CaptureTally::new()),
         attribution: Arc::new(AttributionState::new(
             spawn_watcher(claude_session::default_sessions_dir().context(error::NoHomeDirSnafu)?),
             spawn_codex_watcher(

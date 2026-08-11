@@ -90,6 +90,8 @@ async fn proxy_with(
     let claude_dir = tempfile::tempdir().unwrap();
     let codex_dir = tempfile::tempdir().unwrap();
     let state = ProxyState {
+        // Counted but never read here; the exit summary is `start`'s.
+        tally: Arc::new(tapesctl::start::tally::CaptureTally::new()),
         upstream: Url::parse(&upstream.uri()).unwrap(),
         ingest: IngestClient::new(&Url::parse(&ingest.uri()).unwrap()).unwrap(),
         attribution: Arc::new(AttributionState::new(

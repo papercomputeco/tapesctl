@@ -198,6 +198,12 @@ pub struct ProxyState {
     /// so the registry is fed from here rather than from a separate discovery
     /// pass that could disagree with what was actually captured.
     pub transcript_tracker: SessionTracker,
+    /// How much this launch captured, and how much of it was attributed.
+    ///
+    /// Written by every capture task and read once after shutdown, which is
+    /// what lets the exit summary distinguish "captured nothing" from
+    /// "captured turns and could not say whose they were".
+    pub tally: Arc<crate::start::tally::CaptureTally>,
 }
 
 /// Axum fallback handler — every method and path forwards through here.
@@ -1048,13 +1054,30 @@ impl TurnCapture {
             session: self.session.clone(),
         };
 
+        // Whose turn this is, by the same rule the announce path uses: a
+        // harness id that is not the sentinel, plus a session id to group
+        // under. Deciding it here rather than trusting `session.is_some()`
+        // matters because the desktop lane always sends a session block —
+        // including one that says `unknown` — so presence alone would count an
+        // unattributed turn as attributed and re-hide the bug.
+        let attributed = self.session.as_ref().is_some_and(|session| {
+            session.harness_id != envelope::HARNESS_ID_UNKNOWN
+                && session.harness_session_id.is_some()
+        });
+
         match self.state.ingest.post_turn(&payload).await {
-            Ok(()) => debug!(
-                request_id = %self.meta.request_id,
-                finalized_by = reason,
-                bytes = raw.len(),
-                "turn captured",
-            ),
+            Ok(()) => {
+                // Counted only on acceptance: the summary tells the caller what
+                // they can go and look at, and a rejected turn is not that.
+                self.state.tally.record(attributed);
+                debug!(
+                    request_id = %self.meta.request_id,
+                    finalized_by = reason,
+                    bytes = raw.len(),
+                    attributed,
+                    "turn captured",
+                );
+            }
             Err(err) => warn!(
                 error = %err,
                 request_id = %self.meta.request_id,
