@@ -53,6 +53,44 @@ jobs:
         env:
           DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
 
+  freshness:
+    name: Vendored Corpus Freshness
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-24.04' || 'depot-ubuntu-24.04' }}
+
+    # This repository vendors two things it does not author: the tapes ingest
+    # contract and two shared fixture corpora. Both carry their own provenance
+    # (PROVENANCE.md fingerprints, SOURCE.md pins) and both ship a checker —
+    # and until this job existed, no workflow ran either. The consequence was
+    # specific rather than theoretical: a vendored copy that had been edited
+    # consistently, cases and seal together, passed every gate. The suite only
+    # ever asked whether the copy agreed with itself.
+    #
+    # Not a Dagger job, unlike lint/test. These checks are bash, git, curl and
+    # shasum against an external source of truth; containerising them would add
+    # an engine to the critical path without changing what is verified. They
+    # need only public network access, which a fork runner also has, so the job
+    # reports on fork pull requests too.
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Ingest contract matches the published release asset
+        # STRICT turns "could not reach the release asset" into a failure. The
+        # default (a notice, and a pass on gate 1 alone) is for offline work:
+        # here it would mean the job's green tick attested only that the
+        # vendored file matches a fingerprint recorded in the same commit, so
+        # a change touching both would sail through.
+        run: make contracts-check
+        env:
+          TAPES_CONTRACTS_STRICT: "1"
+
+      - name: Vendored fixture corpora match their pinned upstream commits
+        # Fetches each corpus's pinned commit (SOURCE.md) from the public tapes
+        # repository and runs that corpus's own `--check`. Pinned rather than
+        # tip-of-branch on purpose: this gate must not go red because somebody
+        # edited fixtures in another repository.
+        run: make freshness-check
+
   build:
     name: Build
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-24.04' || 'depot-ubuntu-24.04' }}
