@@ -141,6 +141,8 @@ async fn start_harness(rollouts: &Path) -> Harness {
     config.codex_timeout = Duration::from_millis(200);
 
     let state = ProxyState {
+        // Counted but never read here; the exit summary is `start`'s.
+        tally: Arc::new(tapesctl::start::tally::CaptureTally::new()),
         upstream: Url::parse(&upstream.uri()).unwrap(),
         ingest: IngestClient::new(&Url::parse(&ingest.uri()).unwrap()).unwrap(),
         attribution: Arc::new(attribution),
@@ -154,7 +156,6 @@ async fn start_harness(rollouts: &Path) -> Harness {
         gateway_nonce: Arc::new(String::new()),
         org_id: Arc::new(String::new()),
         auth_subject: Arc::new("local:test".to_owned()),
-        session_seen: Arc::new(tokio::sync::Mutex::new(None)),
         desktop_sessions: None,
         transcript_tracker: SessionTracker::new(),
     };
@@ -241,6 +242,26 @@ async fn session_blocks(ingest: &MockServer, expected: usize) -> Vec<serde_json:
     panic!("fewer than the {expected} expected turns were posted to ingest");
 }
 
+/// Assert a turn was filed under the launched harness, not the sentinel.
+///
+/// The session-id assertions below are about *which* session a turn joined;
+/// this is about whether it joined one at all. They are separable failures: a
+/// turn can carry the right session id and still be filed under `unknown`, and
+/// a suite that only checks the id would pass while every row lands
+/// unattributed. Both halves of the envelope name the launched harness or the
+/// capture is not doing its job.
+fn assert_attributed_to_codex(block: &serde_json::Value) {
+    assert_eq!(
+        block["harness_id"], "codex",
+        "a launched codex turn must be filed under codex, not the unknown \
+         sentinel: {block}",
+    );
+    assert!(
+        block["harness_session_id"].is_string(),
+        "an attributed turn must name the session it belongs to: {block}",
+    );
+}
+
 /// Every session id a set of turns was filed under, deduplicated.
 fn distinct_session_ids(blocks: &[serde_json::Value]) -> Vec<String> {
     let mut ids: Vec<String> = blocks
@@ -270,6 +291,9 @@ async fn a_subagent_turn_joins_its_root_while_its_own_rollout_is_still_missing()
     subagent_turn(harness.proxy).await;
 
     let blocks = session_blocks(&harness.ingest, 2).await;
+    for block in &blocks {
+        assert_attributed_to_codex(block);
+    }
     assert_eq!(
         distinct_session_ids(&blocks),
         vec![ROOT.to_owned()],
@@ -292,6 +316,7 @@ async fn a_subagent_turn_does_not_split_off_onto_its_own_rollout() {
     subagent_turn(harness.proxy).await;
 
     let blocks = session_blocks(&harness.ingest, 1).await;
+    assert_attributed_to_codex(&blocks[0]);
     assert_eq!(
         blocks[0]["harness_session_id"], ROOT,
         "the sub-thread's turn was keyed on its own rollout: {blocks:?}",
@@ -319,6 +344,7 @@ async fn a_subagent_turn_binds_when_the_only_live_rollout_is_a_previous_runs() {
     subagent_turn(harness.proxy).await;
 
     let blocks = session_blocks(&harness.ingest, 1).await;
+    assert_attributed_to_codex(&blocks[0]);
     assert_eq!(
         blocks[0]["harness_session_id"], ROOT,
         "a cold watcher must not cost a sub-thread its identity: {blocks:?}",

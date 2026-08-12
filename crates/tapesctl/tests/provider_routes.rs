@@ -88,6 +88,8 @@ async fn start_harness() -> Harness {
     .unwrap();
 
     let state = ProxyState {
+        // Counted but never read here; the exit summary is `start`'s.
+        tally: Arc::new(tapesctl::start::tally::CaptureTally::new()),
         // The launch-pinned upstream: what every request went to before a
         // label could say otherwise.
         upstream: Url::parse(&anthropic.uri()).unwrap(),
@@ -108,7 +110,6 @@ async fn start_harness() -> Harness {
         gateway_nonce: Arc::new("test-launch-nonce".to_owned()),
         org_id: Arc::new(String::new()),
         auth_subject: Arc::new("local:test".to_owned()),
-        session_seen: Arc::new(tokio::sync::Mutex::new(None)),
         desktop_sessions: None,
         transcript_tracker: SessionTracker::new(),
     };

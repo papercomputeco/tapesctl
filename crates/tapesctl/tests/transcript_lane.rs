@@ -155,6 +155,10 @@ async fn the_shutdown_push_delivers_the_whole_fork_skeleton() {
         );
         assert_eq!(sub["agent_type"], "explorer");
         assert_eq!(sub["session"]["harness_session_id"], SID);
+        // A subagent's rows are the launched session's rows. Filing them under
+        // the sentinel would strand the whole fork subtree even though the
+        // session id above is right.
+        assert_eq!(sub["session"]["harness_id"], "claude");
     }
 }
 
