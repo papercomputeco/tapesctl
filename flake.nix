@@ -30,28 +30,23 @@
 
             cargoLock = {
               lockFile = ./Cargo.lock;
-              # Required for the `[patch.crates-io]` libproc git pin: Nix cannot
-              # infer a hash for a git dependency from the lockfile alone. Same
-              # crate, same rev, same hash as `platform/paper`.
-              outputHashes = {
-                "libproc-0.14.11" = "sha256-B4mZIbjn1FOsTJXqyv3DRXAE3FFwT/4Gl+GDP4r9+9M=";
-                # The shared harness crate and the generated cassette-surface
-                # machinery split out of this repo under PCC-1104. They are two
-                # packages in ONE repository, and Cargo.toml now pins both at the
-                # same revision — so these two hashes are the hash of that single
-                # revision's tree, and are expected to be equal. A future diff
-                # where they differ means the two pins have drifted apart again.
-                #
-                # Recompute when the pins in Cargo.toml re-point to the
-                # merged main revision:
-                #   nix shell nixpkgs#nix-prefetch-git -c nix-prefetch-git \
-                #     https://github.com/papercomputeco/tapes-harnesses --rev <sha>
-                # `nix build` fails on a stale value even though the cargo-native
-                # targets never notice, which is how two earlier pin bumps landed
-                # without a recompute.
-                "tapes-harnesses-0.1.0" = "sha256-bDlgmlpRC3c3MEsJx5ulWUaLbgDX4mMh1E3Q8sn6IvY=";
-                "tapes-cassette-client-0.1.0" = "sha256-bDlgmlpRC3c3MEsJx5ulWUaLbgDX4mMh1E3Q8sn6IvY=";
-              };
+              # Fetch git dependencies by revision instead of by tree hash. The
+              # revision in Cargo.lock is the whole identity of the source, so
+              # `builtins.fetchGit` needs nothing else — which is why there is no
+              # `outputHashes` block here.
+              #
+              # There used to be one, and it was the single worst part of a pin
+              # bump: every rev change also required a `nix-prefetch-git`
+              # recompute, in a file the bump does not otherwise touch. Cargo
+              # never reads those hashes, so a bump that skipped the recompute
+              # passed `cargo build` and failed only under `nix build` — which is
+              # how more than one stale hash reached main. `make bump-harnesses`
+              # now rewrites the revs alone and this stays correct by
+              # construction.
+              #
+              # If the tapes crates move to crates.io, the git pins disappear
+              # entirely and this setting can go with them.
+              allowBuiltinFetchGit = true;
             };
             cargoBuildFlags = [ "-p" "tapesctl" ];
 
