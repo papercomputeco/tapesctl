@@ -5,8 +5,8 @@
 //
 // tapesctl is a pure-Rust CLI (no Apple frameworks, no C deps), so the
 // Linux→macOS cross-compile uses `cargo-zigbuild` — zig bundles the macOS
-// libSystem stubs, so no Apple SDK and no osxcross build are needed (unlike
-// `platform/paper`, whose AppKit menu code forces the heavier osxcross path).
+// libSystem stubs, so no Apple SDK and no osxcross build are needed (unlike a
+// workspace with Apple-framework code, which forces the heavier osxcross path).
 //
 // To wire up after first checkout:
 //
@@ -82,8 +82,8 @@ rm /tmp/zig.tar.xz`
 		// Locked sharing serializes registry writes: Build cross-compiles four
 		// targets off this one base, and Dagger runs them concurrently. With the
 		// default Shared mode they race unpacking the same crates and one fails
-		// with `.cargo-ok: File exists (os error 17)`. (Same fix platform/paper
-		// uses.)
+		// with `.cargo-ok: File exists (os error 17)`. (The same fix the daemon
+		// client's pipeline uses.)
 		WithMountedCache("/usr/local/cargo/registry", cargoRegistry,
 			dagger.ContainerWithMountedCacheOpts{
 				Sharing: dagger.CacheSharingModeLocked,

@@ -1,6 +1,6 @@
 [toolchain]
 # edition 2024 requires Rust >= 1.85; tracking stable keeps the workspace on
-# the same channel CI uses (`dtolnay/rust-toolchain@stable`) and matches
-# `platform/paper`.
+# the same channel CI uses (`dtolnay/rust-toolchain@stable`) and matches the
+# daemon client's workspace.
 channel = "stable"
 components = ["rustfmt", "clippy"]

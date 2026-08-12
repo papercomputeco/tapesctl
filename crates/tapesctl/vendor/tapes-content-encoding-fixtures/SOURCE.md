@@ -40,8 +40,8 @@ fidelity is supposed to be identical whichever path a session took:
 | Go, gateway lane | `tapes-extproc` — calls the same function, deliberately |
 | Rust, client (here) | `crates/tapesctl/src/start/content_encoding.rs` |
 
-Drift between them is invisible until turns stop being recorded. PCC-1126 is
-that failure already having happened: this client dropped every
+Drift between them is invisible until turns stop being recorded. That failure
+has already happened once: this client dropped every
 `content-encoding: zstd` request body — all of Codex/pi's traffic — while the
 gateway route decoded the same bytes fine, and nothing was red, because each
 side only had its own tests.

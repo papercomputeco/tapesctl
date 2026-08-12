@@ -333,7 +333,7 @@ mod tests {
         }
     }
 
-    /// PCC-1143's answer to a bare invocation has to survive a machine that has
+    /// The answer to a bare invocation has to survive a machine that has
     /// a server configured. A default value is not an argument the user
     /// supplied, and this is what would notice if that ever stopped being true.
     #[test]

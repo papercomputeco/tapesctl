@@ -21,8 +21,8 @@
 //! ordering is the invariant worth stating plainly: **capture degrades,
 //! forwarding never does.**
 //!
-//! Ported from paperd's `proxy::peek`, whose contract this preserves; the
-//! `complete` flag is the addition, because paperd peeks only to enrich a log
+//! Ported from the daemon's `proxy::peek`, whose contract this preserves; the
+//! `complete` flag is the addition, because the daemon peeks only to enrich a log
 //! line and does not care whether it saw the whole body.
 
 use std::{

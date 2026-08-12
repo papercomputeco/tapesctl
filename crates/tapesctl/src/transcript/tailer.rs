@@ -10,11 +10,11 @@
 //!
 //! That difference was measured, not assumed: two identical Claude subagent runs
 //! produced equal wire lanes (38 vs 40 turns) and unequal transcript lanes — 8
-//! transcript turns through paperd, 0 through a tapesctl that only swept at
+//! transcript turns through the daemon client, 0 through a tapesctl that only swept at
 //! `sync` time. The skeleton comes entirely from the lane this module drives.
 //!
 //! So the tailer runs *alongside* the capture proxy for the life of the session,
-//! on the same trigger state machine paperd uses. [`super::sync`] is the
+//! on the same trigger state machine the daemon client uses. [`super::sync`] is the
 //! crash-window backstop, not the primary path.
 //!
 //! # The division with `tapes-harnesses`
@@ -24,7 +24,7 @@
 //! each client's own: which sessions to track, how to detect that a harness
 //! exited, the timer, and the failure backoff. Running the same `decide` against
 //! the same inputs is what makes a tapesctl session's transcript lane identical
-//! to paperd's.
+//! to the daemon's.
 //!
 //! # Ordering invariants
 //!
@@ -56,7 +56,7 @@ use tracing::{debug, info, warn};
 
 use super::client::TranscriptClient;
 
-/// First backoff after a failed push. Matches paperd's schedule.
+/// First backoff after a failed push. Matches the daemon's schedule.
 pub const BACKOFF_INITIAL: Duration = Duration::from_secs(30);
 
 /// Ceiling on the backoff. A transcript is never lost by waiting — the files on
@@ -197,7 +197,7 @@ impl SessionState {
     }
 }
 
-/// Knobs for one tailer. Defaults mirror paperd so the two clients behave alike.
+/// Knobs for one tailer. Defaults mirror the daemon client so the two behave alike.
 #[derive(Debug, Clone)]
 pub struct TailerConfig {
     /// Root of the harness transcript tree (`~/.claude/projects`).
@@ -218,7 +218,7 @@ pub struct TailerConfig {
 }
 
 impl TailerConfig {
-    /// Config with paperd's shipped timings.
+    /// Config with the daemon's shipped timings.
     #[must_use]
     pub fn new(projects_root: PathBuf, sessions_dir: PathBuf, auth_subject: String) -> Self {
         Self {
@@ -782,7 +782,7 @@ mod tests {
 
     #[test]
     fn the_shipped_policy_matches_the_crates_defaults() {
-        // Behaving identically to paperd is the whole reason the decision lives
+        // Behaving identically to the daemon client is the whole reason the decision lives
         // in the shared crate; a local re-tuning here would silently fork it.
         let config = TailerConfig::new(PathBuf::new(), PathBuf::new(), String::new());
         assert_eq!(config.policy, TriggerPolicy::default());

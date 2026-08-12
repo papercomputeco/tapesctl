@@ -9,8 +9,8 @@
 //! that promise broken in the least visible way possible: the turn is forwarded,
 //! the harness answers, and nothing is recorded.
 //!
-//! That is not hypothetical. Until PCC-1126 this decode step did not exist, so
-//! the proxy handed compressed bytes straight to a JSON parser. pi's
+//! That is not hypothetical. Before this decode step existed the proxy handed
+//! compressed bytes straight to a JSON parser. pi's
 //! `openai-codex` provider sends `content-encoding: zstd`, which meant every
 //! turn of a `tapesctl start pi` session was dropped while the cloud route
 //! stored the same traffic decoded and intact.

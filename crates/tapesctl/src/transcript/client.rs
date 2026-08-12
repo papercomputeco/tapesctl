@@ -25,8 +25,8 @@
 //!
 //! # No auth header
 //!
-//! paperd rides its own `X-Paper-Auth` channel so the Paper cloud edge admits
-//! the request. That is explicitly not part of the tapes contract: a standalone
+//! The daemon client rides its own `X-Paper-Auth` channel so its hosted edge
+//! admits the request. That is explicitly not part of the tapes contract: a standalone
 //! client posting to its own ingest server sends `Content-Type` and nothing
 //! else, exactly like the Go reference client.
 
@@ -259,7 +259,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_auth_header_is_sent() {
-        // X-Paper-Auth is paperd's channel to the Paper edge, not part of the
+        // X-Paper-Auth is the daemon client's channel to its hosted edge, not part of the
         // tapes contract; a standalone client sends Content-Type and nothing
         // else.
         let server = ingest_server(ResponseTemplate::new(202).set_body_string("{}")).await;
