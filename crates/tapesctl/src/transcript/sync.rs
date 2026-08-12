@@ -39,7 +39,7 @@ use super::tailer::default_projects_root;
 use crate::cli::SyncArgs;
 use crate::error::{Error, Result, error};
 
-/// Default sweep window. Matches paperd's startup sweep: far enough back to
+/// Default sweep window. Matches the daemon's startup sweep: far enough back to
 /// catch anything a reasonable outage lost, short enough that a years-old tree
 /// does not turn every run into a dedup storm.
 pub const DEFAULT_SINCE_DAYS: u64 = 7;

@@ -11,7 +11,7 @@
 //! that record a spawned agent's span has nothing to hang from and lands under
 //! the trace root instead of under the call that created it.
 //!
-//! The gap this closes was one-sided rather than absent: paperd has shipped
+//! The gap this closes was one-sided rather than absent: the daemon client has shipped
 //! these anchors for as long as it has captured Codex, while a `tapesctl start
 //! codex` session shipped none. Identical sessions therefore reconstructed into
 //! *different-shaped* trees depending on which client captured them, which is
@@ -26,7 +26,7 @@
 //! what the crate documents as each client's own — the scope rule (which
 //! rollouts are *ours*), the delivery, the timer, and the failure backoff. It
 //! is the same division [`super::tailer`] makes with the Claude lane, and it is
-//! what makes this lane's rows byte-identical to paperd's rather than merely
+//! what makes this lane's rows byte-identical to the daemon's rather than merely
 //! similar.
 //!
 //! # Two invariants worth stating
@@ -37,7 +37,7 @@
 //!   drop the newest part of the skeleton — the same reason the transcript
 //!   tailer's final push is awaited.
 //! * **The row's identity fields stay empty.** `org_id` and `auth_subject` are
-//!   blank on every anchor row, here and in paperd, because the row's bytes are
+//!   blank on every anchor row, here and in the daemon client, because the row's bytes are
 //!   a shared contract and the ingest server's dedup key is a hash of them.
 //!   Stamping this client's subject would fork the two clients' rows for no
 //!   gain: the session those anchors attach to already carries the subject from
@@ -59,12 +59,12 @@ use tracing::{debug, info, warn};
 
 use super::client::TranscriptClient;
 
-/// Cadence of the snapshot scan. Matches paperd's: anchors are tiny and
+/// Cadence of the snapshot scan. Matches the daemon's: anchors are tiny and
 /// time-sensitive (tapes re-derives on arrival), so they push on discovery with
 /// no quiescence window — unlike a transcript, which is re-read whole.
 pub const DEFAULT_TICK: Duration = Duration::from_secs(5);
 
-/// First backoff after a failed push. Matches paperd's schedule.
+/// First backoff after a failed push. Matches the daemon's schedule.
 pub const BACKOFF_INITIAL: Duration = Duration::from_secs(30);
 
 /// Ceiling on the backoff. A rollout is never lost by waiting — the file on
@@ -91,7 +91,7 @@ pub struct AnchorLaneConfig {
 }
 
 impl AnchorLaneConfig {
-    /// Config with paperd's shipped timings.
+    /// Config with the daemon's shipped timings.
     #[must_use]
     pub fn new(provider_prefix: impl Into<String>) -> Self {
         Self {
@@ -417,7 +417,7 @@ mod tests {
 
     /// The cross-client parity assertion, and the reason this module exists:
     /// the rows this lane POSTs are the exact bytes the shared crate's fixture
-    /// declares, which is what paperd's own lane asserts against. A Codex
+    /// declares, which is what the daemon's own lane asserts against. A Codex
     /// session captured here therefore carries the same causal skeleton it
     /// would have carried through the platform — not a similar one.
     #[tokio::test]
@@ -505,7 +505,7 @@ mod tests {
     #[tokio::test]
     async fn a_rollout_from_another_provider_is_not_ours_to_ship() {
         // A codex the user ran directly, or one captured by a concurrent
-        // paperd, writes rollouts into the same directory. Shipping those
+        // daemon, writes rollouts into the same directory. Shipping those
         // would file another capture's skeleton under this proxy's ingest.
         let server = accepting_server().await;
         let dir = tempfile::tempdir().unwrap();
@@ -585,7 +585,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_auth_header_rides_along() {
-        // paperd's X-Paper-Auth is its channel to the Paper edge, not part of
+        // The daemon client's X-Paper-Auth is its channel to its hosted edge, not part of
         // the tapes contract — and the anchor row is the same row either way.
         let server = accepting_server().await;
         let dir = tempfile::tempdir().unwrap();

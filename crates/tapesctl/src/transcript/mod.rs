@@ -26,7 +26,7 @@
 //!   anchor rows down the same endpoint.
 //!
 //! Discovery, packaging, and the *decision* to push all come from
-//! `tapes_harnesses::transcript`, which paperd also consumes — so the two
+//! `tapes_harnesses::transcript`, which the daemon client also consumes — so the two
 //! clients' transcript lanes are the same code reaching the same server, not two
 //! implementations of one spec.
 

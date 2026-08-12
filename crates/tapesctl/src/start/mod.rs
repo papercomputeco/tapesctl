@@ -15,7 +15,7 @@
 //! `tapes_capture::envelope`. What is genuinely local is deployment
 //! knowledge: which upstream to forward to, which ingest server to post to,
 //! what this client calls its own Codex provider, and what identity to stamp.
-//! That split is deliberate — it is the same split paperd makes, which is what
+//! That split is deliberate — it is the same split the daemon client makes, which is what
 //! keeps the two capture paths producing identical rows.
 //!
 //! # Two ways a harness reaches the proxy
@@ -55,7 +55,7 @@
 //!
 //! # The terminal is not ours
 //!
-//! Unlike paperd, this runs in the foreground of the terminal it hands to a
+//! Unlike the daemon client, this runs in the foreground of the terminal it hands to a
 //! harness TUI. Between [`spawn_harness`] and the harness's exit, this process
 //! must write nothing to stdout or stderr — a log line or a status print lands
 //! inside someone's half-rendered frame. Diagnostics go to a file for the whole
@@ -113,7 +113,7 @@ use tally::{CaptureSnapshot, CaptureTally};
 ///
 /// The name is deliberately tapesctl's own rather than the crate's: it is a
 /// private channel between this client and its own proxy, and a shared name
-/// would collide with paperd's when both are capturing.
+/// would collide with the daemon client's when both are capturing.
 pub const CODEX_MARKER_HEADER: &str = "X-Tapesctl-Codex-Attribution";
 
 /// Stable prefix of the Codex provider id this client declares. The launched
@@ -342,15 +342,15 @@ pub const SUPPORTED: &[Harness] = &[Harness::Claude, Harness::Codex, Harness::Pi
 /// entry, its capture plugin, its arms below, `tapesctl plugin install
 /// opencode` — and reinstating the verb is moving one entry back into
 /// [`SUPPORTED`]. What is withdrawn is the first-class `start` verb, because on
-/// the OAuth path the plugin captures nothing (PCC-1128), and a `start` that
+/// the OAuth path the plugin captures nothing, and a `start` that
 /// runs an agent while silently recording none of it is worse than a `start`
 /// that refuses.
 ///
 /// The marker lives here rather than in the registry because the registry's
 /// launchability axis states a *capability* — whether a launch can be planned
 /// at all — and opencode's can. This is a product judgement about one client's
-/// surface, which is the kind of thing that differs between clients: paperctl
-/// carries its own list, by the same name and for the same reason.
+/// surface, which is the kind of thing that differs between clients: the
+/// sibling CLI carries its own list, by the same name and for the same reason.
 ///
 /// Naming the withdrawn set explicitly, rather than just dropping the entry
 /// above, is what keeps the arms below from reading as dead code somebody
@@ -1047,7 +1047,7 @@ fn spawn_tailer(
 /// (spawn call_id ↔ child thread id) join exists, since `spawn_agent`'s
 /// arguments are encrypted on the wire. Without this lane a `tapesctl`-captured
 /// Codex session reconstructs into a flatter tree than the same session
-/// captured through paperd, which ships these anchors.
+/// captured through the daemon client, which ships these anchors.
 ///
 /// `None` when the user opted out of transcripts or the harness is not Codex.
 fn spawn_codex_anchor_lane(

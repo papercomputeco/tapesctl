@@ -66,7 +66,7 @@ fn known_harnesses() -> String {
 /// to be.
 pub fn install(artifact: &PluginArtifact, home: &Path) -> Result<PathBuf> {
     let dir = artifact.install_dir(home);
-    // Created rather than required. `paperctl init` deliberately refuses to
+    // Created rather than required. The sibling CLI's `init` deliberately refuses to
     // create `~/.pi` because it installs implicitly, as a side effect of an
     // unrelated command; this command exists only because the user asked for it
     // by name, so materialising the directory is the requested action, not a
@@ -504,7 +504,7 @@ mod tests {
         }
     }
 
-    /// **The other half of installing.** A user who ran an older `paperctl` has
+    /// **The other half of installing.** A user who ran an older sibling CLI has
     /// `paper-gateway.ts` in pi's extension directory, and pi loads *every*
     /// file there into one process: writing `tapes-gateway.ts` beside it leaves
     /// two extensions contending over one launch's nonce and over the same
@@ -566,7 +566,7 @@ mod tests {
             PI_GATEWAY_EXTENSION
                 .superseded_file_names()
                 .contains(&"paper-gateway.ts"),
-            "nothing removes the file an older paperctl installed",
+            "nothing removes the file an older sibling CLI installed",
         );
     }
 

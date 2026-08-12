@@ -466,7 +466,7 @@ async fn a_zstd_request_body_is_decoded_before_it_is_captured() {
     // pi's `openai-codex` provider compresses with zstd. Without a decode step
     // the proxy handed these bytes to a JSON parser, logged "not JSON", and
     // dropped every turn of the session while the cloud capture route stored
-    // the same traffic decoded (PCC-1126).
+    // the same traffic decoded.
     let harness = start_harness(
         ResponseTemplate::new(200)
             .set_body_string(r#"{"ok":true}"#)

@@ -9,7 +9,7 @@
 //! # The rules that keep a stream a stream
 //!
 //! Streaming is where a capture proxy quietly breaks a harness, and each of
-//! these was verified against paperd's forwarding path:
+//! these was verified against the daemon's forwarding path:
 //!
 //! * **No transparent decompression.** `reqwest` is built with no compression
 //!   feature, so a `Content-Encoding: gzip` response arrives — and is
@@ -73,7 +73,7 @@
 //! encoding as "not JSON" describes the symptom of a body nobody tried to
 //! decode, and a reader who believes it goes looking at the harness's payload
 //! instead of at this proxy's decoder — which is how zstd request bodies stayed
-//! silently uncaptured (PCC-1126).
+//! silently uncaptured.
 //!
 //! Bodiless requests are the exception, and they are logged at debug rather
 //! than warn: a GET has nothing to capture by construction, so reporting it as
@@ -323,7 +323,7 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
             .with_correlation_id(uuid::Uuid::new_v4().to_string())
     });
 
-    // Attribution comes from the shared crate, so a tapesctl turn and a paperd
+    // Attribution comes from the shared crate, so a tapesctl turn and a daemon
     // turn resolve identity through the same code.
     let attributed = attribute(
         &state.attribution,

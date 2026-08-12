@@ -9,7 +9,7 @@
 //! there. Capture fidelity is supposed to be identical on both.
 //!
 //! Until this file existed, "identical" was a claim by whoever last read both
-//! implementations — and it had already decayed once. PCC-1126: this client
+//! implementations — and it had already decayed once: this client
 //! dropped every `content-encoding: zstd` request body (all of Codex/pi's
 //! traffic) while the gateway route decoded the same bytes fine, with nothing
 //! red anywhere. Both sides had tests; neither side had the *other side's*
@@ -573,7 +573,7 @@ fn assert_decoded(file: &str, spec: &DecodedSpec, got: &[u8], plaintext: Option<
 /// what makes a *stale or hand-edited* vendored copy fail here rather than in
 /// somebody else's repository. Without it, a case edited locally to make a red
 /// test green would pass, and the two implementations would have quietly
-/// stopped testing the same policy — the exact failure PCC-1126 was.
+/// stopped testing the same policy — the exact failure this corpus exists for.
 #[test]
 fn the_vendored_corpus_matches_its_sealed_digest() {
     // For each cases/*.json, sorted by base name, feed

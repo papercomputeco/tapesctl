@@ -23,8 +23,8 @@
 //! assembles a [`Call`] from the contract's verb, path template, and declared
 //! parameters. What remains modelled locally is which parameters each command
 //! *sends* and their client-side defaults; the routes themselves are the
-//! contract's, and since PCC-1146 the contract is one copy shared with the
-//! other client rather than this repository's own.
+//! contract's, and since the read-contract extraction the contract is one copy
+//! shared with the other client rather than this repository's own.
 //!
 //! # No auth
 //!

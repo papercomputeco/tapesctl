@@ -9,7 +9,7 @@
 //! `raw_response` as "reduce this yourself".
 //!
 //! The discipline matters because a client-side reducer is how the two capture
-//! paths drift: the moment tapesctl reduces locally, its rows and paperd's rows
+//! paths drift: the moment tapesctl reduces locally, its rows and the daemon's rows
 //! are produced by different code, and the parity corpus starts policing a
 //! difference that should never have been expressible. Reduction lives in
 //! exactly one place — ingest — where a re-derive can revisit it. Shipping raw
@@ -172,7 +172,7 @@ impl SessionEnvelope {
     /// the client supplies.
     ///
     /// The attribution half comes from `tapes-harnesses`, so the session facts
-    /// a tapesctl turn carries are produced by the same code paperd runs. The
+    /// a tapesctl turn carries are produced by the same code the daemon runs. The
     /// identity half — org and subject — is the client's: standalone tapesctl
     /// has no gateway to stamp validated claims, so it names the local user.
     #[must_use]

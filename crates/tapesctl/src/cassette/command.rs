@@ -65,7 +65,7 @@ is unreachable.";
 /// is never a clap unknown-command: an empty noun answers with the help above,
 /// which explains what would fill it. Costs no I/O.
 ///
-/// This is the canonical spelling, and it is `paperctl`'s: both clients drive
+/// This is the canonical spelling, and it is the sibling CLI's too: both clients drive
 /// the same generated surface from the same crate, so `<client> cassettes
 /// <name> <method>` transfers between them unchanged.
 #[must_use]

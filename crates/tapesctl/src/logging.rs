@@ -1,13 +1,13 @@
 //! Where one invocation's tracing goes.
 //!
-//! This mirrors paperd's `log_init`: a destination decided from the caller's
-//! *role* rather than from a TTY probe, a filter-precedence resolver kept pure
-//! so it can be tested without mutating process environment, and one `init` that
-//! installs the global subscriber before anything can emit.
+//! This mirrors the daemon client's `log_init`: a destination decided from the
+//! caller's *role* rather than from a TTY probe, a filter-precedence resolver
+//! kept pure so it can be tested without mutating process environment, and one
+//! `init` that installs the global subscriber before anything can emit.
 //!
 //! # Why this file exists at all
 //!
-//! paperd never needed a file destination. It is a daemon: it writes to stdout
+//! Its daemon sibling never needed a file destination: it writes to stdout
 //! and its supervisor — launchd's `StandardOutPath`, or the systemd journal —
 //! owns the redirection. `tapesctl start` has no supervisor and no separate
 //! terminal. It hands the user's TTY to a harness TUI and then keeps running
@@ -75,7 +75,7 @@ pub fn init(hands_over_terminal: bool, verbose: u8) {
         Ok((path, file)) => {
             let _ = ACTIVE_LOG_FILE.set(Some(path));
             // ANSI off. Nothing renders this file, and colour escapes turn a
-            // `grep` for a request id into a puzzle. paperd never had to decide
+            // `grep` for a request id into a puzzle. The daemon never had to decide
             // this: its file destination is JSON, which is emitted uncoloured
             // whatever the terminal looks like.
             let _ = registry
@@ -113,14 +113,14 @@ pub fn default_log_dir() -> Option<PathBuf> {
 
 /// Resolve the level filter for this run.
 ///
-/// Precedence is paperd's: `RUST_LOG` first, then the verbosity flag, then the
+/// Precedence is the daemon's: `RUST_LOG` first, then the verbosity flag, then the
 /// default. Pure — the environment is a parameter, not a read — so the whole
 /// chain is testable without racing other tests over a process-global.
 fn choose_filter(env_rust_log: Option<&str>, verbose: u8) -> EnvFilter {
     // A set-but-empty `RUST_LOG` is treated as unset. `EnvFilter` parses `""`
     // into a filter that discards everything, so honouring it would produce an
     // empty log file indistinguishable from a session that had nothing to say —
-    // a support trap paperd hit and moved off `try_from_default_env` to avoid.
+    // a support trap the daemon hit and moved off `try_from_default_env` to avoid.
     // `RUST_LOG=off` remains the way to ask for silence.
     if let Some(directive) = env_rust_log.map(str::trim).filter(|s| !s.is_empty()) {
         match EnvFilter::try_new(directive) {
