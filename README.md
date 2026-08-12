@@ -18,11 +18,13 @@ that reads or writes data takes a `--tapes-url`, and
 curl -sSfL https://download.tapes.dev/tapesctl/install | bash
 ```
 
-Every published artifact carries a `.sha256` sidecar, and the installer verifies
-the download against it before installing — a missing sidecar is a hard failure
-rather than a skipped check. Binaries land in `/usr/local/bin` (via `sudo` only
-if that directory is not writable). Set `TAPESCTL_VERSION` to install a specific
-release or nightly, and `TAPESCTL_INSTALL_DIR` to install somewhere else.
+Every published artifact carries a `.sha256` sidecar. Where `sha256sum` or
+`shasum` is available, the installer verifies the download against that sidecar
+before installing, and a missing sidecar is a hard failure rather than a skipped
+check; with neither tool present it warns and installs unverified. Binaries land
+in `/usr/local/bin` (via `sudo` only if that directory is not writable). Set
+`TAPESCTL_VERSION` to install a specific release or nightly, and
+`TAPESCTL_INSTALL_DIR` to install somewhere else.
 
 Confirm it landed:
 
@@ -197,8 +199,10 @@ Two steps are yours, and the command prints them:
    too. Trust binds to the exact hook-definition hash, so a reinstall requires
    trusting again.
 
-`tapesctl plugin uninstall codex-app` removes the plugin and the configuration
-it wrote, and also takes `--dry-run`.
+`tapesctl plugin uninstall codex-app` removes the configuration and state it
+wrote, but leaves the plugin registered with Codex; it prints a
+`codex plugin remove ...` command to run for that last step. It also takes
+`--dry-run`.
 
 Harnesses captured by redirection alone need no plugin and say so:
 
