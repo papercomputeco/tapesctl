@@ -18,7 +18,7 @@
 //!
 //! The request side is where a client can be wrong in a way the server cannot
 //! correct — and it is no longer hand-written either. Every core method here
-//! resolves its operation in [`tapes_read_contract`] (the vendored tapes read
+//! resolves its operation in [`tapes_client::core`] (the vendored tapes read
 //! contract, reduced by the same reducer the cassette surface uses) and
 //! assembles a [`Call`] from the contract's verb, path template, and declared
 //! parameters. What remains modelled locally is which parameters each command
@@ -35,15 +35,15 @@
 //! gateway adds its own on the way through.
 
 use serde_json::Value;
-use tapes_cassette_client::DirectHttp;
+use tapes_client::DirectHttp;
 use url::Url;
 
 use crate::api::contract::{self, ops};
 use crate::error::{Result, error};
-// Re-exported from the shared cassette crate since the PCC-1104 split, so
-// the call sites across ports/ and start/ read exactly as they did when the
+// Re-exported from the shared client crate since the read surface moved out,
+// so the call sites across ports/ and start/ read exactly as they did when the
 // types were defined here.
-pub use tapes_cassette_client::{Call, SpecFetch};
+pub use tapes_client::{Call, SpecFetch};
 
 /// Server-side ceiling on `limit`. A larger request is silently clamped rather
 /// than rejected, so a caller asking for more must still follow `next_cursor`.
@@ -179,11 +179,11 @@ impl SessionListParams<'_> {
 /// A client for one tapes API server.
 ///
 /// The transport half — the no-redirect HTTP client, the spec-path guards,
-/// URL building, and JSON decoding — lives in
-/// [`tapes_cassette_client::DirectHttp`] since the PCC-1104 split; this type
-/// wraps it and keeps the contract-driven core methods and the CLI's error
-/// type. Behaviour is the extraction's, which is to say the pre-extraction
-/// behaviour, verbatim.
+/// URL building, and JSON decoding — lives in [`tapes_client::DirectHttp`]
+/// since the read surface moved out of this repository; this type wraps it and
+/// keeps the contract-driven core methods and the CLI's error type. Behaviour
+/// is the extraction's, which is to say the pre-extraction behaviour,
+/// verbatim.
 #[derive(Debug, Clone)]
 pub struct ApiClient {
     direct: DirectHttp,
@@ -225,7 +225,7 @@ impl ApiClient {
     ///
     /// Every hand-written URL builder this client used to carry is this line
     /// now: the verb, the path template, and the parameter routing all come
-    /// from the vendored contract in [`tapes_read_contract`].
+    /// from the vendored contract in [`tapes_client::core`].
     async fn call_operation(
         &self,
         operation_id: &str,
@@ -386,9 +386,20 @@ impl ApiClient {
     /// so it is percent-encoded whole. Only the tests exercise this directly
     /// any more — the shared transport builds its own request URLs — but it
     /// pins the encoding behaviour in this crate's own suite.
+    ///
+    /// [`tapes_client::PathMode::Direct`] is the join this client has always
+    /// performed: it addresses a tapes server's root, so a path prefix the
+    /// configured base happens to carry is dropped rather than prepended. The
+    /// other mode is for a client mounted under a gateway prefix, which this
+    /// one is not — the argument exists because a builder that silently picked
+    /// one would be wrong for the other caller.
     #[cfg(test)]
     fn call_url(&self, call: &Call<'_>) -> Result<Url> {
-        Ok(tapes_cassette_client::invoke::call_url(self.base(), call)?)
+        Ok(tapes_client::call_url(
+            self.base(),
+            call,
+            tapes_client::PathMode::Direct,
+        )?)
     }
 
     /// `seedDemo` — populate a server with demo sessions.
@@ -407,7 +418,7 @@ impl ApiClient {
 /// through the vendored contract's `listCassettes` operation — the same
 /// request the pre-extraction cache made — and every failure maps onto the
 /// CLI's own error type for display.
-impl tapes_cassette_client::SpecTransport for ApiClient {
+impl tapes_client::SpecTransport for ApiClient {
     type Error = crate::error::Error;
 
     async fn fetch_discovery(&self) -> Result<Value> {

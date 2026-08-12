@@ -1,7 +1,7 @@
 //! Synthesizing clap commands from a cassette surface, and dispatching them.
 //!
-//! The synthesis itself lives in [`tapes_cassette_client::command`] since the
-//! PCC-1104 split. What stays here is what makes a generated command a
+//! The synthesis itself lives in [`tapes_client::cli`], behind that crate's
+//! `cli` feature. What stays here is what makes a generated command a
 //! *tapesctl* command: the `--tapes-url` flag (with its `TAPES_URL` fallback)
 //! decorated onto every generated method — mirroring [`crate::cli::ApiArgs`]
 //! — and the dispatch that builds this CLI's client from it, executes the
@@ -16,7 +16,7 @@ use crate::api::client::ApiClient;
 use crate::api::print_json;
 use crate::cassette::spec::Surface;
 use crate::error::{Result, error};
-use tapes_cassette_client::command::resolve_invocation;
+use tapes_client::cli::resolve_invocation;
 
 /// The flag every generated method carries, mirroring [`crate::cli::ApiArgs`].
 const TAPES_URL_FLAG: &str = "tapes-url";
@@ -77,7 +77,7 @@ pub fn mount(base: Command, surface: &Surface) -> Command {
         // explanation of why it is empty — is a better answer than an error.
         .arg_required_else_help(true)
         .subcommand_required(true);
-    let noun = tapes_cassette_client::command::augment(noun, &admissible(surface), with_tapes_url);
+    let noun = tapes_client::cli::augment(noun, &admissible(surface), with_tapes_url);
     base.subcommand(noun)
 }
 
@@ -144,8 +144,7 @@ pub fn augment(base: Command, surface: &Surface) -> Command {
         .get_subcommands()
         .map(|sub| sub.get_name().to_owned())
         .collect();
-    let augmented =
-        tapes_cassette_client::command::augment(base, &admissible(surface), with_tapes_url);
+    let augmented = tapes_client::cli::augment(base, &admissible(surface), with_tapes_url);
     let generated: Vec<String> = augmented
         .get_subcommands()
         .map(|sub| sub.get_name().to_owned())
@@ -217,7 +216,7 @@ mod tests {
     use super::*;
     use crate::cassette::spec;
     use serde_json::json;
-    use tapes_cassette_client::command::{call_for, read_body};
+    use tapes_client::cli::{call_for, read_body};
 
     fn surface_from(name: &str, document: &serde_json::Value) -> Surface {
         Surface {

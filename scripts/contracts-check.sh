@@ -2,9 +2,9 @@
 # Verify the vendored tapes ingest contract is exactly the published bytes.
 #
 # Only the ingest surface is checked here. The read contract moved to the
-# `tapes-read-contract` crate in the tapes-crates repository (PCC-1146), which
-# owns its provenance and runs the same two gates on it in its own CI; this
-# repository inherits that check through its pin.
+# `tapes-client` crate in the tapes-crates repository, which owns its
+# provenance and runs the same two gates on it in its own CI; this repository
+# inherits that check through its pin.
 #
 # Two gates, in order:
 #

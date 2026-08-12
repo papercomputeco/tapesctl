@@ -6,9 +6,10 @@
 //! operation table, and the request assembly that follows — resolve an
 //! operation, route each value to the location the document declared for it,
 //! refuse an undeclared parameter, refuse a path placeholder with no value —
-//! are all [`tapes_read_contract`] since the PCC-1146 extraction. Both clients
-//! that speak this API build against one copy of the published asset instead
-//! of a copy each, and the seal check runs in that crate's CI.
+//! are all [`tapes_client::core`] since the read surface moved out of this
+//! repository. Both clients that speak this API build against one copy of the
+//! published asset instead of a copy each, and the seal check runs in that
+//! crate's CI.
 //!
 //! What is left here is the part that is genuinely tapesctl's: the coverage
 //! tables.
@@ -40,7 +41,7 @@ pub const TAPES_INGEST_YAML: &str = include_str!("../../contracts/tapes-ingest.y
 
 // The operation ids, the reduced surface, and the request assembly, re-exported
 // so the call sites in `api::client` read as they did before the extraction.
-pub use tapes_read_contract::{CoreSurface, call_for, core, ops};
+pub use tapes_client::core::{CoreSurface, call_for, core, ops};
 
 /// Every vendored operation the CLI drives, and the surface that drives it.
 ///
@@ -157,7 +158,7 @@ mod tests {
     use super::*;
     use serde_json::Value;
     use std::collections::BTreeSet;
-    use tapes_read_contract::coverage;
+    use tapes_client::core::coverage;
 
     #[test]
     fn the_vendored_contract_parses_and_reduces() {

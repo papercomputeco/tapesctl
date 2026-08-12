@@ -1774,7 +1774,7 @@ dependencies = [
 [[package]]
 name = "tapes-capture"
 version = "0.1.0"
-source = "git+https://github.com/papercomputeco/tapes-crates?rev=8a40d7f79ff218c9bf2bb32552c7330106f0f2a3#8a40d7f79ff218c9bf2bb32552c7330106f0f2a3"
+source = "git+https://github.com/papercomputeco/tapes-crates?rev=8301c90a61ab5308e72b969e110cee95b15fa0d8#8301c90a61ab5308e72b969e110cee95b15fa0d8"
 dependencies = [
  "base64",
  "http",
@@ -1789,9 +1789,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "tapes-cassette-client"
+name = "tapes-client"
 version = "0.1.0"
-source = "git+https://github.com/papercomputeco/tapes-crates?rev=8a40d7f79ff218c9bf2bb32552c7330106f0f2a3#8a40d7f79ff218c9bf2bb32552c7330106f0f2a3"
+source = "git+https://github.com/papercomputeco/tapes-crates?rev=8301c90a61ab5308e72b969e110cee95b15fa0d8#8301c90a61ab5308e72b969e110cee95b15fa0d8"
 dependencies = [
  "clap",
  "dirs",
@@ -1799,6 +1799,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "serde_yaml",
  "snafu",
  "tracing",
  "url",
@@ -1807,7 +1808,7 @@ dependencies = [
 [[package]]
 name = "tapes-harnesses"
 version = "0.1.0"
-source = "git+https://github.com/papercomputeco/tapes-crates?rev=8a40d7f79ff218c9bf2bb32552c7330106f0f2a3#8a40d7f79ff218c9bf2bb32552c7330106f0f2a3"
+source = "git+https://github.com/papercomputeco/tapes-crates?rev=8301c90a61ab5308e72b969e110cee95b15fa0d8#8301c90a61ab5308e72b969e110cee95b15fa0d8"
 dependencies = [
  "arc-swap",
  "dirs",
@@ -1821,20 +1822,6 @@ dependencies = [
  "tokio",
  "toml_edit 0.20.7",
  "tracing",
-]
-
-[[package]]
-name = "tapes-read-contract"
-version = "0.1.0"
-source = "git+https://github.com/papercomputeco/tapes-crates?rev=8a40d7f79ff218c9bf2bb32552c7330106f0f2a3#8a40d7f79ff218c9bf2bb32552c7330106f0f2a3"
-dependencies = [
- "reqwest",
- "serde",
- "serde_json",
- "serde_yaml",
- "snafu",
- "tapes-cassette-client",
- "url",
 ]
 
 [[package]]
@@ -1859,9 +1846,8 @@ dependencies = [
  "sha2",
  "snafu",
  "tapes-capture",
- "tapes-cassette-client",
+ "tapes-client",
  "tapes-harnesses",
- "tapes-read-contract",
  "tempfile",
  "test-case",
  "time",

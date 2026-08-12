@@ -1,11 +1,11 @@
 //! On-disk cache of a server's cassette surface — tapesctl's naming of it.
 //!
-//! The machinery lives in [`tapes_cassette_client::cache`] since the PCC-1104
-//! split; see that module for why the cache is not optional and for the
-//! degradation ladder. What stays here is everything that must not move for
-//! an existing install: the `tapesctl/cassettes` directory under the platform
-//! cache dir, the [`CACHE_DIR_ENV`] override, the [`REVALIDATE_AFTER`]
-//! window, and the base-URL key — so a cache file written before the split
+//! The machinery lives in [`tapes_client::cassettes::cache`]; see that module
+//! for why the cache is not optional and for the degradation ladder. What
+//! stays here is everything that must not move for an existing install: the
+//! `tapesctl/cassettes` directory under the platform cache dir, the
+//! [`CACHE_DIR_ENV`] override, the [`REVALIDATE_AFTER`] window, and the
+//! base-URL key — so a cache file written before the machinery moved out
 //! resolves byte-identically after it.
 //!
 //! Discovery and spec fetches go through [`ApiClient`], which implements the
@@ -14,8 +14,8 @@
 
 use std::time::Duration;
 
-use tapes_cassette_client::CacheConfig;
-pub use tapes_cassette_client::cache::{Cached, CachedSpec};
+use tapes_client::CacheConfig;
+pub use tapes_client::cassettes::cache::{Cached, CachedSpec};
 
 use crate::api::client::ApiClient;
 use crate::cassette::spec::{self, Surface};
@@ -45,19 +45,19 @@ fn config(key: &str) -> CacheConfig<'_> {
 /// Read the cached surface for a base URL, if there is a usable one.
 #[must_use]
 pub fn read(base: &str) -> Option<Cached> {
-    tapes_cassette_client::cache::read(&config(base))
+    tapes_client::cassettes::cache::read(&config(base))
 }
 
 /// Write a surface to the cache, best effort.
 pub fn write(cached: &Cached) {
-    tapes_cassette_client::cache::write(&config(&cached.base), cached);
+    tapes_client::cassettes::cache::write(&config(&cached.base), cached);
 }
 
 /// Get the cassette surface for a server, from cache or from the network.
 ///
-/// Never fails. See [`tapes_cassette_client::cache`] for the degradation
+/// Never fails. See [`tapes_client::cassettes::cache`] for the degradation
 /// ladder.
 pub async fn load(client: &ApiClient) -> Surface {
     let base = client.base().to_string();
-    tapes_cassette_client::cache::load(client, &config(&base), &spec::REDUCER).await
+    tapes_client::cassettes::cache::load(client, &config(&base), &spec::REDUCER).await
 }
