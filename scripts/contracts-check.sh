@@ -32,6 +32,12 @@
 # and no checkout is available, gate 2 is skipped with a notice so gate 1
 # still runs everywhere — except mid-refresh, where a skipped gate 2 is a
 # failure because nothing authoritative ran.
+#
+# That skip is right on a laptop on a train and wrong in CI, where "could not
+# look" is indistinguishable from "looked and agreed" in the only place anyone
+# reads: the job's green tick. Set TAPES_CONTRACTS_STRICT=1 to make a skipped
+# gate 2 a failure. CI sets it; leaving it unset keeps the offline path usable
+# for humans.
 
 set -euo pipefail
 
@@ -149,6 +155,12 @@ if [ -f "${fallback_repo}/cli/tapes/main.go" ]; then
 elif [ "${refresh}" = 1 ]; then
   echo "FAIL: mid-refresh, but the ${tag} release asset could not be fetched and no tapes" >&2
   echo "      checkout exists at ${fallback_repo} (set TAPES_REPO) — nothing authoritative ran" >&2
+  fail=1
+elif [ "${TAPES_CONTRACTS_STRICT:-0}" = 1 ]; then
+  echo "FAIL: could not fetch the ${tag} release asset and no tapes checkout at ${fallback_repo};" >&2
+  echo "      TAPES_CONTRACTS_STRICT=1, so an unverifiable contract is a failure rather than" >&2
+  echo "      a green tick that only proves gate 1 (the vendored file matches a fingerprint" >&2
+  echo "      recorded in the same commit that could have changed both)" >&2
   fail=1
 else
   echo "notice: could not fetch the ${tag} release asset and no tapes checkout at ${fallback_repo} (set TAPES_REPO); skipping the byte diff"

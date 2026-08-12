@@ -10,7 +10,9 @@
 #
 # This is a manual procedure, not automation — same shape as (and kept in
 # step with) scripts/sync-content-encoding-fixtures.sh. It takes a local
-# checkout path; no network is involved.
+# checkout path; no network is involved. CI runs the --check form against the
+# pinned commit through scripts/fixture-freshness-check.sh, which supplies the
+# checkout a runner does not have.
 #
 # Unlike the envelope corpus this one is sealed by a DIGEST that travels with
 # the cases, so a hand-edit here is caught by this repo's own test suite even
