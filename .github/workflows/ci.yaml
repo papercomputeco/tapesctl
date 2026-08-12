@@ -91,6 +91,35 @@ jobs:
         # edited fixtures in another repository.
         run: make freshness-check
 
+  pins:
+    name: Tapes Crate Pins
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-24.04' || 'depot-ubuntu-24.04' }}
+
+    # The shared tapes crates are several packages from one repository, pinned
+    # by revision. This asserts they are pinned as one — the same revision in
+    # Cargo.toml, the same revision resolved in Cargo.lock — and that the
+    # revision has actually landed on the crates repository's default branch. A
+    # pin that never landed builds here out of a cached checkout and builds
+    # nowhere else, which is a failure this repository can only discover from
+    # someone else's clone.
+    #
+    # No credentials, by construction: the crates repository is public, so the
+    # whole check is this checkout plus an anonymous clone of a public URL.
+    # That is what makes it reportable on fork pull requests, and it is why the
+    # check lives in each consumer rather than upstream — asked from up there,
+    # the same question needs a token for every private consumer, which is the
+    # shape that made an earlier version of it permanently red.
+    #
+    # Not a Dagger job, for the same reason as the freshness job above: bash and
+    # git against an external source of truth, where an engine would add to the
+    # critical path without changing what is verified.
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Tapes crate pins agree and name a landed revision
+        run: make check-tapes-pins
+
   build:
     name: Build
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-24.04' || 'depot-ubuntu-24.04' }}
