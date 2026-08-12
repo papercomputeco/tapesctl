@@ -111,7 +111,6 @@ async fn proxy_with(
         gateway_nonce: Arc::new("test-launch-nonce".to_owned()),
         org_id: Arc::new(String::new()),
         auth_subject: Arc::new("local:test".to_owned()),
-        session_seen: Arc::new(tokio::sync::Mutex::new(None)),
         desktop_sessions: None,
         transcript_tracker: SessionTracker::new(),
     };

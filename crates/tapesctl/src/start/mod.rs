@@ -95,7 +95,6 @@ use tapes_harnesses::plugin::{
     GATEWAY_NONCE_ENV, GATEWAY_PROVIDER_ROUTES_ENV, GATEWAY_PROVIDER_ROUTES_ON, GATEWAY_SCHEMA_ENV,
     GATEWAY_URL_ENV,
 };
-use tokio::sync::mpsc::unbounded_channel;
 use tracing::{info, warn};
 use url::Url;
 
@@ -107,7 +106,7 @@ use crate::transcript::codex_anchors;
 use crate::transcript::tailer::{self, SessionTracker};
 use ingest::IngestClient;
 use proxy::ProxyState;
-use tally::{CaptureCounts, CaptureTally};
+use tally::{CaptureSnapshot, CaptureTally};
 
 /// Header this client asks Codex to stamp so concurrent Codex processes on one
 /// loopback endpoint can be told apart.
@@ -873,7 +872,6 @@ pub async fn run(args: StartArgs) -> Result<()> {
         spawn_watcher(claude_sessions_dir()?),
         codex_snapshot.clone(),
     );
-    let (session_tx, mut session_rx) = unbounded_channel::<String>();
 
     // Written once, immediately after the harness is spawned, and read on every
     // request that arrives carrying an envelope. It starts at the "no harness
@@ -883,7 +881,8 @@ pub async fn run(args: StartArgs) -> Result<()> {
 
     let tracker = SessionTracker::new();
     // Held here as well as in the state: the capture tasks write it, and this
-    // function reads it after shutdown to decide what the exit summary may say.
+    // function drains and reads it after shutdown to decide what the exit
+    // summary may say.
     let tally = Arc::new(CaptureTally::new());
     let state = ProxyState {
         tally: Arc::clone(&tally),
@@ -911,7 +910,6 @@ pub async fn run(args: StartArgs) -> Result<()> {
         gateway_nonce: Arc::new(gateway_nonce),
         org_id: Arc::new(config.org_id.clone()),
         auth_subject: Arc::new(config.auth_subject.clone()),
-        session_seen: Arc::new(tokio::sync::Mutex::new(Some(session_tx))),
         // Every harness `start` launches names its session either through the
         // pipeline or through its own envelope. The desktop registry is filled
         // by a route this command does not serve, so leaving it empty here
@@ -983,15 +981,24 @@ pub async fn run(args: StartArgs) -> Result<()> {
         }
     }
 
+    // A capture finishes on a task detached from the exchange that produced it,
+    // so the server being shut down says nothing about whether the last turn
+    // has reached ingest. A harness that exits the moment its final response
+    // lands leaves that turn's POST in flight, and a summary taken here would
+    // be short by it — in a one-turn session, short by all of it, printing "no
+    // turns were captured" over a turn that was about to land.
+    //
+    // Bounded, and deliberately not a join: ingest sets no request timeout, so
+    // waiting for a wedged server would hold a terminal the harness has already
+    // handed back. What has not landed by the deadline is reported as still in
+    // flight instead.
+    tally.drain(tally::CAPTURE_DRAIN_DEADLINE).await;
+
     // The terminal is the caller's again, so the session can finally be named.
-    // The id only becomes known once a turn is attributed, which is mid-session
-    // — the one moment printing is forbidden. The proxy sends exactly one id, so
-    // a single non-blocking read after shutdown collects whatever there was.
-    print_exit_summary(
-        config.web_url.as_ref(),
-        session_rx.try_recv().ok().as_deref(),
-        tally.snapshot(),
-    );
+    // The id only becomes known once an attributed turn is *accepted*, which is
+    // mid-session — the one moment printing is forbidden — so it is read back
+    // off the tally here rather than announced when it resolved.
+    print_exit_summary(config.web_url.as_ref(), &tally.snapshot());
 
     let status = status?;
     if !status.success() {
@@ -1086,8 +1093,8 @@ fn announce_capture() {
 ///
 /// The mixed case gets the link *and* the warning: the link is true, and it is
 /// incomplete, because some of this session's turns are not filed under it.
-fn print_exit_summary(web_url: Option<&Url>, session_id: Option<&str>, counts: CaptureCounts) {
-    match tally::exit_summary_for(session_id, counts) {
+fn print_exit_summary(web_url: Option<&Url>, snapshot: &CaptureSnapshot) {
+    match tally::exit_summary_for(snapshot) {
         // Not an error: a harness can be launched and quit without ever calling
         // a model. Saying so beats printing nothing and leaving the user to
         // wonder whether capture was ever on.
@@ -1101,8 +1108,15 @@ fn print_exit_summary(web_url: Option<&Url>, session_id: Option<&str>, counts: C
     // stderr, and unconditional on the count rather than on the branch above:
     // a launch that files any turn under `unknown` has lost data the caller
     // cannot find by name, and that is worth surfacing every time.
-    if counts.has_unattributed() {
-        eprintln!("{}", tally::unattributed_warning(counts));
+    if snapshot.counts.has_unattributed() {
+        eprintln!("{}", tally::unattributed_warning(snapshot.counts));
+    }
+
+    // Only after a drain gave up. Every line above it is then a floor rather
+    // than a total, and a summary that let that pass silently would be making
+    // the same claim-more-than-you-know mistake in a new place.
+    if snapshot.in_flight > 0 {
+        eprintln!("{}", tally::in_flight_note(snapshot.in_flight));
     }
 
     if let Some(path) = logging::active_log_file() {

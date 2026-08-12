@@ -94,7 +94,9 @@ pub async fn run(args: CaptureArgs) -> Result<()> {
         ingest: IngestClient::new(&tapes_url)?,
         // `capture` serves a long-lived daemon rather than one launch, and
         // prints no exit summary — the tally is kept so the capture path has a
-        // single shape, and nothing reads it here.
+        // single shape, and nothing reads or drains it here. It stays bounded
+        // regardless: the in-flight guard is a counter, not a set of handles,
+        // so a daemon that captures for days accumulates nothing.
         tally: Arc::new(crate::start::tally::CaptureTally::new()),
         attribution: Arc::new(AttributionState::new(
             spawn_watcher(claude_session::default_sessions_dir().context(error::NoHomeDirSnafu)?),
@@ -133,7 +135,6 @@ pub async fn run(args: CaptureArgs) -> Result<()> {
             args.auth_subject
                 .unwrap_or_else(|| format!("local:{}", local_username())),
         ),
-        session_seen: Arc::new(tokio::sync::Mutex::new(None)),
         desktop_sessions: Some(Arc::clone(&sessions)),
         transcript_tracker: SessionTracker::new(),
     };

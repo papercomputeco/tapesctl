@@ -179,9 +179,6 @@ pub struct ProxyState {
     pub org_id: Arc<String>,
     /// Acting subject stamped on every captured turn.
     pub auth_subject: Arc<String>,
-    /// Notified with the harness session id the first time one resolves, so the
-    /// caller can print a session URL.
-    pub session_seen: Arc<tokio::sync::Mutex<Option<UnboundedSender<String>>>>,
     /// Desktop sessions an authenticated lifecycle report introduced, when
     /// this proxy is capturing a harness attributed that way.
     ///
@@ -198,11 +195,13 @@ pub struct ProxyState {
     /// so the registry is fed from here rather than from a separate discovery
     /// pass that could disagree with what was actually captured.
     pub transcript_tracker: SessionTracker,
-    /// How much this launch captured, and how much of it was attributed.
+    /// How much this launch captured, how much of it was attributed, and which
+    /// session the exit summary may link to.
     ///
-    /// Written by every capture task and read once after shutdown, which is
-    /// what lets the exit summary distinguish "captured nothing" from
-    /// "captured turns and could not say whose they were".
+    /// Written by every capture task and read once after shutdown has drained
+    /// them, which is what lets the exit summary distinguish "captured nothing"
+    /// from "captured turns and could not say whose they were" — and keeps it
+    /// from claiming either while a capture is still running.
     pub tally: Arc<crate::start::tally::CaptureTally>,
 }
 
@@ -383,9 +382,6 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
     let session = envelope_attribution
         .as_ref()
         .map(|a| SessionEnvelope::from_attribution(a, &state.org_id, &state.auth_subject));
-    let session_id = envelope_attribution
-        .as_ref()
-        .and_then(|a| a.session_id.clone());
 
     // Stamp the envelope outbound too. This proxy posts its own turns, so it
     // does not need the headers for itself — but when the upstream is itself a
@@ -406,9 +402,6 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
         _ => attributed
             .stamp(&mut out_headers)
             .context(error::EnvelopeSnafu)?,
-    }
-    if let Some(session_id) = session_id.as_deref() {
-        announce_session(&state, session_id).await;
     }
 
     let thread_id = envelope::thread_id(&parts.headers).map(str::to_owned);
@@ -489,7 +482,18 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
     };
 
     let (tx, rx) = unbounded_channel();
-    tokio::spawn(capture.run(rx));
+    // Registered here, one statement before the spawn, because the capture is
+    // owed to the tally from this moment: the response below returns to a
+    // harness that may exit as soon as it has read it, and shutdown must not
+    // find an idle tally while this turn is still on its way to ingest.
+    let in_flight = state.tally.begin();
+    tokio::spawn(async move {
+        // Held for the whole task, and dropped by the runtime however it ends —
+        // early return, error, or panic — so an abandoned capture releases the
+        // drain instead of holding it to the deadline.
+        let _in_flight = in_flight;
+        capture.run(rx).await;
+    });
 
     let stream = ResponseTee::new(response.bytes_stream(), tx);
     Ok(build_response(
@@ -528,15 +532,6 @@ fn report_refusal(reason: &'static str, method: &http::Method, path: &str, statu
             path,
             "not a turn request; forwarded but not captured",
         );
-    }
-}
-
-async fn announce_session(state: &ProxyState, session_id: &str) {
-    let mut slot = state.session_seen.lock().await;
-    // Take the sender so only the first resolved session is announced; later
-    // turns in the same session must not reprint the URL.
-    if let Some(tx) = slot.take() {
-        let _ = tx.send(session_id.to_owned());
     }
 }
 
@@ -1054,27 +1049,31 @@ impl TurnCapture {
             session: self.session.clone(),
         };
 
-        // Whose turn this is, by the same rule the announce path uses: a
-        // harness id that is not the sentinel, plus a session id to group
-        // under. Deciding it here rather than trusting `session.is_some()`
-        // matters because the desktop lane always sends a session block —
-        // including one that says `unknown` — so presence alone would count an
-        // unattributed turn as attributed and re-hide the bug.
-        let attributed = self.session.as_ref().is_some_and(|session| {
-            session.harness_id != envelope::HARNESS_ID_UNKNOWN
-                && session.harness_session_id.is_some()
+        // Whose turn this is: a harness id that is not the sentinel, plus a
+        // session id to group under. Deciding it here rather than trusting
+        // `session.is_some()` matters because the desktop lane always sends a
+        // session block — including one that says `unknown` — so presence alone
+        // would count an unattributed turn as attributed and re-hide the bug.
+        let session_id = self.session.as_ref().and_then(|session| {
+            (session.harness_id != envelope::HARNESS_ID_UNKNOWN)
+                .then(|| session.harness_session_id.clone())
+                .flatten()
         });
 
         match self.state.ingest.post_turn(&payload).await {
             Ok(()) => {
-                // Counted only on acceptance: the summary tells the caller what
-                // they can go and look at, and a rejected turn is not that.
-                self.state.tally.record(attributed);
+                // Recorded only on acceptance, and the session id travels with
+                // it: the summary tells the caller what they can go and look
+                // at, and a rejected turn is neither a capture to count nor a
+                // session to link. Attribution resolved long before this point,
+                // so nominating the link any earlier would name a session on
+                // the strength of a turn that never landed.
+                self.state.tally.record(session_id.as_deref());
                 debug!(
                     request_id = %self.meta.request_id,
                     finalized_by = reason,
                     bytes = raw.len(),
-                    attributed,
+                    attributed = session_id.is_some(),
                     "turn captured",
                 );
             }

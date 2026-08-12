@@ -22,10 +22,11 @@ use tapes_harnesses::attribution::{
 use tapes_harnesses::harness::RegistryUserAgents;
 use tapesctl::start::ingest::IngestClient;
 use tapesctl::start::proxy::{ProxyState, forward_handler};
+use tapesctl::start::tally::{CaptureTally, ExitSummary, exit_summary_for};
 use tapesctl::transcript::tailer::SessionTracker;
 use url::Url;
 use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 /// The exact bytes a streaming Anthropic turn puts on the wire, framing and
 /// all. The capture must reproduce these verbatim.
@@ -42,6 +43,12 @@ struct Harness {
     proxy: SocketAddr,
     ingest: MockServer,
     upstream: MockServer,
+    /// What this proxy's capture tasks have recorded.
+    ///
+    /// The same value `start` drains and reads at exit, which is what lets a
+    /// test here assert on the exit summary's inputs without running a harness:
+    /// the counts, and the session the summary is allowed to link to.
+    tally: Arc<CaptureTally>,
 }
 
 async fn start_harness(response: ResponseTemplate) -> Harness {
@@ -68,7 +75,63 @@ async fn start_launched_claude_harness(response: ResponseTemplate) -> Harness {
         .mount(&upstream)
         .await;
     let upstream_url = Url::parse(&upstream.uri()).unwrap();
-    proxy_for_with_claude_session(upstream, upstream_url, false, own_pid(), true).await
+    proxy_for_lane(upstream, upstream_url, Lane::LaunchedClaude, own_pid()).await
+}
+
+/// As [`start_launched_claude_harness`], with the ingest answer supplied.
+async fn launched_claude_harness_with_ingest(
+    response: ResponseTemplate,
+    ingest_response: impl Respond + 'static,
+) -> Harness {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(response)
+        .mount(&upstream)
+        .await;
+    let upstream_url = Url::parse(&upstream.uri()).unwrap();
+    proxy_for_with_ingest(
+        upstream,
+        upstream_url,
+        Lane::LaunchedClaude,
+        own_pid(),
+        ingest_response,
+    )
+    .await
+}
+
+/// A self-attributing capture with the ingest answer supplied.
+///
+/// This is the one lane where attribution varies *per request* on a single
+/// proxy — each request carries its own envelope — which is what makes it the
+/// only way to stage a launch that had an attributed turn rejected and
+/// unattributed turns accepted.
+async fn self_attributing_harness_with_ingest(
+    response: ResponseTemplate,
+    ingest_response: impl Respond + 'static,
+) -> Harness {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(response)
+        .mount(&upstream)
+        .await;
+    let upstream_url = Url::parse(&upstream.uri()).unwrap();
+    proxy_for_with_ingest(
+        upstream,
+        upstream_url,
+        Lane::SelfAttributing,
+        own_pid(),
+        ingest_response,
+    )
+    .await
+}
+
+/// A plain JSON upstream reply, which is all a test about the tally needs.
+fn ok_json() -> ResponseTemplate {
+    ResponseTemplate::new(200)
+        .set_body_string("ok")
+        .insert_header("content-type", "application/json")
 }
 
 /// This process's PID, as the launched harness's.
@@ -114,47 +177,86 @@ async fn harness_with_upstream(upstream_url: Url, upstream: MockServer) -> Harne
     proxy_for(upstream, upstream_url, false, own_pid()).await
 }
 
+/// Which attribution lane a test proxy runs on.
+///
+/// One value rather than a pair of booleans because the states are exclusive: a
+/// harness whose session file the proxy reads is not also one that stamps its
+/// own envelope, and two flags can spell that impossible combination.
+#[derive(Clone, Copy)]
+enum Lane {
+    /// Watchers over empty directories, so every turn files under `unknown`.
+    /// Where the byte-fidelity tests belong: attribution is not their subject.
+    Unattributed,
+    /// A `<pid>.json` for this process's PID, exactly as a live `claude` writes
+    /// it, so the peer-PID lookup can name the session a turn is filed under.
+    LaunchedClaude,
+    /// Envelopes stamped by the harness itself and believed on the nonce plus
+    /// the peer — the shape `tapesctl start pi` runs in.
+    SelfAttributing,
+}
+
 async fn proxy_for(
     upstream: MockServer,
     upstream_url: Url,
     self_attributing: bool,
     launched_pid: i32,
 ) -> Harness {
-    proxy_for_with_claude_session(
+    let lane = if self_attributing {
+        Lane::SelfAttributing
+    } else {
+        Lane::Unattributed
+    };
+    proxy_for_lane(upstream, upstream_url, lane, launched_pid).await
+}
+
+async fn proxy_for_lane(
+    upstream: MockServer,
+    upstream_url: Url,
+    lane: Lane,
+    launched_pid: i32,
+) -> Harness {
+    proxy_for_with_ingest(
         upstream,
         upstream_url,
-        self_attributing,
+        lane,
         launched_pid,
-        false,
+        ResponseTemplate::new(202).set_body_string(r#"{"status":"accepted"}"#),
     )
     .await
 }
 
-async fn proxy_for_with_claude_session(
+/// As above, with the ingest server's answer under the test's control.
+///
+/// Most tests here want an ingest that accepts everything immediately. The ones
+/// that do not are about what the *exit summary* may claim, and each needs
+/// ingest to be something other than instant and agreeable: one delays its
+/// acceptance past the moment a harness would have exited, another never
+/// answers, another rejects the turn that resolved a session.
+async fn proxy_for_with_ingest(
     upstream: MockServer,
     upstream_url: Url,
-    self_attributing: bool,
+    lane: Lane,
     launched_pid: i32,
-    launched_claude: bool,
+    ingest_response: impl Respond + 'static,
 ) -> Harness {
     let ingest = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/ingest"))
-        .respond_with(ResponseTemplate::new(202).set_body_string(r#"{"status":"accepted"}"#))
+        .respond_with(ingest_response)
         .mount(&ingest)
         .await;
 
-    // Watchers over temp dirs. Empty by default: no harness is actually
-    // running, so every request lands on the unattributed path. That is
+    // Watchers over temp dirs. Empty on every lane but one: no harness is
+    // actually running, so requests land on the unattributed path. That is
     // deliberate for the byte-fidelity tests, which are about the bytes.
     //
-    // `launched_claude` seeds the one file that changes the answer — the
+    // [`Lane::LaunchedClaude`] seeds the one file that changes the answer — the
     // `<pid>.json` a live `claude` writes for its own PID — so the same proxy
     // can also be exercised on the attributed path, which is the one a real
     // `start claude` runs on.
     let claude_dir = tempfile::tempdir().unwrap();
     let codex_dir = tempfile::tempdir().unwrap();
-    if launched_claude {
+    if matches!(lane, Lane::LaunchedClaude) {
         std::fs::write(
             claude_dir.path().join(format!("{launched_pid}.json")),
             serde_json::json!({
@@ -172,9 +274,9 @@ async fn proxy_for_with_claude_session(
         spawn_codex_watcher(codex_dir.path().to_path_buf()),
     );
 
+    let tally = Arc::new(CaptureTally::new());
     let state = ProxyState {
-        // Counted but never read here; the exit summary is `start`'s.
-        tally: Arc::new(tapesctl::start::tally::CaptureTally::new()),
+        tally: Arc::clone(&tally),
         upstream: upstream_url,
         ingest: IngestClient::new(&Url::parse(&ingest.uri()).unwrap()).unwrap(),
         attribution: Arc::new(attribution),
@@ -186,12 +288,11 @@ async fn proxy_for_with_claude_session(
         provider_routes: None,
         codex_marker_header: Arc::new("x-tapesctl-codex-attribution".to_owned()),
         codex_lane: false,
-        self_attributing,
+        self_attributing: matches!(lane, Lane::SelfAttributing),
         launched_pid: Arc::new(std::sync::atomic::AtomicI32::new(launched_pid)),
         gateway_nonce: Arc::new(TEST_NONCE.to_owned()),
         org_id: Arc::new(String::new()),
         auth_subject: Arc::new("local:test".to_owned()),
-        session_seen: Arc::new(tokio::sync::Mutex::new(None)),
         desktop_sessions: None,
         transcript_tracker: SessionTracker::new(),
     };
@@ -218,6 +319,7 @@ async fn proxy_for_with_claude_session(
         proxy,
         ingest,
         upstream,
+        tally,
     }
 }
 
@@ -865,6 +967,162 @@ async fn a_launched_claude_turn_carries_the_launched_sessions_facts() {
     let turn = await_captured_turn(&harness.ingest).await;
     assert_eq!(turn["session"]["cwd"], "/tmp/tapesctl-launched-claude");
     assert_eq!(turn["session"]["harness_version"], "2.1.161");
+}
+
+/// How long the ingest servers below hold a POST before answering.
+///
+/// The window a capture task is still working in after the harness has been
+/// served — long enough that a summary taken without a drain would be provably
+/// early, short enough not to pad the suite.
+const INGEST_DELAY: Duration = Duration::from_millis(500);
+
+#[tokio::test]
+async fn a_capture_still_in_flight_at_exit_is_waited_for_and_counted() {
+    // The shutdown race. Capture finishes on a task detached from the exchange
+    // that produced it, so a harness exiting the moment its last response lands
+    // leaves that turn's POST unfinished — and a summary read right then counts
+    // zero and prints "no turns were captured" over a turn that was about to
+    // land. The drain is what makes the summary wait for the answer it reports.
+    let harness = launched_claude_harness_with_ingest(
+        ok_json(),
+        ResponseTemplate::new(202)
+            .set_body_string(r#"{"status":"accepted"}"#)
+            .set_delay(INGEST_DELAY),
+    )
+    .await;
+
+    let _ = post_through_proxy(harness.proxy, r#"{"model":"claude-sonnet-4"}"#)
+        .await
+        .text()
+        .await;
+
+    // The harness has every byte it was waiting for and would exit here. The
+    // capture is still on its way to ingest, which is the whole point: this is
+    // exactly the reading the old exit path took.
+    assert_eq!(
+        harness.tally.snapshot().counts.captured,
+        0,
+        "the capture cannot have landed yet; the test proves nothing otherwise",
+    );
+
+    harness.tally.drain(Duration::from_secs(5)).await;
+
+    let got = harness.tally.snapshot();
+    assert_eq!(
+        got.counts.captured, 1,
+        "the drain must wait for the in-flight capture: {got:?}",
+    );
+    assert_eq!(got.in_flight, 0, "a clean drain owes nothing: {got:?}");
+    assert_eq!(
+        exit_summary_for(&got),
+        ExitSummary::Session(LAUNCHED_CLAUDE_SID.to_owned()),
+        "a launch whose only turn landed late still earns its session link",
+    );
+}
+
+#[tokio::test]
+async fn a_drain_that_times_out_reports_the_remainder_instead_of_hanging() {
+    // Bounded, because the ingest client sets no request timeout of its own: a
+    // server that has stopped answering must cost the caller the deadline, not
+    // the terminal the harness has already handed back. What is still running
+    // is reported rather than waited on or quietly dropped from the count.
+    let harness = launched_claude_harness_with_ingest(
+        ok_json(),
+        ResponseTemplate::new(202).set_delay(Duration::from_secs(30)),
+    )
+    .await;
+
+    let _ = post_through_proxy(harness.proxy, r#"{"model":"claude-sonnet-4"}"#)
+        .await
+        .text()
+        .await;
+
+    let started = std::time::Instant::now();
+    harness.tally.drain(Duration::from_millis(200)).await;
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "a wedged ingest must not hold exit: waited {:?}",
+        started.elapsed(),
+    );
+
+    let got = harness.tally.snapshot();
+    assert_eq!(got.counts.captured, 0);
+    assert_eq!(
+        got.in_flight, 1,
+        "the capture the drain gave up on must be reported: {got:?}",
+    );
+}
+
+/// An ingest that refuses exactly the turns that resolved a session.
+///
+/// Keyed on the turn's own envelope rather than on arrival order, because the
+/// capture tasks race each other to post and an order-keyed responder would
+/// reject whichever turn happened to win.
+fn reject_attributed_turns(request: &Request) -> ResponseTemplate {
+    let turn: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+    if turn["session"]["harness_session_id"].is_string() {
+        ResponseTemplate::new(500).set_body_string("no")
+    } else {
+        ResponseTemplate::new(202).set_body_string(r#"{"status":"accepted"}"#)
+    }
+}
+
+/// The session id of the attributed turn ingest rejects below.
+const REJECTED_SID: &str = "pi-session-rejected";
+
+#[tokio::test]
+async fn a_rejected_turns_session_is_not_the_one_the_summary_links() {
+    // Attribution resolves while the request is still being forwarded, so the
+    // session id of a turn ingest goes on to reject is known long before its
+    // fate is. A summary that took its link from whichever session resolved
+    // first would send the caller to a session holding none of the turns that
+    // landed — and would do it while suppressing the sentence that describes
+    // what actually happened, which is that everything captured went under
+    // `unknown`.
+    let harness = self_attributing_harness_with_ingest(ok_json(), reject_attributed_turns).await;
+
+    // Attributed, and rejected: the turn that used to nominate the link.
+    let _ = post_as_self_attributing_harness(harness.proxy, Some(REJECTED_SID))
+        .await
+        .text()
+        .await;
+    // Accepted, and unattributed: a partial envelope files under `unknown`.
+    for _ in 0..2 {
+        let _ = post_as_self_attributing_harness(harness.proxy, None)
+            .await
+            .text()
+            .await;
+    }
+
+    harness.tally.drain(Duration::from_secs(5)).await;
+
+    let posted = harness.ingest.received_requests().await.unwrap();
+    assert_eq!(posted.len(), 3, "all three turns must have been posted");
+    let attributed_posts = posted
+        .iter()
+        .filter(|request| {
+            let turn: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            turn["session"]["harness_session_id"] == REJECTED_SID
+        })
+        .count();
+    assert_eq!(
+        attributed_posts, 1,
+        "the rejected turn must really have carried a session, or this test \
+         passes for the wrong reason",
+    );
+
+    let got = harness.tally.snapshot();
+    assert_eq!(
+        got.session, None,
+        "a turn ingest rejected must not nominate the session link: {got:?}",
+    );
+    assert_eq!(got.counts.captured, 2, "only the accepted turns count");
+    assert_eq!(got.counts.unattributed, 2);
+    assert_eq!(
+        exit_summary_for(&got),
+        ExitSummary::Unattributed(got.counts),
+        "the honest summary is the captured-but-unattributed one",
+    );
 }
 
 #[tokio::test]
