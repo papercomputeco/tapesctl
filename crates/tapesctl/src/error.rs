@@ -359,10 +359,17 @@ pub enum Error {
     ClientInit,
 
     /// The API request itself failed.
-    #[snafu(display("could not reach the tapes API"))]
+    ///
+    /// The source is rendered inline because a transport's refusal is often
+    /// the whole diagnosis — "the server answered with a redirect" is
+    /// actionable, "could not reach the tapes API" alone is not — and the
+    /// source is opaque, so a caller cannot recover the detail by matching on
+    /// it. It is a transport error rather than a `reqwest::Error` because the
+    /// client crate's seam admits transports that have never heard of HTTP.
+    #[snafu(display("could not reach the tapes API: {source}"))]
     ApiSend {
         /// Underlying transport failure.
-        source: reqwest::Error,
+        source: tapes_client::TransportError,
     },
 
     /// The API answered with a non-success status. The body is carried because
@@ -949,65 +956,61 @@ pub enum Error {
     },
 }
 
-/// Map the shared read-contract machinery's errors onto the variants this CLI
-/// surfaced before the PCC-1146 extraction, one to one, so every user-facing
-/// message is byte-identical to what the in-tree implementation printed.
+/// Map the shared client's errors onto the variants this CLI surfaced when the
+/// read surface was in-tree, one to one, so every user-facing message is
+/// byte-identical to what that implementation printed.
+///
+/// # Why there is one of these and not two
+///
+/// There were two, because the sealed contract and the discovered cassette
+/// surface arrived as two crates with an error type each — and the two
+/// disagreed in ways nothing checked: a URL failure had two spellings, and a
+/// non-success status was a rich variant on one side and absent from the
+/// other. This CLI paid for that twice, in two conversions whose overlapping
+/// arms had to be kept in step by hand. Upstream is one taxonomy now, so this
+/// is one conversion.
 ///
 /// The variants moved but their wording did not: a user who runs a command
 /// naming an operation the contract does not have reads the same sentence as
 /// before, and the tests that assert on those sentences did not have to move
 /// with the code.
-impl From<tapes_read_contract::Error> for Error {
-    fn from(error: tapes_read_contract::Error) -> Self {
-        use tapes_read_contract::Error as Contract;
+///
+/// # Why the match ends in a wildcard
+///
+/// The shared enum is `#[non_exhaustive]`, and deliberately: it is the
+/// vocabulary of a growing surface, and a consumer must say what it does with
+/// a condition its build predates rather than fail to compile when one
+/// appears. The arms below are the conditions this build knows how to phrase;
+/// anything else is reported as what it is — the client layer saying something
+/// this binary is older than — rather than folded into an unrelated message.
+impl From<tapes_client::Error> for Error {
+    fn from(error: tapes_client::Error) -> Self {
+        use tapes_client::Error as Client;
         match error {
-            Contract::VendoredContract { surface } => Self::VendoredContract { surface },
-            Contract::ContractOperation { operation } => Self::ContractOperation { operation },
-            Contract::ContractParameter {
+            // --- refusals: the call disagreed with the contract, nothing sent
+            Client::VendoredContract { surface } => Self::VendoredContract { surface },
+            Client::ContractOperation { operation } => Self::ContractOperation { operation },
+            Client::ContractParameter {
                 operation,
                 parameter,
             } => Self::ContractParameter {
                 operation,
                 parameter,
             },
-            Contract::ContractPathParameter {
+            Client::ContractPathParameter {
                 operation,
                 parameter,
             } => Self::ContractPathParameter {
                 operation,
                 parameter,
             },
-            Contract::Url { source } => Self::ApiUrl { source },
-            Contract::NotABase => Self::NotABase,
-            Contract::Decode { source } => Self::ApiDecode { source },
-            // The shared enum is `#[non_exhaustive]`: a variant added there
-            // must reach a user as *something* rather than failing this
-            // build, but it also must not be silently folded into an
-            // unrelated message. `ApiContract` is the "the contract layer
-            // said something this build predates" variant, which is exactly
-            // what such a case is.
-            other => {
-                tracing::warn!(error = %other, "unmapped read-contract error");
-                Self::ApiContract {
-                    detail: "the shared read contract reported a condition this build predates",
-                }
-            }
-        }
-    }
-}
-
-/// Map the shared cassette machinery's errors onto the variants this CLI
-/// surfaced before the PCC-1104 extraction, one to one, so every user-facing
-/// message is byte-identical to what the in-tree implementation printed.
-impl From<tapes_cassette_client::Error> for Error {
-    fn from(error: tapes_cassette_client::Error) -> Self {
-        use tapes_cassette_client::Error as Cassette;
-        match error {
-            Cassette::Url { source } => Self::ApiUrl { source },
-            Cassette::NotABase => Self::NotABase,
-            Cassette::ClientInit => Self::ClientInit,
-            Cassette::Send { source } => Self::ApiSend { source },
-            Cassette::Status {
+            // --- addressing
+            Client::Url { source } => Self::ApiUrl { source },
+            Client::NotABase => Self::NotABase,
+            // --- the wire
+            Client::ClientInit => Self::ClientInit,
+            Client::Transport { source } => Self::ApiSend { source },
+            Client::ApiStatus {
                 status,
                 endpoint,
                 body,
@@ -1016,19 +1019,28 @@ impl From<tapes_cassette_client::Error> for Error {
                 endpoint,
                 body,
             },
-            Cassette::Decode { source } => Self::ApiDecode { source },
-            Cassette::Contract { detail } => Self::ApiContract { detail },
-            Cassette::SpecPath { path } => Self::CassetteSpecPath { path },
-            Cassette::Method { method } => Self::CassetteMethod { method },
-            Cassette::UnknownCassette { name } => Self::UnknownCassette { name },
-            Cassette::UnknownMethod { cassette, method } => {
+            Client::Decode { source } => Self::ApiDecode { source },
+            Client::Contract { detail } => Self::ApiContract { detail },
+            // --- the discovered cassette surface
+            Client::SpecPath { path } => Self::CassetteSpecPath { path },
+            Client::Method { method } => Self::CassetteMethod { method },
+            Client::UnknownCassette { name } => Self::UnknownCassette { name },
+            Client::UnknownMethod { cassette, method } => {
                 Self::UnknownCassetteMethod { cassette, method }
             }
-            Cassette::BodyFile { path, source } => Self::BodyFile { path, source },
-            Cassette::InvalidBody { source } => Self::InvalidBody { source },
-            // `read_body`'s re-render used the shared RenderJson variant
-            // before the split; keep that message for the same failure.
-            Cassette::RenderBody { source } => Self::RenderJson { source },
+            // --- request bodies a user supplied
+            Client::BodyFile { path, source } => Self::BodyFile { path, source },
+            Client::InvalidBody { source } => Self::InvalidBody { source },
+            // `read_body`'s re-render used this CLI's RenderJson variant
+            // before the surface moved out; keep that message for the same
+            // failure.
+            Client::RenderBody { source } => Self::RenderJson { source },
+            other => {
+                tracing::warn!(error = %other, "unmapped tapes-client error");
+                Self::ApiContract {
+                    detail: "the shared tapes client reported a condition this build predates",
+                }
+            }
         }
     }
 }

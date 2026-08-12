@@ -1,8 +1,8 @@
 //! tapesctl's parameterization of the shared cassette reducer.
 //!
 //! The reducer — an OpenAPI document down to the five things a CLI needs per
-//! operation — lives in [`tapes_cassette_client::spec`] since the PCC-1104
-//! split. What stays here is tapesctl's own configuration of it: the flag
+//! operation — lives in [`tapes_client::cassettes::spec`]. What stays here is
+//! tapesctl's own configuration of it: the flag
 //! names this binary's subcommands define themselves, which the reducer must
 //! not hand to a cassette parameter. Both generated surfaces — the runtime
 //! cassette surface and the vendored core contract (see
@@ -10,8 +10,8 @@
 //! cannot read OpenAPI differently.
 
 use serde_json::Value;
-use tapes_cassette_client::spec::ReducerConfig;
-pub use tapes_cassette_client::spec::{Cassette, Location, Method, Param, Surface};
+use tapes_client::cassettes::spec::ReducerConfig;
+pub use tapes_client::cassettes::spec::{Cassette, Location, Method, Param, Surface};
 
 /// Flag names the generated surface cannot hand to a cassette parameter,
 /// because the cassette subcommand defines them itself.
@@ -24,15 +24,15 @@ pub(crate) const REDUCER: ReducerConfig<'static> = ReducerConfig {
 };
 
 /// Reduce one cassette's OpenAPI document to its methods, under tapesctl's
-/// reserved flags. See [`tapes_cassette_client::spec::reduce`].
+/// reserved flags. See [`tapes_client::cassettes::spec::reduce`].
 #[must_use]
 pub fn reduce(entry_name: &str, description: Option<String>, document: &Value) -> Cassette {
-    tapes_cassette_client::spec::reduce(entry_name, description, document, &REDUCER)
+    tapes_client::cassettes::spec::reduce(entry_name, description, document, &REDUCER)
 }
 
 /// Reduce any OpenAPI document to its operations, under tapesctl's reserved
-/// flags. See [`tapes_cassette_client::spec::reduce_methods`].
+/// flags. See [`tapes_client::cassettes::spec::reduce_methods`].
 #[must_use]
 pub fn reduce_methods(document: &Value) -> Vec<Method> {
-    tapes_cassette_client::spec::reduce_methods(document, &REDUCER)
+    tapes_client::cassettes::spec::reduce_methods(document, &REDUCER)
 }

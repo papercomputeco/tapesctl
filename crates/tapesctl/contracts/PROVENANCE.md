@@ -11,11 +11,11 @@ field names — matches what the contract declares.
 
 ## Why the read contract is not here any more
 
-`tapes-api.yaml` moved to the `tapes-read-contract` crate in the tapes-crates
-repository (PCC-1146), which now owns its provenance and its seal check. Both
-clients that speak the read API build against a published release asset rather
-than the tapes working tree, so one vendored copy serves both — and a re-pin is
-one change in one repository instead of two that nothing compares.
+`tapes-api.yaml` moved to the `tapes-client` crate in the tapes-crates
+repository, which now owns its provenance and its seal check. Both clients that
+speak the read API build against a published release asset rather than the
+tapes working tree, so one vendored copy serves both — and a re-pin is one
+change in one repository instead of two that nothing compares.
 
 The ingest contract stays here because this is its only consumer: no other
 client vendors it, and its one reader is a test in this crate.
