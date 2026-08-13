@@ -16,9 +16,9 @@ pub mod start;
 pub mod transcript;
 
 use clap::{ArgMatches, CommandFactory, FromArgMatches};
+use tapes_client::DirectHttp;
 use url::Url;
 
-use api::client::ApiClient;
 use cassette::Surface;
 use cli::{Cli, Command, PluginCommand, SkillCommand, StartArgs};
 use config::Config;
@@ -192,7 +192,7 @@ async fn discover(raw: Option<&str>) -> Surface {
         tracing::debug!(%raw, "not a URL, so no cassettes were discovered");
         return Surface::default();
     };
-    cassette::cache::load(&ApiClient::new(url)).await
+    cassette::cache::load(&DirectHttp::new(url)).await
 }
 
 /// Dispatch one resolved invocation.

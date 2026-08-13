@@ -31,7 +31,7 @@
 //!   a `cargo build` that must reach a running tapes API to emit its CLI is not
 //!   a build that reproduces.
 //!
-//! It is also the position [`crate::api::client`] already takes for responses —
+//! It is also the position [`crate::api`] already takes for what it prints —
 //! the server owns the shape, and a second hand-maintained copy only drifts.
 //! This module applies the same rule to the request side.
 //!

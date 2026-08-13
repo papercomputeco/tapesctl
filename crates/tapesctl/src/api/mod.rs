@@ -22,25 +22,33 @@
 //! # Output
 //!
 //! Every command prints the server's JSON, pretty-printed, and nothing else. See
-//! [`client`] for why the responses are not re-modelled on the way through: in
-//! short, a partial hand-written model silently eats fields the server grows.
+//! [`client`] for why these particular responses are not decoded through the
+//! shared models on the way through: in short, a model can only carry the
+//! fields the build it shipped in knew about, and these commands exist to show
+//! what the server said.
 //!
 //! # Requests
 //!
-//! The routes in the table above are not hand-built: each command resolves its
-//! operation in the vendored core contract and lets [`contract`] assemble the
-//! request from it. The table names the routes because they are what a reader
-//! greps for, and the contract tests keep the two in agreement.
+//! The routes in the table above are not hand-built, and neither are the
+//! parameters: each command fills in the vendored contract's own `*Params`
+//! struct and resolves the operation by id, so a misspelled parameter is a
+//! compile error rather than a request the server has to refuse.
 
 pub mod client;
 pub mod contract;
 
+use serde_json::Value;
 use snafu::{OptionExt, ResultExt};
+use tapes_client::core::models::params::ContractParams;
+use tapes_client::core::models::{
+    PayloadDetail, SessionListParams, SessionTracesParams, TraceParams,
+};
 use url::Url;
 
 use crate::cli::{ApiArgs, SessionsCommand, SpansCommand, TracesCommand};
 use crate::error::{Result, error};
-use client::{ApiClient, PayloadDetail, SessionListParams};
+use client::{ApiClient, connect, narrow};
+use contract::ops;
 
 /// Resolve the API base URL from arguments and the environment.
 pub fn resolve_client(args: &ApiArgs) -> Result<ApiClient> {
@@ -48,9 +56,22 @@ pub fn resolve_client(args: &ApiArgs) -> Result<ApiClient> {
         .tapes_url
         .as_deref()
         .context(error::MissingTapesUrlSnafu)?;
-    Ok(ApiClient::new(
-        Url::parse(raw).context(error::TapesUrlSnafu)?,
-    ))
+    Ok(connect(Url::parse(raw).context(error::TapesUrlSnafu)?))
+}
+
+/// Resolve `--payload` into the grain the contract declares.
+///
+/// Refused here rather than at the server, which is what makes an unknown
+/// grain cost no round trip — see [`client::parse_grain`].
+fn payload_of(raw: Option<&str>) -> Result<Option<PayloadDetail>> {
+    match raw {
+        Some(raw) => client::parse_grain(raw)
+            .map(Some)
+            .context(error::InvalidPayloadDetailSnafu {
+                payload: raw.to_owned(),
+            }),
+        None => Ok(None),
+    }
 }
 
 /// Print a JSON document the way every read command does.
@@ -65,37 +86,45 @@ pub async fn sessions(command: SessionsCommand) -> Result<()> {
     match command {
         SessionsCommand::List(args) => {
             let client = resolve_client(&args.api)?;
-            let value = client
-                .list_sessions(&SessionListParams {
-                    limit: args.limit,
-                    cursor: args.cursor.as_deref(),
-                    sort: args.sort.as_deref(),
-                    direction: args.direction.as_deref(),
-                    since: args.since.as_deref(),
-                    until: args.until.as_deref(),
-                    auth_subject: args.auth_subject.as_deref(),
-                })
-                .await?;
+            let mut values = SessionListParams {
+                limit: args.limit.map(narrow),
+                cursor: args.cursor,
+                sort: args.sort,
+                since: args.since,
+                until: args.until,
+                auth_subject: args.auth_subject,
+                ..Default::default()
+            }
+            .values();
+            // `--direction` stays a free-text flag rather than becoming the
+            // contract's closed enum, so an unrecognized value is still the
+            // server's 400 in the server's words. Validating it here would be
+            // a better message for a different command than the one that
+            // shipped.
+            if let Some(direction) = args.direction {
+                values.push(("direction", direction));
+            }
+            let value: Value = client.call(ops::LIST_SESSIONS, values).await?;
             print_json(&value)
         }
         SessionsCommand::Get(args) => {
             let client = resolve_client(&args.api)?;
-            let value = client.get_session(&args.id).await?;
+            let value: Value = client.call(ops::GET_SESSION, vec![("id", args.id)]).await?;
             print_json(&value)
         }
         SessionsCommand::Traces(args) => {
             let client = resolve_client(&args.api)?;
-            let payload = args
-                .payload
-                .as_deref()
-                .map(PayloadDetail::parse)
-                .transpose()?;
-            let value = client.get_session_traces(&args.id, payload).await?;
+            let payload = payload_of(args.payload.as_deref())?;
+            let mut values = SessionTracesParams { payload }.values();
+            values.push(("id", args.id));
+            let value: Value = client.call(ops::GET_SESSION_TRACES, values).await?;
             print_json(&value)
         }
         SessionsCommand::RawTurns(args) => {
             let client = resolve_client(&args.api)?;
-            let value = client.list_session_raw_turns(&args.id).await?;
+            let value: Value = client
+                .call(ops::LIST_RAW_TURNS, vec![("id", args.id)])
+                .await?;
             print_json(&value)
         }
     }
@@ -106,17 +135,17 @@ pub async fn traces(command: TracesCommand) -> Result<()> {
     match command {
         TracesCommand::List(args) => {
             let client = resolve_client(&args.api)?;
-            let value = client.list_traces(&args.session_id).await?;
+            let value: Value = client
+                .call(ops::LIST_TRACES, vec![("session_id", args.session_id)])
+                .await?;
             print_json(&value)
         }
         TracesCommand::Get(args) => {
             let client = resolve_client(&args.api)?;
-            let payload = args
-                .payload
-                .as_deref()
-                .map(PayloadDetail::parse)
-                .transpose()?;
-            let value = client.get_trace(&args.trace_id, payload).await?;
+            let payload = payload_of(args.payload.as_deref())?;
+            let mut values = TraceParams { payload }.values();
+            values.push(("trace_id", args.trace_id));
+            let value: Value = client.call(ops::GET_TRACE, values).await?;
             print_json(&value)
         }
     }
@@ -127,24 +156,27 @@ pub async fn spans(command: SpansCommand) -> Result<()> {
     match command {
         SpansCommand::List(args) => {
             let client = resolve_client(&args.api)?;
-            let payload = args
-                .payload
-                .as_deref()
-                .map(PayloadDetail::parse)
-                .transpose()?;
-            let trace = client.get_trace(&args.trace_id, payload).await?;
+            let payload = payload_of(args.payload.as_deref())?;
+            let mut values = TraceParams { payload }.values();
+            values.push(("trace_id", args.trace_id));
+            let trace: Value = client.call(ops::GET_TRACE, values).await?;
             // The trace document nests its spans; a missing key means the server
             // returned a trace with none, which prints as an empty array rather
             // than as an error.
             let spans = trace
                 .get("spans")
                 .cloned()
-                .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
+                .unwrap_or_else(|| Value::Array(Vec::new()));
             print_json(&spans)
         }
         SpansCommand::Get(args) => {
             let client = resolve_client(&args.api)?;
-            let value = client.get_span(&args.trace_id, &args.span_id).await?;
+            let value: Value = client
+                .call(
+                    ops::GET_SPAN,
+                    vec![("trace_id", args.trace_id), ("span_id", args.span_id)],
+                )
+                .await?;
             print_json(&value)
         }
     }

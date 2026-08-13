@@ -39,9 +39,12 @@
 /// consumer: no other client vendors it and nothing at runtime reads it.
 pub const TAPES_INGEST_YAML: &str = include_str!("../../contracts/tapes-ingest.yaml");
 
-// The operation ids, the reduced surface, and the request assembly, re-exported
-// so the call sites in `api::client` read as they did before the extraction.
-pub use tapes_client::core::{CoreSurface, call_for, core, ops};
+// The operation ids and the reduction of the vendored document, re-exported so
+// that a command names an operation through this module — the one that also
+// holds the coverage tables judging that name. Request assembly is not
+// re-exported any more: no call site builds a request by hand since the shared
+// `CoreClient` began doing it.
+pub use tapes_client::core::{core, ops};
 
 /// Every vendored operation the CLI drives, and the surface that drives it.
 ///
@@ -158,6 +161,7 @@ mod tests {
     use super::*;
     use serde_json::Value;
     use std::collections::BTreeSet;
+    use tapes_client::core::call_for;
     use tapes_client::core::coverage;
 
     #[test]

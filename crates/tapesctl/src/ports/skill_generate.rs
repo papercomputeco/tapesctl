@@ -30,11 +30,12 @@
 use std::path::{Path, PathBuf};
 
 use snafu::OptionExt;
+use tapes_client::core::models::SearchSpansParams;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 
-use crate::api::client::ApiClient;
+use crate::api::client::{ApiClient, narrow};
 use crate::api::resolve_client;
 use crate::cli::SkillGenerateArgs;
 use crate::error::{Result, error};
@@ -139,14 +140,14 @@ async fn resolve_sessions(client: &ApiClient, args: &SkillGenerateArgs) -> Resul
         .context(error::NoSessionsNamedSnafu)?;
 
     println!("Searching for {query:?}...");
-    let output = client.search_spans(query, args.search_top).await?;
-    let results = output
-        .get("results")
-        .and_then(serde_json::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let output = client
+        .search_spans(&SearchSpansParams {
+            query: query.to_owned(),
+            top_k: Some(narrow(args.search_top)),
+        })
+        .await?;
 
-    let sessions = session_ids(&results);
+    let sessions = session_ids(&output.results);
     snafu::ensure!(
         !sessions.is_empty(),
         error::NoSearchResultsSnafu {
@@ -367,7 +368,7 @@ mod tests {
     }
 
     fn client_for(server: &MockServer) -> ApiClient {
-        ApiClient::new(Url::parse(&server.uri()).unwrap())
+        crate::api::client::connect(Url::parse(&server.uri()).unwrap())
     }
 
     #[test]

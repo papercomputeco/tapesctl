@@ -14,7 +14,7 @@
 
 use clap::CommandFactory;
 use serde_json::json;
-use tapesctl::api::client::ApiClient;
+use tapes_client::DirectHttp;
 use tapesctl::cassette::{cache, command};
 use tapesctl::cli::Cli;
 use url::Url;
@@ -91,8 +91,11 @@ async fn serve_discovery(server: &MockServer) {
         .await;
 }
 
-fn client(server: &MockServer) -> ApiClient {
-    ApiClient::new(Url::parse(&server.uri()).unwrap())
+/// The transport the cassette surface is fetched over: the same no-redirect
+/// engine the sealed reads use, minus the operation table they need and this
+/// surface discovers.
+fn client(server: &MockServer) -> DirectHttp {
+    DirectHttp::new(Url::parse(&server.uri()).unwrap())
 }
 
 /// The cache is keyed by the *parsed* base URL, which is how `http://host:1` and
@@ -261,7 +264,7 @@ async fn a_server_s_cassettes_become_commands_and_survive_it_going_away() {
     cache::write(&expired);
     drop(server);
 
-    let offline_client = ApiClient::new(Url::parse(&expired.base).unwrap());
+    let offline_client = DirectHttp::new(Url::parse(&expired.base).unwrap());
     let offline = cache::load(&offline_client).await;
     assert_eq!(
         offline.cassettes.len(),

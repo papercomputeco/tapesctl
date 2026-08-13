@@ -15,52 +15,24 @@
 //! `[tools]` lines. Neither is ported: they existed for `deck` and the
 //! structured export, and skill generation used neither.
 
-use serde::Deserialize;
 use serde_json::Value;
 use snafu::ResultExt;
+use tapes_client::core::models::{SpanItem, TraceItem, TraceListResponse, TraceParams};
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use crate::api::client::ApiClient;
+use crate::api::contract::ops;
 use crate::error::{Result, error};
 
-/// One user-visible turn of a session.
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct TurnSummary {
-    /// The trace this turn projects from.
-    #[serde(default)]
-    pub trace_id: String,
-    /// The human's prompt. Empty for a synthetic turn.
-    #[serde(default)]
-    pub user_prompt: String,
-    /// Derive-time preview, the stand-in when span text is unavailable.
-    #[serde(default)]
-    pub response_preview: String,
-    /// Non-empty when the turn is a compaction seam or resume replay.
-    #[serde(default)]
-    pub synthetic: String,
-    /// When the turn started, for the `--since`/`--until` window.
-    #[serde(default, with = "time::serde::rfc3339::option")]
-    pub started_at: Option<OffsetDateTime>,
-}
-
-/// One span of a turn.
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct Span {
-    /// `llm`, `tool`, …
-    #[serde(default)]
-    pub kind: String,
-    /// Tool name, for a `tool` span.
-    #[serde(default)]
-    pub name: String,
-    /// `main` for the conversation spine; offshoots carry other values.
-    #[serde(default)]
-    pub call_kind: String,
-    /// Non-empty on a subagent thread.
-    #[serde(default)]
-    pub thread_id: String,
-    /// Content blocks. Left untyped — see [`blocks_text`].
-    #[serde(default)]
-    pub output: Value,
+/// When a turn started, for the `--since`/`--until` window.
+///
+/// The contract declares its timestamps as strings and the shipped model keeps
+/// them that way, so the parse happens here — where an unreadable one costs a
+/// turn its window rather than costing the command its whole transcript.
+#[must_use]
+fn started_at(turn: &TraceItem) -> Option<OffsetDateTime> {
+    OffsetDateTime::parse(&turn.started_at, &Rfc3339).ok()
 }
 
 /// The `--since`/`--until` window, at turn grain.
@@ -87,16 +59,16 @@ impl TurnFilter {
 /// than any bound: `--since` drops it, `--until` keeps it, which is what the
 /// Go zero-time comparison did.
 #[must_use]
-pub fn filter_turns(turns: Vec<TurnSummary>, filter: &TurnFilter) -> Vec<TurnSummary> {
+pub fn filter_turns(turns: Vec<TraceItem>, filter: &TurnFilter) -> Vec<TraceItem> {
     turns
         .into_iter()
         .filter(|turn| turn.synthetic.is_empty())
-        .filter(|turn| match (filter.since, turn.started_at) {
+        .filter(|turn| match (filter.since, started_at(turn)) {
             (Some(since), Some(at)) => at >= since,
             (Some(_), None) => false,
             (None, _) => true,
         })
-        .filter(|turn| match (filter.until, turn.started_at) {
+        .filter(|turn| match (filter.until, started_at(turn)) {
             (Some(until), Some(at)) => at <= until,
             (Some(_), None) => true,
             (None, _) => true,
@@ -112,8 +84,16 @@ pub async fn session_turns(
     client: &ApiClient,
     session_id: &str,
     filter: &TurnFilter,
-) -> Result<Vec<TurnSummary>> {
-    let document = client.list_traces(session_id).await?;
+) -> Result<Vec<TraceItem>> {
+    // Decoded twice on purpose. `TraceListResponse` is the shipped shape and
+    // carries the items; the tripwire below watches for a key the contract
+    // does NOT declare, which no model can see by construction.
+    let document: Value = client
+        .call(
+            ops::LIST_TRACES,
+            vec![("session_id", session_id.to_owned())],
+        )
+        .await?;
     // `/v1/traces?session_id=` is unpaginated by contract — the handler takes
     // no cursor or limit and returns the session's full turn list. This
     // tripwire turns a future, silently-truncating change of that contract
@@ -128,13 +108,10 @@ pub async fn session_turns(
         }
         .fail();
     }
-    let items = document
-        .get("items")
-        .cloned()
-        .unwrap_or_else(|| Value::Array(Vec::new()));
-    let turns: Vec<TurnSummary> = serde_json::from_value(items).context(error::ApiDecodeSnafu)?;
+    let listing: TraceListResponse =
+        serde_json::from_value(document).context(error::ApiDecodeSnafu)?;
 
-    let turns = filter_turns(turns, filter);
+    let turns = filter_turns(listing.items, filter);
     snafu::ensure!(
         !turns.is_empty(),
         error::NoTurnsInSessionSnafu {
@@ -164,17 +141,16 @@ pub async fn build_session_transcript(
 /// A failure to load the turn's spans is *not* propagated: the derive-time
 /// preview stands in, so one unreachable trace degrades a single line rather
 /// than failing a transcript the rest of which is fine.
-async fn write_turn(client: &ApiClient, out: &mut String, turn: &TurnSummary) {
+async fn write_turn(client: &ApiClient, out: &mut String, turn: &TraceItem) {
     if !turn.user_prompt.is_empty() {
         out.push_str(&format!("[user] {}\n", turn.user_prompt));
     }
 
-    let spans = match client.get_trace(&turn.trace_id, None).await {
-        Ok(document) => document
-            .get("spans")
-            .cloned()
-            .and_then(|spans| serde_json::from_value::<Vec<Span>>(spans).ok())
-            .unwrap_or_default(),
+    let spans = match client
+        .get_trace(&turn.trace_id, &TraceParams::default())
+        .await
+    {
+        Ok(trace) => trace.spans,
         Err(_) => Vec::new(),
     };
 
@@ -186,7 +162,7 @@ async fn write_turn(client: &ApiClient, out: &mut String, turn: &TurnSummary) {
 /// Walk a turn's spans in presentation order, emitting an `[assistant]` line
 /// per conversation-spine span with text and a `[tools]` summary for the tool
 /// calls between them. Reports whether any assistant text was written.
-fn write_spine_responses(out: &mut String, spans: &[Span]) -> bool {
+fn write_spine_responses(out: &mut String, spans: &[SpanItem]) -> bool {
     let mut wrote = false;
     // Insertion-ordered counts: the summary reads in the order the tools were
     // actually called, which a hash map would scramble.
@@ -249,11 +225,8 @@ fn flush_tools(out: &mut String, pending: &mut Vec<(String, usize)>) {
 /// payload shape this client does not recognize contributes nothing rather
 /// than failing the turn.
 #[must_use]
-pub fn blocks_text(output: &Value) -> String {
-    let Some(blocks) = output.as_array() else {
-        return String::new();
-    };
-    blocks
+pub fn blocks_text(output: &[Value]) -> String {
+    output
         .iter()
         .filter_map(|block| block.get("text").and_then(Value::as_str))
         .filter(|text| !text.is_empty())
@@ -275,44 +248,49 @@ mod tests {
         OffsetDateTime::parse(raw, &Rfc3339).unwrap()
     }
 
-    fn turn(trace_id: &str, started_at: Option<&str>) -> TurnSummary {
-        TurnSummary {
-            trace_id: trace_id.to_owned(),
-            started_at: started_at.map(at),
-            ..TurnSummary::default()
-        }
+    /// The shipped response models are `#[non_exhaustive]` — decode them, do
+    /// not construct them — so every fixture below starts as the document a
+    /// server would have sent.
+    fn decode<T: serde::de::DeserializeOwned>(document: Value) -> T {
+        serde_json::from_value(document).unwrap()
     }
 
-    fn span(kind: &str, name: &str, text: &str) -> Span {
-        Span {
-            kind: kind.to_owned(),
-            name: name.to_owned(),
-            call_kind: if kind == "llm" {
-                "main".to_owned()
-            } else {
-                String::new()
-            },
-            thread_id: String::new(),
-            output: if text.is_empty() {
+    fn turn(trace_id: &str, started_at: Option<&str>) -> TraceItem {
+        decode(json!({
+            "trace_id": trace_id,
+            "started_at": started_at.unwrap_or_default(),
+        }))
+    }
+
+    fn span_from(kind: &str, name: &str, text: &str, extra: Value) -> SpanItem {
+        let mut document = json!({
+            "kind": kind,
+            "name": name,
+            "call_kind": if kind == "llm" { "main" } else { "" },
+            "thread_id": "",
+            "output": if text.is_empty() {
                 Value::Null
             } else {
                 json!([{ "type": "text", "text": text }])
             },
+        });
+        if let (Some(object), Some(extra)) = (document.as_object_mut(), extra.as_object()) {
+            for (key, value) in extra {
+                object.insert(key.clone(), value.clone());
+            }
         }
+        decode(document)
+    }
+
+    fn span(kind: &str, name: &str, text: &str) -> SpanItem {
+        span_from(kind, name, text, json!({}))
     }
 
     #[test]
     fn synthetic_turns_are_dropped_because_they_carry_no_user_intent() {
         let turns = vec![
-            TurnSummary {
-                trace_id: "keep".to_owned(),
-                ..TurnSummary::default()
-            },
-            TurnSummary {
-                trace_id: "drop".to_owned(),
-                synthetic: "compaction".to_owned(),
-                ..TurnSummary::default()
-            },
+            decode(json!({"trace_id": "keep"})),
+            decode(json!({"trace_id": "drop", "synthetic": "compaction"})),
         ];
         let kept = filter_turns(turns, &TurnFilter::default());
         assert_eq!(kept.len(), 1);
@@ -373,14 +351,13 @@ mod tests {
         // subagent threads must not reach the extraction prompt.
         let spans = vec![
             span("llm", "", "on the spine"),
-            Span {
-                call_kind: "offshoot".to_owned(),
-                ..span("llm", "", "a permission check")
-            },
-            Span {
-                thread_id: "sub-1".to_owned(),
-                ..span("llm", "", "a subagent")
-            },
+            span_from(
+                "llm",
+                "",
+                "a permission check",
+                json!({"call_kind": "offshoot"}),
+            ),
+            span_from("llm", "", "a subagent", json!({"thread_id": "sub-1"})),
         ];
         let mut out = String::new();
         assert!(write_spine_responses(&mut out, &spans));
@@ -415,10 +392,7 @@ mod tests {
     #[test]
     fn subagent_tool_calls_are_not_counted() {
         let spans = vec![
-            Span {
-                thread_id: "sub-1".to_owned(),
-                ..span("tool", "Read", "")
-            },
+            span_from("tool", "Read", "", json!({"thread_id": "sub-1"})),
             span("llm", "", "text"),
         ];
         let mut out = String::new();
@@ -428,19 +402,23 @@ mod tests {
 
     #[test]
     fn thinking_blocks_are_dropped_but_text_blocks_are_joined() {
-        let output = json!([
-            {"type": "thinking", "thinking": "internal musing"},
-            {"type": "text", "text": "one"},
-            {"type": "text", "text": "two"},
-        ]);
+        let output = vec![
+            json!({"type": "thinking", "thinking": "internal musing"}),
+            json!({"type": "text", "text": "one"}),
+            json!({"type": "text", "text": "two"}),
+        ];
         assert_eq!(blocks_text(&output), "one\ntwo");
     }
 
     #[test]
     fn an_unrecognized_payload_yields_no_text_rather_than_failing() {
-        assert_eq!(blocks_text(&Value::Null), "");
-        assert_eq!(blocks_text(&json!({"not": "an array"})), "");
-        assert_eq!(blocks_text(&json!(["a bare string"])), "");
+        assert_eq!(blocks_text(&[]), "");
+        assert_eq!(blocks_text(&[json!("a bare string")]), "");
+        // A null `output` is the shape a span with no blocks arrives in; the
+        // model defaults it to no blocks rather than failing the decode, so
+        // this path never reaches an unwrap.
+        let span: SpanItem = decode(json!({"kind": "llm", "output": Value::Null}));
+        assert_eq!(blocks_text(&span.output), "");
     }
 
     async fn transcript_server(traces: Value, detail: Value) -> MockServer {
@@ -460,7 +438,7 @@ mod tests {
     }
 
     fn client_for(server: &MockServer) -> ApiClient {
-        ApiClient::new(Url::parse(&server.uri()).unwrap())
+        crate::api::client::connect(Url::parse(&server.uri()).unwrap())
     }
 
     #[tokio::test]
