@@ -12,6 +12,11 @@
 
 CARGO_TEST_FLAGS ?=
 
+# The commit stamped into binaries built through Dagger. Passed explicitly
+# because the Dagger module builds from a source directory with no `.git` in it,
+# so a build cannot work this out for itself the way a local `cargo build` can.
+COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null)
+
 help:	## Print available targets
 	@awk 'BEGIN {FS = ":.*##"; printf "Targets:\n"} /^[a-zA-Z_-]+:.*##/ {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
@@ -77,10 +82,11 @@ test-ci:	## cargo test --workspace via Dagger
 	dagger call test
 
 dist:	## Cross-compile all release targets via Dagger into ./build
-	dagger call build-release export --path ./build
+	dagger call build-release --commit=$(COMMIT) export --path ./build
 
 nightly:	## Build and upload nightly artifacts to the release bucket
 	dagger call nightly \
+		--commit=$(COMMIT) \
 		--endpoint=env://BUCKET_ENDPOINT \
 		--bucket=env://BUCKET_NAME \
 		--access-key-id=env://BUCKET_ACCESS_KEY_ID \
@@ -89,6 +95,7 @@ nightly:	## Build and upload nightly artifacts to the release bucket
 release:	## Build and upload versioned + latest release artifacts to the bucket
 	dagger call release-latest \
 		--version=$(VERSION) \
+		--commit=$(COMMIT) \
 		--endpoint=env://BUCKET_ENDPOINT \
 		--bucket=env://BUCKET_NAME \
 		--access-key-id=env://BUCKET_ACCESS_KEY_ID \

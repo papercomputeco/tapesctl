@@ -50,6 +50,13 @@
             };
             cargoBuildFlags = [ "-p" "tapesctl" ];
 
+            # What the built binary reports for `tapesctl version`. The build
+            # script would otherwise ask git, and `cleanSource` has already
+            # removed the `.git` directory by the time it runs — so without this
+            # a Nix-built tapesctl could not say which commit it came from.
+            # Empty for a dirty tree, where there is no revision to name.
+            TAPESCTL_BUILD_SHA = self.rev or "";
+
             # Workspace tests are exercised in CI (`make test`); keep the package
             # build focused on producing the CLI.
             doCheck = false;

@@ -43,7 +43,35 @@ make dist   # cross-compile all four release targets into ./build
 
 CI additionally cross-compiles for `linux/{amd64,arm64}` and
 `darwin/{amd64,arm64}` and smoke-tests each binary: `tapesctl version` must
-print its canary line, and a bare `tapesctl` must print help and exit `2`.
+print its canary line and the commit it was built from, and a bare `tapesctl`
+must print help and exit `2`.
+
+### What a build calls itself
+
+`tapesctl version` and `tapesctl --version` print the same three fields the
+tapes server prints — version, commit, build date — and the `version` command
+adds the canary after them.
+
+None of it comes from `Cargo.toml`. The workspace version is a placeholder that
+no release bumps, because a release tag is created by tagging a commit that has
+already merged, so the source cannot know it. The build supplies the identity
+instead: a local `cargo build` fills the commit in from git and reports a
+development version.
+
+```
+tapesctl 0.0.0-dev+3f2a1b9
+Sha: 3f2a1b9c0d4e5f60718293a4b5c6d7e8f9012345
+Built at: unknown
+```
+
+The release and nightly workflows pass the rest to the Dagger build, which
+exports `TAPESCTL_RELEASE_TAG`, `TAPESCTL_BUILD_SHA`, and `TAPESCTL_BUILD_DATE`
+into the compile. Any of the three can be set by hand to see what a release
+will print:
+
+```bash
+TAPESCTL_RELEASE_TAG=v9.9.9 cargo build -p tapesctl
+```
 
 ## Layout
 

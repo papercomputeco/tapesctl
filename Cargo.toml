@@ -13,7 +13,23 @@ members = [
 # unlicensed crate — that reason expired with the license above — only against
 # publishing before anyone has decided to.
 [workspace.package]
-version = "0.1.0"
+# A placeholder, on purpose, and not a release number.
+#
+# Releases are cut by tagging a commit that has already merged, so the tag an
+# artifact ships under does not exist when its source is compiled — a version
+# written here could only ever be a guess that nothing checks. It was `0.1.0`
+# for the project's whole life while releases went out as v0.3.0 and v0.4.0,
+# and every binary shipped claimed to be `0.1.0`.
+#
+# What a build reports now is stamped into it by whoever built it: the release
+# tag in a release build, the commit in any build. See `crates/tapesctl/build.rs`
+# and `crates/tapesctl/src/build_info.rs`. `0.0.0` keeps this field from being
+# mistaken for that answer, and a unit test in `build_info` keeps it at `0.0.0`.
+#
+# The one thing that would make this field meaningful again is publishing to
+# crates.io (see `publish` below), where the registry needs a real version. That
+# release would also owe this repository the step that bumps it.
+version = "0.0.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
