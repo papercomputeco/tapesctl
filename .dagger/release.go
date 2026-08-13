@@ -97,7 +97,18 @@ func (t *Tapesctl) ReleaseLatest(
 	// Bucket secret access key.
 	secretAccessKey *dagger.Secret,
 ) (*dagger.Directory, error) {
-	artifacts := t.BuildRelease(ctx, version, commit, buildTimestamp())
+	identity := stampedIdentity{version: version, commit: commit, date: buildTimestamp()}
+	artifacts := t.buildRelease(identity)
+
+	// Before the first upload, and deliberately so. The prefixes below are what
+	// `install.sh` and the documented download URLs read, so a sync is
+	// publication: past this line a binary that cannot name its release is
+	// already the one people get, and refusing to attach it to the GitHub
+	// release afterwards does not take it back. This is the last moment the
+	// artifacts are private.
+	if err := t.assertStampedIdentity(ctx, artifacts, identity); err != nil {
+		return artifacts, fmt.Errorf("refusing to publish release %s: %w", version, err)
+	}
 
 	for _, prefix := range []string{
 		path.Join(artifactPrefix, version),
@@ -155,7 +166,18 @@ func (t *Tapesctl) Nightly(
 	// Bucket secret access key.
 	secretAccessKey *dagger.Secret,
 ) (*dagger.Directory, error) {
-	artifacts := t.BuildRelease(ctx, nightlyVersion, commit, buildTimestamp())
+	identity := stampedIdentity{version: nightlyVersion, commit: commit, date: buildTimestamp()}
+	artifacts := t.buildRelease(identity)
+
+	// Same ordering as ReleaseLatest, for a sharper version of the same reason:
+	// the nightly prefix is a moving target that every nightly overwrites, so
+	// the commit is the whole of what distinguishes tonight's from last
+	// night's. A nightly published unable to name its commit is not a worse
+	// nightly, it is not a nightly.
+	if err := t.assertStampedIdentity(ctx, artifacts, identity); err != nil {
+		return artifacts, fmt.Errorf("refusing to publish this nightly: %w", err)
+	}
+
 	err := t.upload(ctx, &uploadOpts{
 		artifacts:       artifacts,
 		prefix:          path.Join(artifactPrefix, nightlyVersion),

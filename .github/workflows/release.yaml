@@ -26,6 +26,12 @@ jobs:
       # `tapesctl version` with. They have to be passed in: the Dagger module
       # builds from a source directory with no `.git` in it, so nothing inside
       # the build can work out which tag or commit it is compiling.
+      #
+      # This step publishes. `release-latest` syncs to the download prefixes
+      # `install.sh` reads, and it asks the built binary who it is before it
+      # syncs anything — so a build that lost its identity fails here with
+      # nothing uploaded, rather than being caught by a later step that can no
+      # longer take it back.
       - name: Build and upload release artifacts
         run: |
           dagger call \
@@ -45,15 +51,18 @@ jobs:
           BUCKET_SECRET_ACCESS_KEY: ${{ secrets.BUCKET_SECRET_ACCESS_KEY }}
           DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
 
-      # The stamping is only worth having if it is checked, and this is the one
-      # place with both the expected answer and an artifact to ask. It runs
-      # before the artifacts reach the GitHub release, so a build that lost its
-      # identity is not published under a tag it does not know about.
+      # A second opinion, not the gate. The gate is inside the pipeline above,
+      # which is the only place the artifacts are still private; by the time
+      # this runs they are already on the download host. What it adds is a
+      # check written a different way — reading the exported files, through the
+      # `version` command rather than the flag — over the same artifacts the
+      # step below attaches to the GitHub release. If it ever disagrees with
+      # the pipeline, the export is what is wrong.
       #
       # The Linux amd64 binary is the one this runner can execute; the four are
       # produced by one build with one set of variables, so it stands for all
       # of them.
-      - name: Released binaries report the tag they were released under
+      - name: Exported binaries still report the tag they were released under
         env:
           TAG: ${{ github.event.release.tag_name }}
           COMMIT: ${{ github.sha }}

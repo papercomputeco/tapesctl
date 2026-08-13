@@ -67,6 +67,11 @@ jobs:
       # supplies, so the commit is the whole of the artifact's identity. It has
       # to be passed in because the Dagger module builds from a source directory
       # with no `.git` in it.
+      #
+      # This step publishes: `nightly` syncs to the download prefix advertised
+      # in the release body below, and asks the built binary who it is before
+      # it syncs anything, so a nightly that cannot name its commit fails here
+      # with nothing uploaded.
       - name: Build and upload nightly artifacts
         run: |
           dagger call \
@@ -85,10 +90,12 @@ jobs:
           BUCKET_SECRET_ACCESS_KEY: ${{ secrets.BUCKET_SECRET_ACCESS_KEY }}
           DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
 
-      # Checked before publishing, for the reason given in release.yaml: a
-      # nightly that cannot name its commit is indistinguishable from every
-      # other nightly, which is the whole of what a nightly has to offer.
-      - name: Nightly binaries report the commit they were built from
+      # A second opinion over the exported files, as in release.yaml: the gate
+      # is the pipeline's, this covers the GitHub release built from the export
+      # below. Worth the second on a nightly in particular — a nightly that
+      # cannot name its commit is indistinguishable from every other nightly,
+      # which is the whole of what a nightly has to offer.
+      - name: Exported binaries still report the commit they were built from
         env:
           COMMIT: ${{ github.sha }}
         run: |
