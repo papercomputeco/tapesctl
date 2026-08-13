@@ -13,21 +13,28 @@
 
 use tokio::io::AsyncWriteExt;
 
-use crate::api::client::ExportDetail;
+use snafu::{OptionExt, ResultExt};
+use tapes_client::core::models::ExportSessionParams;
+
+use crate::api::client::parse_grain;
 use crate::api::resolve_client;
 use crate::cli::ExportArgs;
 use crate::error::{Result, error};
-use snafu::ResultExt;
 
 /// Run one export.
 pub async fn run(args: ExportArgs) -> Result<()> {
     let client = resolve_client(&args.api)?;
-    let detail = args
-        .detail
-        .as_deref()
-        .map(ExportDetail::parse)
-        .transpose()?;
-    let response = client.export_session(&args.session_id, detail).await?;
+    let detail = match args.detail.as_deref() {
+        Some(raw) => parse_grain(raw)
+            .map(Some)
+            .context(error::InvalidExportDetailSnafu {
+                detail: raw.to_owned(),
+            })?,
+        None => None,
+    };
+    let response = client
+        .export_session(&args.session_id, &ExportSessionParams { detail })
+        .await?;
 
     match args.output.as_deref() {
         Some(path) => {

@@ -13,29 +13,43 @@
 //! Seeding writes to the server's single-tenant org. It is an admin route, not
 //! something to point at a populated deployment.
 
+use tapes_client::core::models::SeedResult;
+
+use crate::api::contract::ops;
 use crate::api::resolve_client;
 use crate::cli::SeedArgs;
 use crate::error::Result;
 
+/// The whole request.
+///
+/// The contract's body carries one optional field, `overwrite`, and the only
+/// value it ever accepted for it is now rejected — so this posts the empty
+/// object rather than `SeedDemoRequest::default()`, whose `overwrite: false`
+/// would be a property this command has never sent. The response is decoded
+/// through the shipped model either way.
+const EMPTY_BODY: &str = "{}";
+
 /// Run one seed.
 pub async fn run(args: SeedArgs) -> Result<()> {
     let client = resolve_client(&args.api)?;
-    let result = client.seed_demo().await?;
-    println!("{}", render(&result, client.base().as_str()));
+    let result: SeedResult = client
+        .call_with_body(ops::SEED_DEMO, Vec::new(), Some(EMPTY_BODY.to_owned()))
+        .await?;
+    println!("{}", render(&result, client.transport().base().as_str()),);
     Ok(())
 }
 
 /// One human line from the server's seed result.
 ///
-/// Every count is read defensively: the server owns this shape, and a summary
-/// line is not worth failing a successful seed over.
+/// A count the server trimmed reads as zero rather than failing the summary:
+/// the model defaults an absent field, which is the same defensiveness this
+/// line used to spell out key by key.
 #[must_use]
-pub fn render(result: &serde_json::Value, target: &str) -> String {
-    let count = |key: &str| result.get(key).and_then(serde_json::Value::as_i64);
-    let sessions = count("sessions").unwrap_or_default();
-    let raw_turns = count("raw_turns").unwrap_or_default();
-    let inserted = count("raw_turns_inserted").unwrap_or_default();
-    let deduped = count("raw_turns_deduped").unwrap_or_default();
+pub fn render(result: &SeedResult, target: &str) -> String {
+    let sessions = result.sessions;
+    let raw_turns = result.raw_turns;
+    let inserted = result.raw_turns_inserted;
+    let deduped = result.raw_turns_deduped;
     format!(
         "tapesctl: seeded {sessions} session(s) ({raw_turns} raw turns: {inserted} inserted, \
          {deduped} deduped) into {target}",
@@ -51,15 +65,20 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    /// Decoded rather than constructed: `SeedResult` is `#[non_exhaustive]`.
+    fn result(document: serde_json::Value) -> SeedResult {
+        serde_json::from_value(document).unwrap()
+    }
+
     #[test]
     fn the_summary_reports_every_count_the_server_returned() {
         let rendered = render(
-            &json!({
+            &result(json!({
                 "sessions": 3,
                 "raw_turns": 12,
                 "raw_turns_inserted": 10,
                 "raw_turns_deduped": 2,
-            }),
+            })),
             "http://127.0.0.1:8081/",
         );
         assert!(rendered.contains("3 session(s)"), "got: {rendered}");
@@ -71,7 +90,7 @@ mod tests {
     fn a_response_missing_a_count_still_renders() {
         // The summary is a courtesy; a server that trims a field must not turn a
         // successful seed into a failure.
-        let rendered = render(&json!({"sessions": 1}), "http://x/");
+        let rendered = render(&result(json!({"sessions": 1})), "http://x/");
         assert!(rendered.contains("1 session(s)"), "got: {rendered}");
         assert!(rendered.contains("0 inserted"), "got: {rendered}");
     }

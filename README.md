@@ -342,10 +342,14 @@ publish to `download.tapes.dev` via the `release` / `nightly` Dagger functions.
   - `machine.rs` — the crate's one ambient read of the environment.
   - `ports/` — search, skills, and seed.
 
-Shared client-side harness knowledge — launch recipes, session attribution,
-transcript discovery, and the capture envelope — lives in its own repository,
+Shared client-side code — launch recipes, session attribution, transcript
+discovery, the capture envelope, and the tapes read client itself (its
+vendored contract, its response models, and the transport they travel over) —
+lives in its own repository,
 [`tapes-crates`](https://github.com/papercomputeco/tapes-crates), and is
-consumed here as a pinned dependency.
+consumed here as a pinned dependency. What stays in `api/` is what is a
+command line's rather than a client's: which operations this CLI exposes, and
+how their answers are printed.
 
 ## Contributing
 

@@ -8,16 +8,17 @@
 //! base-URL key — so a cache file written before the machinery moved out
 //! resolves byte-identically after it.
 //!
-//! Discovery and spec fetches go through [`ApiClient`], which implements the
-//! crate's `SpecTransport` on top of the vendored core contract — the same
-//! requests the in-tree cache made.
+//! Discovery and spec fetches go through the shared transport, adapted onto
+//! the cache's narrow seam by [`tapes_client::Wire`]. That adapter is why
+//! there is no fetching code here: the requests, the `If-None-Match`
+//! revalidation, and the failure mapping are the same ones every consumer of
+//! the crate makes.
 
 use std::time::Duration;
 
-use tapes_client::CacheConfig;
 pub use tapes_client::cassettes::cache::{Cached, CachedSpec};
+use tapes_client::{CacheConfig, DirectHttp, Wire};
 
-use crate::api::client::ApiClient;
 use crate::cassette::spec::{self, Surface};
 
 /// How long a cached surface is used without asking the server about it.
@@ -57,7 +58,12 @@ pub fn write(cached: &Cached) {
 ///
 /// Never fails. See [`tapes_client::cassettes::cache`] for the degradation
 /// ladder.
-pub async fn load(client: &ApiClient) -> Surface {
-    let base = client.base().to_string();
-    tapes_client::cassettes::cache::load(client, &config(&base), &spec::REDUCER).await
+pub async fn load(transport: &DirectHttp) -> Surface {
+    let base = transport.base().to_string();
+    tapes_client::cassettes::cache::load(
+        &Wire::new(transport.clone()),
+        &config(&base),
+        &spec::REDUCER,
+    )
+    .await
 }

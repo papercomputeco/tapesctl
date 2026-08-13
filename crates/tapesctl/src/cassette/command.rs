@@ -12,10 +12,10 @@ use clap::{Arg, ArgAction, ArgMatches, Command};
 use snafu::{OptionExt, ResultExt};
 use url::Url;
 
-use crate::api::client::ApiClient;
 use crate::api::print_json;
 use crate::cassette::spec::Surface;
 use crate::error::{Result, error};
+use tapes_client::DirectHttp;
 use tapes_client::cli::resolve_invocation;
 
 /// The flag every generated method carries, mirroring [`crate::cli::ApiArgs`].
@@ -204,9 +204,11 @@ pub async fn dispatch(surface: &Surface, name: &str, matches: &ArgMatches) -> Re
         .subcommand()
         .and_then(|(_, method_matches)| method_matches.get_one::<String>(crate::cli::TAPES_URL_ARG))
         .context(error::MissingTapesUrlSnafu)?;
-    let client = ApiClient::new(Url::parse(raw).context(error::TapesUrlSnafu)?);
+    let transport = DirectHttp::new(Url::parse(raw).context(error::TapesUrlSnafu)?);
 
-    let value = client.call(&call).await?;
+    // A discovered call goes over the same transport a sealed one does — the
+    // only difference is where the operation table came from.
+    let value = transport.execute(&call).await?;
     print_json(&value)
 }
 

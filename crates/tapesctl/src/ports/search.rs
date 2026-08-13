@@ -14,11 +14,12 @@
 //! printed plain. And the command reported a result count to product
 //! telemetry, which tapesctl does not have.
 
-use serde_json::Value;
+use tapes_client::core::models::{SearchSpansParams, SpanSearchResult};
 use time::OffsetDateTime;
 use time::UtcOffset;
 use time::format_description::well_known::Rfc3339;
 
+use crate::api::client::narrow;
 use crate::api::resolve_client;
 use crate::cli::SearchArgs;
 use crate::error::Result;
@@ -32,15 +33,17 @@ const SNIPPET_WIDTH: usize = 100;
 /// Run one search.
 pub async fn run(args: SearchArgs) -> Result<()> {
     let client = resolve_client(&args.api)?;
-    let output = client.search_spans(&args.query, args.top).await?;
+    let output = client
+        .search_spans(&SearchSpansParams {
+            query: args.query.clone(),
+            // Always sent, unlike a listing's omit-when-unset rule: the flag
+            // carries the default, so this client always has a value, and one
+            // request spelling is better than two.
+            top_k: Some(narrow(args.top)),
+        })
+        .await?;
 
-    let results = output
-        .get("results")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-
-    if results.is_empty() {
+    if output.results.is_empty() {
         if !args.quiet {
             println!("No results found.");
         }
@@ -48,18 +51,21 @@ pub async fn run(args: SearchArgs) -> Result<()> {
     }
 
     if args.quiet {
-        for session_id in session_ids(&results) {
+        for session_id in session_ids(&output.results) {
             println!("{session_id}");
         }
         return Ok(());
     }
 
-    let echoed = output
-        .get("query")
-        .and_then(Value::as_str)
-        .unwrap_or(&args.query);
+    // The server echoes the query it ran; a response without one falls back to
+    // what was asked rather than printing an empty pair of quotes.
+    let echoed = if output.query.is_empty() {
+        &args.query
+    } else {
+        &output.query
+    };
     println!("\nSpan Search Results for: {echoed:?}\n");
-    for (index, hit) in results.iter().enumerate() {
+    for (index, hit) in output.results.iter().enumerate() {
         print_hit(index + 1, hit);
     }
     Ok(())
@@ -70,35 +76,30 @@ pub async fn run(args: SearchArgs) -> Result<()> {
 /// Order is the server's — the response is already ranked — so the first
 /// occurrence of each session wins and the highest-scoring session is first.
 #[must_use]
-pub fn session_ids(results: &[Value]) -> Vec<String> {
+pub fn session_ids(results: &[SpanSearchResult]) -> Vec<String> {
     let mut seen: Vec<String> = Vec::new();
     for hit in results {
-        let Some(id) = hit.get("session_id").and_then(Value::as_str) else {
-            continue;
-        };
+        let id = &hit.session_id;
         if id.is_empty() || seen.iter().any(|known| known == id) {
             continue;
         }
-        seen.push(id.to_owned());
+        seen.push(id.clone());
     }
     seen
 }
 
 /// Render one hit.
-fn print_hit(rank: usize, hit: &Value) {
-    let text = |key: &str| hit.get(key).and_then(Value::as_str).unwrap_or_default();
-    let score = hit.get("score").and_then(Value::as_f64).unwrap_or_default();
-
+fn print_hit(rank: usize, hit: &SpanSearchResult) {
+    let score = hit.score;
     println!(
         "  #{rank}  score: {score:.4}  {}/{}",
-        text("trace_id"),
-        text("span_id"),
+        hit.trace_id, hit.span_id,
     );
 
     // An empty prompt is a synthetic turn, not a missing field — the server
     // sends `user_prompt` even when it is blank, precisely so this case is
     // distinguishable.
-    let prompt = text("user_prompt").replace('\n', " ");
+    let prompt = hit.user_prompt.replace('\n', " ");
     let prompt = if prompt.is_empty() {
         "(synthetic turn)".to_owned()
     } else {
@@ -106,15 +107,14 @@ fn print_hit(rank: usize, hit: &Value) {
     };
     println!("  turn: {prompt}");
 
-    let snippet = text("snippet").replace('\n', " ");
+    let snippet = hit.snippet.replace('\n', " ");
     if !snippet.is_empty() {
         println!("   ├─ {}", elide(&snippet, SNIPPET_WIDTH));
     }
 
-    let mut meta = format_started_at(text("started_at"));
-    let session_id = text("session_id");
-    if !session_id.is_empty() {
-        meta.push_str(&format!("  session {session_id}"));
+    let mut meta = format_started_at(&hit.started_at);
+    if !hit.session_id.is_empty() {
+        meta.push_str(&format!("  session {}", hit.session_id));
     }
     println!("  {meta}\n");
 }
@@ -161,7 +161,7 @@ fn format_started_at(raw: &str) -> String {
 mod tests {
     use super::*;
     use crate::cli::ApiArgs;
-    use serde_json::json;
+    use serde_json::{Value, json};
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -179,14 +179,18 @@ mod tests {
     #[test]
     fn quiet_output_is_deduplicated_in_score_order() {
         // This is the pipe contract `skill generate` consumes.
-        let results = vec![
-            json!({"session_id": "s-a"}),
-            json!({"session_id": "s-b"}),
-            json!({"session_id": "s-a"}),
-            json!({"session_id": ""}),
-            json!({"trace_id": "no session at all"}),
-            json!({"session_id": "s-c"}),
-        ];
+        // Decoded rather than constructed: a response model is
+        // `#[non_exhaustive]`, which is the shipped shape saying the server
+        // owns it.
+        let results: Vec<SpanSearchResult> = serde_json::from_value(json!([
+            {"session_id": "s-a"},
+            {"session_id": "s-b"},
+            {"session_id": "s-a"},
+            {"session_id": ""},
+            {"trace_id": "no session at all"},
+            {"session_id": "s-c"},
+        ]))
+        .unwrap();
         assert_eq!(session_ids(&results), vec!["s-a", "s-b", "s-c"]);
     }
 

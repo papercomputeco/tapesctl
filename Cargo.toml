@@ -50,7 +50,7 @@ repository = "https://github.com/papercomputeco/tapesctl"
 # being the same type another accepted — a type error whose message names two
 # identical-looking types.
 #
-tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-crates", rev = "8301c90a61ab5308e72b969e110cee95b15fa0d8" }
+tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-crates", rev = "b81abe24b5622c97fcd4f421401c577b106934b3" }
 
 # The harness-agnostic half of capture — the X-Tapes-* envelope, the
 # capture-gateway environment contract, and the peer-trust ancestry check — in
@@ -59,7 +59,7 @@ tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-crates", rev 
 # and reaching them through the harness registry would say they were harness
 # knowledge. Same repository, same rev as the crates above, for the reasons
 # given there.
-tapes-capture = { git = "https://github.com/papercomputeco/tapes-crates", rev = "8301c90a61ab5308e72b969e110cee95b15fa0d8" }
+tapes-capture = { git = "https://github.com/papercomputeco/tapes-crates", rev = "b81abe24b5622c97fcd4f421401c577b106934b3" }
 
 # One client for the whole tapes read surface: the vendored `tapes-api.yaml`
 # with its provenance and seal check, the reduction of any OpenAPI document
@@ -89,7 +89,7 @@ tapes-capture = { git = "https://github.com/papercomputeco/tapes-crates", rev = 
 #
 # Same repository, same rev, same URL as the crates above, for the reasons
 # given there.
-tapes-client = { git = "https://github.com/papercomputeco/tapes-crates", rev = "8301c90a61ab5308e72b969e110cee95b15fa0d8", features = [
+tapes-client = { git = "https://github.com/papercomputeco/tapes-crates", rev = "b81abe24b5622c97fcd4f421401c577b106934b3", features = [
   "cli",
   "direct-http",
 ] }
