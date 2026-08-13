@@ -2,6 +2,7 @@
 //! dispatch is unit-testable without spawning the binary.
 
 pub mod api;
+pub mod build_info;
 pub mod capture;
 pub mod cassette;
 pub mod cli;
@@ -35,15 +36,18 @@ pub use error::{Error, Result};
 /// being asked to be all along.
 const CANARY: &str = "All in all, just another tape in the stereo";
 
-/// The build version, stamped by cargo.
-pub fn version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
-}
+/// This build's version, stamped at build time. See [`build_info`] for what
+/// stamps it and why the manifest does not.
+pub use build_info::version;
 
 /// What `tapesctl version` prints: the build identity, then the canary.
+///
+/// The identity is the same block `--version` prints, verbatim, so the two ways
+/// of asking cannot answer differently. The canary stays last: the release
+/// smoke test reads it with `tail -n 1`.
 #[must_use]
 pub fn banner() -> String {
-    format!("tapesctl {}\n{CANARY}", version())
+    format!("tapesctl {}\n{CANARY}", build_info::long_version())
 }
 
 /// What one command line resolved to.

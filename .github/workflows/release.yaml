@@ -22,11 +22,16 @@ jobs:
         with:
           version: ${{ env.DAGGER_VERSION }}
 
+      # `--version` and `--commit` are what a released binary answers
+      # `tapesctl version` with. They have to be passed in: the Dagger module
+      # builds from a source directory with no `.git` in it, so nothing inside
+      # the build can work out which tag or commit it is compiling.
       - name: Build and upload release artifacts
         run: |
           dagger call \
             release-latest \
               --version="${{ github.event.release.tag_name }}" \
+              --commit="${{ github.sha }}" \
               --endpoint=env://BUCKET_ENDPOINT \
               --bucket=env://BUCKET_NAME \
               --access-key-id=env://BUCKET_ACCESS_KEY_ID \
@@ -39,6 +44,24 @@ jobs:
           BUCKET_ACCESS_KEY_ID: ${{ secrets.BUCKET_ACCESS_KEY_ID }}
           BUCKET_SECRET_ACCESS_KEY: ${{ secrets.BUCKET_SECRET_ACCESS_KEY }}
           DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
+
+      # The stamping is only worth having if it is checked, and this is the one
+      # place with both the expected answer and an artifact to ask. It runs
+      # before the artifacts reach the GitHub release, so a build that lost its
+      # identity is not published under a tag it does not know about.
+      #
+      # The Linux amd64 binary is the one this runner can execute; the four are
+      # produced by one build with one set of variables, so it stands for all
+      # of them.
+      - name: Released binaries report the tag they were released under
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          chmod +x ./build/linux/amd64/tapesctl
+          ./build/linux/amd64/tapesctl version | tee version.txt
+          grep -qx "tapesctl ${TAG}+${COMMIT:0:7}" version.txt
+          grep -qx "Sha: ${COMMIT}" version.txt
 
       - name: Upload install script
         run: |

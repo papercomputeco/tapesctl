@@ -16,7 +16,10 @@ use clap::{Args, Parser, Subcommand};
 #[derive(Debug, Parser)]
 #[command(
     name = "tapesctl",
-    version,
+    // Not clap's bare `version`, which would print the manifest's placeholder.
+    // This is the stamped identity — the same block `tapesctl version` prints
+    // above its canary, so the flag and the command agree by construction.
+    version = crate::build_info::long_version(),
     about = "The Tapes client CLI",
     subcommand_required = true,
     arg_required_else_help = true

@@ -23,12 +23,74 @@ var releaseTargets = []buildTarget{
 	{"aarch64-apple-darwin", "darwin", "arm64"},
 }
 
+// stampedIdentity is the build identity tapesctl reports as its version. The
+// crate's build script reads these three variables; see
+// crates/tapesctl/build.rs. Anything left empty is not injected at all, and the
+// binary reports a development version for that field — which is the honest
+// answer for a build no release pipeline cut.
+type stampedIdentity struct {
+	// Release tag or channel name, for example v1.0.0 or nightly.
+	version string
+	// Full commit the artifact is built from.
+	commit string
+	// RFC 3339 build timestamp.
+	date string
+}
+
+// stamp injects the identity into a build container.
+//
+// The order is fixed rather than map iteration order, because each
+// WithEnvVariable is a layer: a varying order would give the same build a
+// different digest every call and defeat the cache.
+func (id stampedIdentity) stamp(container *dagger.Container) *dagger.Container {
+	for _, variable := range []struct{ name, value string }{
+		{"TAPESCTL_RELEASE_TAG", id.version},
+		{"TAPESCTL_BUILD_SHA", id.commit},
+		{"TAPESCTL_BUILD_DATE", id.date},
+	} {
+		if variable.value == "" {
+			continue
+		}
+		container = container.WithEnvVariable(variable.name, variable.value)
+	}
+
+	return container
+}
+
 // Build cross-compiles the tapesctl binary for all supported platforms using
 // cargo-zigbuild. Linux targets are static musl builds (curl-and-run, like the
 // old CGO_ENABLED=0 Go binaries); macOS targets link against zig's bundled
 // libSystem stubs — no Apple SDK required.
-func (t *Tapesctl) Build(_ context.Context) *dagger.Directory {
-	base := t.rustContainer()
+//
+// The identity arguments are what make a released binary able to name itself.
+// They are optional because this function also serves plain CI builds, which
+// have no release to name: the source arrives here without a .git directory
+// (see the module's +ignore), so an unstamped build genuinely knows nothing
+// about its own provenance and says so rather than guessing.
+func (t *Tapesctl) Build(
+	_ context.Context,
+
+	// Release tag or channel name to stamp into the binaries, for example
+	// v1.0.0 or nightly.
+	//
+	// +optional
+	// +default=""
+	version string,
+
+	// Full commit the binaries are built from.
+	//
+	// +optional
+	// +default=""
+	commit string,
+
+	// RFC 3339 timestamp of the build.
+	//
+	// +optional
+	// +default=""
+	date string,
+) *dagger.Directory {
+	identity := stampedIdentity{version: version, commit: commit, date: date}
+	base := identity.stamp(t.rustContainer())
 	outputs := dag.Directory()
 
 	for _, target := range releaseTargets {
@@ -48,8 +110,29 @@ func (t *Tapesctl) Build(_ context.Context) *dagger.Directory {
 }
 
 // BuildRelease compiles release binaries and adds SHA256 checksums.
-func (t *Tapesctl) BuildRelease(ctx context.Context) *dagger.Directory {
-	return t.checksum(t.Build(ctx))
+func (t *Tapesctl) BuildRelease(
+	ctx context.Context,
+
+	// Release tag or channel name to stamp into the binaries, for example
+	// v1.0.0 or nightly.
+	//
+	// +optional
+	// +default=""
+	version string,
+
+	// Full commit the binaries are built from.
+	//
+	// +optional
+	// +default=""
+	commit string,
+
+	// RFC 3339 timestamp of the build.
+	//
+	// +optional
+	// +default=""
+	date string,
+) *dagger.Directory {
+	return t.checksum(t.Build(ctx, version, commit, date))
 }
 
 // checksum generates a SHA256 sidecar for every artifact.

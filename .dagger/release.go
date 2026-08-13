@@ -4,11 +4,25 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"time"
 
 	"dagger/tapesctl/internal/dagger"
 )
 
 const artifactPrefix = "tapesctl"
+
+// nightlyVersion is the name a nightly artifact reports as its version. It is
+// also the git tag the nightly workflow moves to the built commit, so the name
+// resolves to something. On its own it identifies no particular build, which is
+// why the commit is stamped alongside it and ends up in the version string.
+const nightlyVersion = "nightly"
+
+// buildTimestamp is the `Built at:` field of every artifact this file produces.
+// Taken once per invocation so the four cross-compiled binaries of one release
+// agree on when they were built.
+func buildTimestamp() string {
+	return time.Now().UTC().Format(time.RFC3339)
+}
 
 type uploadOpts struct {
 	artifacts       *dagger.Directory
@@ -56,8 +70,20 @@ func (t *Tapesctl) upload(ctx context.Context, opts *uploadOpts) error {
 func (t *Tapesctl) ReleaseLatest(
 	ctx context.Context,
 
-	// Version string, for example v1.0.0.
+	// Version string, for example v1.0.0. Names the upload prefix and is
+	// stamped into the binaries, so a released tapesctl reports the release it
+	// was downloaded from.
+	//
+	// Written without backquotes on purpose: the help renderer takes a
+	// backquoted word as the flag's placeholder, so a quoted command name here
+	// would be printed where the argument's type belongs.
 	version string,
+
+	// Full commit the release is built from.
+	//
+	// +optional
+	// +default=""
+	commit string,
 
 	// Bucket endpoint URL.
 	endpoint *dagger.Secret,
@@ -71,7 +97,7 @@ func (t *Tapesctl) ReleaseLatest(
 	// Bucket secret access key.
 	secretAccessKey *dagger.Secret,
 ) (*dagger.Directory, error) {
-	artifacts := t.BuildRelease(ctx)
+	artifacts := t.BuildRelease(ctx, version, commit, buildTimestamp())
 
 	for _, prefix := range []string{
 		path.Join(artifactPrefix, version),
@@ -110,6 +136,13 @@ func (t *Tapesctl) ReleaseLatest(
 func (t *Tapesctl) Nightly(
 	ctx context.Context,
 
+	// Full commit the nightly is built from. It is what distinguishes one
+	// nightly from the next, since they all carry the same version name.
+	//
+	// +optional
+	// +default=""
+	commit string,
+
 	// Bucket endpoint URL.
 	endpoint *dagger.Secret,
 
@@ -122,10 +155,10 @@ func (t *Tapesctl) Nightly(
 	// Bucket secret access key.
 	secretAccessKey *dagger.Secret,
 ) (*dagger.Directory, error) {
-	artifacts := t.BuildRelease(ctx)
+	artifacts := t.BuildRelease(ctx, nightlyVersion, commit, buildTimestamp())
 	err := t.upload(ctx, &uploadOpts{
 		artifacts:       artifacts,
-		prefix:          path.Join(artifactPrefix, "nightly"),
+		prefix:          path.Join(artifactPrefix, nightlyVersion),
 		endpoint:        endpoint,
 		bucket:          bucket,
 		accessKeyID:     accessKeyID,

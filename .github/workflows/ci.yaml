@@ -139,13 +139,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # `--commit` and no `--version`: this is not a release, so the binaries
+      # report a development version — but they still say which commit produced
+      # them, which is what makes a downloaded CI artifact identifiable. The
+      # commit has to be passed in because the Dagger module builds from a
+      # source directory with no `.git` in it.
       - name: Cross-compile all targets via Dagger
         uses: dagger/dagger-for-github@v8.2.0
         env:
           DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
         with:
           verb: call
-          args: build export --path=./build
+          args: build --commit=${{ github.sha }} export --path=./build
           version: ${{ env.DAGGER_VERSION }}
 
       - name: Upload darwin arm64 binary
@@ -229,3 +234,26 @@ jobs:
           set -e
           test "$bare_status" -eq 2
           grep -q '^Usage: tapesctl' bare.txt
+
+      # Every binary this project ships used to report the workspace manifest's
+      # version, which no release has ever bumped, so `--version` answered
+      # `0.1.0` from the first build to the latest release. This asserts the
+      # replacement on the artifact rather than in a unit test: the identity is
+      # injected by the build pipeline, so only something holding a built binary
+      # can tell whether the injection actually arrived.
+      #
+      # A CI build is stamped with the commit and no release tag, so the version
+      # is the development one — the release tag is asserted in release.yaml,
+      # against a released binary.
+      - name: Version reports the commit the binary was built from
+        env:
+          COMMIT: ${{ github.sha }}
+        run: |
+          ./bin/tapesctl version | tee version.txt
+          grep -qx "tapesctl 0.0.0-dev+${COMMIT:0:7}" version.txt
+          grep -qx "Sha: ${COMMIT}" version.txt
+          # `--version` and the `version` command are two ways of asking one
+          # question, and they print the same block: the command adds only the
+          # canary, so dropping it leaves exactly the flag's output.
+          ./bin/tapesctl --version > flag.txt
+          sed '$d' version.txt | diff - flag.txt

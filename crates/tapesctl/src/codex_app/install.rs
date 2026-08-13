@@ -68,7 +68,14 @@ use crate::machine::Machine;
 /// invalidates the app's cached copy of the plugin: Codex keys its cache on
 /// the manifest version, so an unchanged number means an unchanged plugin even
 /// when the hook command line moved.
-const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
+///
+/// That is precisely what it could not do while this read the manifest, which
+/// no release has ever bumped — a constant here meant every tapesctl that ever
+/// installed the plugin claimed the same plugin version. The stamped version
+/// moves with every release, nightly, and local build.
+fn plugin_version() -> &'static str {
+    crate::version()
+}
 
 /// The hint Codex prints when the API key is missing, in API-key mode.
 const ENV_KEY_INSTRUCTIONS: &str =
@@ -187,7 +194,7 @@ fn hook_command(executable: &Path, handoff: &Path, harness_id: &str) -> String {
 
 /// The identity Codex shows the user when asking them to trust these hooks.
 fn identity() -> HookPluginIdentity<'static> {
-    HookPluginIdentity::new(PLUGIN_NAME, PLUGIN_VERSION)
+    HookPluginIdentity::new(PLUGIN_NAME, plugin_version())
         .with_description("Reports Codex lifecycle metadata to a local tapesctl capture proxy.")
         .with_display_name("tapesctl capture")
         .with_short_description("Capture this app's sessions with tapesctl.")
@@ -857,7 +864,7 @@ mod tests {
         assert!(!rendered.contains("__TAPES_"), "got: {rendered}");
         let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
         assert_eq!(parsed["name"], PLUGIN_NAME);
-        assert_eq!(parsed["version"], PLUGIN_VERSION);
+        assert_eq!(parsed["version"], plugin_version());
     }
 
     /// The hooks file has to subscribe the command to exactly the boundaries
