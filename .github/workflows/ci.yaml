@@ -22,9 +22,6 @@ on:
 permissions:
   contents: read
 
-env:
-  DAGGER_VERSION: "0.21.8"
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -38,18 +35,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Dagger
-        uses: dagger/dagger-for-github@v8.4.1
-        with:
-          version: ${{ env.DAGGER_VERSION }}
+      - name: Install Nix
+        uses: DeterminateSystems/determinate-nix-action@d96678350ffd6a456235832eb11e1c491589b7bb # v3.21.8
+
+      - name: Cache Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
 
       - name: Lint (cargo fmt --check + clippy)
-        run: dagger call lint
+        run: nix develop --command dagger call lint
         env:
           DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
 
       - name: Test (cargo test --workspace)
-        run: dagger call test
+        run: nix develop --command dagger call test
         env:
           DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
 
@@ -139,14 +137,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # `--commit` and no `--version`: this is not a release, so the binaries
+      # report a development version — but they still say which commit produced
+      # them, which is what makes a downloaded CI artifact identifiable. The
+      # commit has to be passed in because the Dagger module builds from a
+      # source directory with no `.git` in it.
+      - name: Install Nix
+        uses: DeterminateSystems/determinate-nix-action@d96678350ffd6a456235832eb11e1c491589b7bb # v3.21.8
+
+      - name: Cache Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+
       - name: Cross-compile all targets via Dagger
-        uses: dagger/dagger-for-github@v8.4.1
         env:
           DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
-        with:
-          verb: call
-          args: build export --path=./build
-          version: ${{ env.DAGGER_VERSION }}
+        run: nix develop --command dagger call build --commit=${{ github.sha }} export --path=./build
 
       - name: Upload darwin arm64 binary
         uses: actions/upload-artifact@v4
@@ -229,3 +234,26 @@ jobs:
           set -e
           test "$bare_status" -eq 2
           grep -q '^Usage: tapesctl' bare.txt
+
+      # Every binary this project ships used to report the workspace manifest's
+      # version, which no release has ever bumped, so `--version` answered
+      # `0.1.0` from the first build to the latest release. This asserts the
+      # replacement on the artifact rather than in a unit test: the identity is
+      # injected by the build pipeline, so only something holding a built binary
+      # can tell whether the injection actually arrived.
+      #
+      # A CI build is stamped with the commit and no release tag, so the version
+      # is the development one — the release tag is asserted in release.yaml,
+      # against a released binary.
+      - name: Version reports the commit the binary was built from
+        env:
+          COMMIT: ${{ github.sha }}
+        run: |
+          ./bin/tapesctl version | tee version.txt
+          grep -qx "tapesctl 0.0.0-dev+${COMMIT:0:7}" version.txt
+          grep -qx "Sha: ${COMMIT}" version.txt
+          # `--version` and the `version` command are two ways of asking one
+          # question, and they print the same block: the command adds only the
+          # canary, so dropping it leaves exactly the flag's output.
+          ./bin/tapesctl --version > flag.txt
+          sed '$d' version.txt | diff - flag.txt
