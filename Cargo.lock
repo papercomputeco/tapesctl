@@ -1774,7 +1774,7 @@ dependencies = [
 [[package]]
 name = "tapes-capture"
 version = "0.1.0"
-source = "git+https://github.com/papercomputeco/tapes-crates?rev=8301c90a61ab5308e72b969e110cee95b15fa0d8#8301c90a61ab5308e72b969e110cee95b15fa0d8"
+source = "git+https://github.com/papercomputeco/tapes-crates?rev=b81abe24b5622c97fcd4f421401c577b106934b3#b81abe24b5622c97fcd4f421401c577b106934b3"
 dependencies = [
  "base64",
  "http",
@@ -1791,7 +1791,7 @@ dependencies = [
 [[package]]
 name = "tapes-client"
 version = "0.1.0"
-source = "git+https://github.com/papercomputeco/tapes-crates?rev=8301c90a61ab5308e72b969e110cee95b15fa0d8#8301c90a61ab5308e72b969e110cee95b15fa0d8"
+source = "git+https://github.com/papercomputeco/tapes-crates?rev=b81abe24b5622c97fcd4f421401c577b106934b3#b81abe24b5622c97fcd4f421401c577b106934b3"
 dependencies = [
  "clap",
  "dirs",
@@ -1808,7 +1808,7 @@ dependencies = [
 [[package]]
 name = "tapes-harnesses"
 version = "0.1.0"
-source = "git+https://github.com/papercomputeco/tapes-crates?rev=8301c90a61ab5308e72b969e110cee95b15fa0d8#8301c90a61ab5308e72b969e110cee95b15fa0d8"
+source = "git+https://github.com/papercomputeco/tapes-crates?rev=b81abe24b5622c97fcd4f421401c577b106934b3#b81abe24b5622c97fcd4f421401c577b106934b3"
 dependencies = [
  "arc-swap",
  "dirs",
