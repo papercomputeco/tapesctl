@@ -113,9 +113,20 @@ jobs:
     # Not a Dagger job, for the same reason as the freshness job above: bash and
     # git against an external source of truth, where an engine would add to the
     # critical path without changing what is verified.
+    #
+    # The runner's preinstalled Rust is enough: the check reads the pins with
+    # `cargo metadata --no-deps`, which parses the manifest and resolves
+    # nothing, so there is no toolchain to set up and nothing to cache.
     steps:
+      # Pinned by commit rather than by tag. A tag is a moving pointer the
+      # action's own repository can repoint, so `@v4` is an instruction to run
+      # whatever that repository says v4 means at the moment this job starts —
+      # and this job runs `make` against a checkout, so what it checks out is
+      # the whole of what it verifies. The comment records which tag the SHA
+      # was v4.4.0 at the time of pinning, because a bare SHA answers "is this
+      # current?" for nobody.
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Tapes crate pins agree and name a landed revision
         run: make check-tapes-pins
