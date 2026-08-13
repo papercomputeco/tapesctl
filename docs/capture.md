@@ -10,8 +10,9 @@ picks up what neither lane was running for. Understanding which lane a harness
 gets — and which of them is optional — explains most of what you will see in
 the console, and all of what you will not.
 
-Every command on this page sends to the **ingest** port (`8082` on a local
-`tapes serve`), never the read port. See
+The capture commands on this page — `start`, `capture`, and `sync` — send to
+the **ingest** port (`8082` on a local `tapes serve`), never the read port; the
+read examples further down use the read port. See
 [The two ports](./introduction.md#the-two-ports).
 
 ## The two lanes
