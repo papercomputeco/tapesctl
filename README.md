@@ -41,14 +41,14 @@ front of it. The harness behaves exactly as it would unproxied — traffic is
 forwarded to its own provider API by default — and the proxy dies with it.
 
 ```bash
-tapesctl start claude --tapes-url http://localhost:8081
+tapesctl start claude --tapes-url http://localhost:8082
 ```
 
 The supported harnesses are `claude`, `codex`, and `pi`. Anything after the
 harness name is passed through verbatim, so your usual flags still work:
 
 ```bash
-tapesctl start claude --tapes-url http://localhost:8081 -- --model opus
+tapesctl start claude --tapes-url http://localhost:8082 -- --model opus
 ```
 
 A capture records **two lanes**, and both matter:
@@ -77,7 +77,7 @@ again when it exits:
 to stderr instead of a file, accepting what that does to the display:
 
 ```bash
-tapesctl -v start claude --tapes-url http://localhost:8081
+tapesctl -v start claude --tapes-url http://localhost:8082
 ```
 
 Every other command logs to stderr as before.
@@ -97,7 +97,7 @@ hash, so re-offering an unchanged transcript is a cheap `deduped`. It sweeps
 
 ```bash
 tapesctl plugin install pi
-tapesctl start pi --tapes-url http://localhost:8081 -- --provider anthropic --model <model-id>
+tapesctl start pi --tapes-url http://localhost:8082 -- --provider anthropic --model <model-id>
 ```
 
 **Pass both `--provider` and `--model`, or neither.** Those are `pi`'s own
@@ -178,7 +178,7 @@ the app captured.
 
 ```bash
 tapesctl plugin install codex-app --tapes-url http://localhost:8081
-tapesctl capture codex-app --tapes-url http://localhost:8081
+tapesctl capture codex-app --tapes-url http://localhost:8082
 ```
 
 `plugin install` packages a hook plugin under `~/.tapes/codex-app/`, points
