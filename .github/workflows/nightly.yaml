@@ -8,9 +8,6 @@ on:
 permissions:
   contents: write
 
-env:
-  DAGGER_VERSION: "0.21.8"
-
 jobs:
   check:
     runs-on: depot-ubuntu-24.04
@@ -52,20 +49,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Dagger
-        uses: dagger/dagger-for-github@v8.4.1
-        with:
-          version: ${{ env.DAGGER_VERSION }}
+      - name: Install Nix
+        uses: DeterminateSystems/determinate-nix-action@d96678350ffd6a456235832eb11e1c491589b7bb # v3.21.8
+
+      - name: Cache Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
 
       - name: Move nightly tag up to HEAD
         run: |
           git tag -f nightly
           git push -f origin nightly
 
+      # `--commit` is what distinguishes tonight's nightly from last night's:
+      # every nightly reports the version name `nightly`, which the module
+      # supplies, so the commit is the whole of the artifact's identity. It has
+      # to be passed in because the Dagger module builds from a source directory
+      # with no `.git` in it.
+      #
+      # This step publishes: `nightly` syncs to the download prefix advertised
+      # in the release body below, and asks the built binary who it is before
+      # it syncs anything, so a nightly that cannot name its commit fails here
+      # with nothing uploaded.
       - name: Build and upload nightly artifacts
         run: |
-          dagger call \
+          nix develop --command dagger call \
             nightly \
+              --commit="${{ github.sha }}" \
               --endpoint=env://BUCKET_ENDPOINT \
               --bucket=env://BUCKET_NAME \
               --access-key-id=env://BUCKET_ACCESS_KEY_ID \
@@ -78,6 +87,20 @@ jobs:
           BUCKET_ACCESS_KEY_ID: ${{ secrets.BUCKET_ACCESS_KEY_ID }}
           BUCKET_SECRET_ACCESS_KEY: ${{ secrets.BUCKET_SECRET_ACCESS_KEY }}
           DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
+
+      # A second opinion over the exported files, as in release.yaml: the gate
+      # is the pipeline's, this covers the GitHub release built from the export
+      # below. Worth the second on a nightly in particular — a nightly that
+      # cannot name its commit is indistinguishable from every other nightly,
+      # which is the whole of what a nightly has to offer.
+      - name: Exported binaries still report the commit they were built from
+        env:
+          COMMIT: ${{ github.sha }}
+        run: |
+          chmod +x ./build/linux/amd64/tapesctl
+          ./build/linux/amd64/tapesctl version | tee version.txt
+          grep -qx "tapesctl nightly+${COMMIT:0:7}" version.txt
+          grep -qx "Sha: ${COMMIT}" version.txt
 
       - name: Update nightly GitHub release
         uses: ncipollo/release-action@v1
