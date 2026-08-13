@@ -328,6 +328,8 @@ Release binaries are cross-compiled from Linux with `cargo-zigbuild` — a pure
 CLI with no Apple frameworks needs no macOS SDK. Targets: `linux/{amd64,arm64}`
 (static musl) and `darwin/{amd64,arm64}` (Mach-O). Tagged releases and nightlies
 publish to `download.tapes.dev` via the `release` / `nightly` Dagger functions.
+A release publishes `install.sh` in the same pipeline call as the binaries, so
+the served installer can never lag the release it installs.
 
 ## Layout
 

@@ -127,6 +127,18 @@ func (t *Tapesctl) ReleaseLatest(
 		}
 	}
 
+	// The install script ships in the same call as the binaries it fetches.
+	// It reads the checksum sidecars the prefixes above now carry, so an old
+	// script pointed at new artifacts is a live bug, not a cosmetic one — and
+	// a separate publish step is exactly the thing that gets skipped, fails
+	// quietly after the binaries are already public, or never runs at all.
+	// Folding it in here means one invocation either publishes binaries and
+	// installer together or fails as a release: a cut cannot report success
+	// while the served installer is stale.
+	if err := t.uploadInstallScript(ctx, endpoint, bucket, accessKeyID, secretAccessKey); err != nil {
+		return artifacts, fmt.Errorf("could not upload install script: %w", err)
+	}
+
 	versionDir := dag.Directory().WithNewFile("version", version+"\n")
 	err := t.upload(ctx, &uploadOpts{
 		artifacts:       versionDir,
@@ -190,7 +202,34 @@ func (t *Tapesctl) Nightly(
 	return artifacts, err
 }
 
+// uploadInstallScript syncs install.sh to the object the download domain
+// serves as the installer. ReleaseLatest calls it on every cut; UploadInstallSh
+// exposes it for an out-of-band refresh.
+func (t *Tapesctl) uploadInstallScript(
+	ctx context.Context,
+	endpoint *dagger.Secret,
+	bucket *dagger.Secret,
+	accessKeyID *dagger.Secret,
+	secretAccessKey *dagger.Secret,
+) error {
+	installDir := dag.Directory().WithFile("install", t.Source.File("install.sh"))
+
+	return t.upload(ctx, &uploadOpts{
+		artifacts:       installDir,
+		prefix:          artifactPrefix,
+		endpoint:        endpoint,
+		bucket:          bucket,
+		accessKeyID:     accessKeyID,
+		secretAccessKey: secretAccessKey,
+	})
+}
+
 // UploadInstallSh uploads the install script under the tapesctl namespace.
+//
+// Releases do not need it: ReleaseLatest publishes the install script itself,
+// so a cut cannot succeed while the served installer is stale. This remains a
+// standalone function for republishing the script outside a release — say,
+// after an installer-only fix that should not wait for the next cut.
 func (t *Tapesctl) UploadInstallSh(
 	ctx context.Context,
 
@@ -206,14 +245,5 @@ func (t *Tapesctl) UploadInstallSh(
 	// Bucket secret access key.
 	secretAccessKey *dagger.Secret,
 ) error {
-	installDir := dag.Directory().WithFile("install", t.Source.File("install.sh"))
-
-	return t.upload(ctx, &uploadOpts{
-		artifacts:       installDir,
-		prefix:          artifactPrefix,
-		endpoint:        endpoint,
-		bucket:          bucket,
-		accessKeyID:     accessKeyID,
-		secretAccessKey: secretAccessKey,
-	})
+	return t.uploadInstallScript(ctx, endpoint, bucket, accessKeyID, secretAccessKey)
 }
