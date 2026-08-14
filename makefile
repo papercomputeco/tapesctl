@@ -92,7 +92,7 @@ nightly:	## Build and upload nightly artifacts to the release bucket
 		--access-key-id=env://BUCKET_ACCESS_KEY_ID \
 		--secret-access-key=env://BUCKET_SECRET_ACCESS_KEY
 
-release:	## Build and upload versioned + latest release artifacts to the bucket
+release:	## Build and upload release artifacts + install script to the bucket
 	dagger call release-latest \
 		--version=$(VERSION) \
 		--commit=$(COMMIT) \
@@ -101,7 +101,7 @@ release:	## Build and upload versioned + latest release artifacts to the bucket
 		--access-key-id=env://BUCKET_ACCESS_KEY_ID \
 		--secret-access-key=env://BUCKET_SECRET_ACCESS_KEY
 
-upload-install-script:	## Upload the install script to the release bucket
+upload-install-script:	## Republish the install script without cutting a release
 	dagger call upload-install-sh \
 		--endpoint=env://BUCKET_ENDPOINT \
 		--bucket=env://BUCKET_NAME \

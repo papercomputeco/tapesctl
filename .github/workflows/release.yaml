@@ -32,6 +32,12 @@ jobs:
       # syncs anything — so a build that lost its identity fails here with
       # nothing uploaded, rather than being caught by a later step that can no
       # longer take it back.
+      #
+      # It also publishes `install.sh` itself, inside the same call. The
+      # installer and the artifacts it fetches move together: there is no
+      # separate step to skip or to fail after the binaries are already
+      # public, so a green release means the served installer matches the
+      # release it just cut.
       - name: Build and upload release artifacts
         run: |
           dagger call \
@@ -71,21 +77,6 @@ jobs:
           ./build/linux/amd64/tapesctl version | tee version.txt
           grep -qx "tapesctl ${TAG}+${COMMIT:0:7}" version.txt
           grep -qx "Sha: ${COMMIT}" version.txt
-
-      - name: Upload install script
-        run: |
-          dagger call \
-            upload-install-sh \
-              --endpoint=env://BUCKET_ENDPOINT \
-              --bucket=env://BUCKET_NAME \
-              --access-key-id=env://BUCKET_ACCESS_KEY_ID \
-              --secret-access-key=env://BUCKET_SECRET_ACCESS_KEY
-        env:
-          BUCKET_ENDPOINT: ${{ secrets.BUCKET_ENDPOINT }}
-          BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
-          BUCKET_ACCESS_KEY_ID: ${{ secrets.BUCKET_ACCESS_KEY_ID }}
-          BUCKET_SECRET_ACCESS_KEY: ${{ secrets.BUCKET_SECRET_ACCESS_KEY }}
-          DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
 
       - name: Upload artifacts to GitHub release
         run: |
