@@ -312,11 +312,22 @@ EOF
     # a name is a pointer, not a revision. And one revision for all of them,
     # or the git siblings meet each other at two points of one history: the
     # mix hazard again, one source kind in.
+    #
+    # The source must also BE the tapes-crates repository: a hex rev proves
+    # immovability, not provenance, and the hatch is a loan against the real
+    # crates' history — not permission to take a same-named crate from
+    # anywhere with a commit hash.
+    repo_re='^git\+https://github\.com/papercomputeco/tapes-crates(\.git)?([?#]|$)'
     rev_re='[?]rev=([0-9a-fA-F]{7,40})([#&]|$)'
     hatch_rev=""
     for dep in "${declared[@]}"; do
         IFS=$'\t' read -r name kind detail <<<"$dep"
         [[ "$kind" == "git" ]] || continue
+        if ! [[ "$detail" =~ $repo_re ]]; then
+            echo "FAIL: ${name} is taken from a git source that is not the tapes-crates repository (source: ${detail}) — the escape hatch pins a revision of the real crates, never a same-named crate from elsewhere" >&2
+            fail=1
+            continue
+        fi
         if [[ "$detail" =~ $rev_re ]]; then
             rev="${BASH_REMATCH[1]}"
             echo "ok: ${name} is pinned to rev ${rev}"
