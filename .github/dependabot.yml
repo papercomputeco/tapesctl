@@ -1,0 +1,24 @@
+# Dependabot keeps the Cargo dependencies current — most importantly the
+# shared tapes crates (tapes-capture, tapes-harnesses, tapes-client), which
+# are published from one repository and are meant to move together. They are
+# grouped below so a release of that family arrives as ONE pull request
+# rather than three that could land apart, and `make check-tapes-pins` gates
+# the result the same way it gates a hand edit.
+#
+# The escape hatch: during a burst of tight co-development a tapes crate in
+# Cargo.toml may temporarily become a `git = "...", rev = "..."` pin again, to
+# build against crate work that has not been published yet. That is intended,
+# not a regression — Dependabot simply stops proposing updates for a git pin,
+# and check-tapes-pins reports the hatch as engaged rather than failing. The
+# pin is a loan: re-point it at the next published version once the burst
+# lands.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      tapes-crates:
+        patterns:
+          - "tapes-*"

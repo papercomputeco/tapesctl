@@ -92,31 +92,30 @@ jobs:
         run: make freshness-check
 
   pins:
-    name: Tapes Crate Pins
+    name: Tapes Crate Versions
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-24.04' || 'depot-ubuntu-24.04' }}
 
-    # The shared tapes crates are several packages from one repository, pinned
-    # by revision. This asserts they are pinned as one — the same revision in
-    # Cargo.toml, the same revision resolved in Cargo.lock — and that the
-    # revision has actually landed on the crates repository's default branch. A
-    # pin that never landed builds here out of a cached checkout and builds
-    # nowhere else, which is a failure this repository can only discover from
-    # someone else's clone.
+    # The shared tapes crates are several packages published from one
+    # repository, taken from crates.io by version. This asserts the lockfile
+    # resolves exactly one version of each, that it still agrees with the
+    # manifest, and that every resolved version exists (unyanked) on the
+    # registry — a version that only resolves out of a cached registry builds
+    # here and nowhere clean, which is a failure this repository can only
+    # discover from someone else's clone. The registry probe is advisory: an
+    # unreachable network is reported as a warning, never a failure.
     #
-    # No credentials, by construction: the crates repository is public, so the
-    # whole check is this checkout plus an anonymous clone of a public URL.
-    # That is what makes it reportable on fork pull requests, and it is why the
-    # check lives in each consumer rather than upstream — asked from up there,
-    # the same question needs a token for every private consumer, which is the
-    # shape that made an earlier version of it permanently red.
+    # No credentials, by construction: crates.io is public, so the whole check
+    # is this checkout plus anonymous registry reads. That is what makes it
+    # reportable on fork pull requests.
     #
-    # Not a Dagger job, for the same reason as the freshness job above: bash and
-    # git against an external source of truth, where an engine would add to the
+    # Not a Dagger job, for the same reason as the freshness job above: bash
+    # against an external source of truth, where an engine would add to the
     # critical path without changing what is verified.
     #
-    # The runner's preinstalled Rust is enough: the check reads the pins with
-    # `cargo metadata --no-deps`, which parses the manifest and resolves
-    # nothing, so there is no toolchain to set up and nothing to cache.
+    # The runner's preinstalled Rust is enough: the check reads the manifest
+    # with `cargo metadata --no-deps` and proves lockfile agreement with
+    # `cargo metadata --locked`, which resolves from the lockfile and compiles
+    # nothing.
     steps:
       # Pinned by commit rather than by tag. A tag is a moving pointer the
       # action's own repository can repoint, so `@v4` is an instruction to run
@@ -128,7 +127,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - name: Tapes crate pins agree and name a landed revision
+      - name: Tapes crate versions are single, locked, and published
         run: make check-tapes-pins
 
   build:

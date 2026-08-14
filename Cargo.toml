@@ -43,39 +43,40 @@ repository = "https://github.com/papercomputeco/tapesctl"
 # proxy/attribution work lands with the versions already agreed — mirrors the
 # convention in the daemon client's workspace.
 [workspace.dependencies]
-# --- shared client-side crates (their own repo since the split) ---
+# --- shared client-side crates (published from the tapes-crates repository) ---
 # Session attribution, launch recipes, transcript discovery, and the
 # X-Tapes-* envelope live in the tapes-crates repository (named
 # tapes-harnesses until it grew past harness knowledge), consumed by both
 # tapesctl and the daemon client so the two capture paths cannot drift apart.
-# Pinned by revision like any other vendored contract.
+# Taken from crates.io like any other dependency since the crates' first
+# publish; they were git pins before that, with all the ceremony pinning a
+# repository by revision demands.
 #
-# Every entry below is the same repository, at the SAME rev, spelled with the
-# SAME URL — and all three properties are load-bearing.
+# Two properties of the old pins still matter in version form:
 #
-# Same rev: they had drifted apart once — one entry sat several commits behind
-# another's pin — which meant one repository was vendored twice at two
-# different points in its history. That is worth avoiding on its own, and it
-# had a concrete cost: the peer-socket rescan fix (harnesses #13) was in the
-# newer rev only, so tapesctl's proxy still failed closed on a first-scan miss
-# and the capture suite flaked under parallel load.
+# One version per crate: the registry cannot hand this workspace the same
+# crate twice (Cargo unifies semver-compatible requirements), but a
+# semver-INCOMPATIBLE split can — `tapes-capture 0.1` here next to a
+# transitive `tapes-capture 0.2` would be one crate vendored twice, and a type
+# from one is not the same type as its twin from the other.
+# `scripts/check-tapes-pins.sh` gates exactly that, and also that the sibling
+# client resolves the same versions, so the two capture paths move together.
 #
-# Same URL: Cargo keys a git source on the URL string, not on what it resolves
-# to. Spelling the old name for some entries and the new one for others would
-# make one repository two sources, so a type one crate returned would stop
-# being the same type another accepted — a type error whose message names two
-# identical-looking types.
-#
-tapes-harnesses = { git = "https://github.com/papercomputeco/tapes-crates", rev = "cf724227abf7ccb3c5a984a3be07b855100c9b95" }
+# Escape hatch: during a burst of tight co-development an entry here may
+# temporarily become a `git = "...", rev = "..."` pin again, to build against
+# crate work that has not been published yet. That is intended, not a
+# regression — but it is a loan, repaid by re-pointing at the next published
+# version once the burst lands. See .github/dependabot.yml for the fuller
+# note.
+tapes-harnesses = { version = "0.1" }
 
 # The harness-agnostic half of capture — the X-Tapes-* envelope, the
 # capture-gateway environment contract, and the peer-trust ancestry check — in
 # its own crate since the dependency inversion. tapesctl consumes it directly
 # rather than through a re-export: the envelope and the peer check are protocol,
 # and reaching them through the harness registry would say they were harness
-# knowledge. Same repository, same rev as the crates above, for the reasons
-# given there.
-tapes-capture = { git = "https://github.com/papercomputeco/tapes-crates", rev = "cf724227abf7ccb3c5a984a3be07b855100c9b95" }
+# knowledge.
+tapes-capture = { version = "0.1" }
 
 # One client for the whole tapes read surface: the vendored `tapes-api.yaml`
 # with its provenance and seal check, the reduction of any OpenAPI document
@@ -102,10 +103,7 @@ tapes-capture = { git = "https://github.com/papercomputeco/tapes-crates", rev = 
 # is built at runtime from a document this binary has never seen, which is the
 # one surface that cannot be written by hand. `direct-http` is `DirectHttp`,
 # the no-redirect transport this CLI talks to a tapes server with.
-#
-# Same repository, same rev, same URL as the crates above, for the reasons
-# given there.
-tapes-client = { git = "https://github.com/papercomputeco/tapes-crates", rev = "cf724227abf7ccb3c5a984a3be07b855100c9b95", features = [
+tapes-client = { version = "0.1", features = [
   "cli",
   "direct-http",
 ] }

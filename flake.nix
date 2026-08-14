@@ -35,17 +35,13 @@
               # `builtins.fetchGit` needs nothing else — which is why there is no
               # `outputHashes` block here.
               #
-              # There used to be one, and it was the single worst part of a pin
-              # bump: every rev change also required a `nix-prefetch-git`
-              # recompute, in a file the bump does not otherwise touch. Cargo
-              # never reads those hashes, so a bump that skipped the recompute
-              # passed `cargo build` and failed only under `nix build` — which is
-              # how more than one stale hash reached main. `make bump-harnesses`
-              # now rewrites the revs alone and this stays correct by
-              # construction.
-              #
-              # If the tapes crates move to crates.io, the git pins disappear
-              # entirely and this setting can go with them.
+              # The tapes crates come from crates.io now and go through ordinary
+              # cargo vendoring, but this setting is not theirs to retire: the
+              # `[patch.crates-io]` libproc pin is still a git dependency, and
+              # any temporary co-development git pin of a tapes crate (the
+              # escape hatch in .github/dependabot.yml) rides through here too —
+              # without needing a hash recomputed, which is what an
+              # `outputHashes` block would demand on every rev change.
               allowBuiltinFetchGit = true;
             };
             cargoBuildFlags = [ "-p" "tapesctl" ];
