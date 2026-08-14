@@ -7,6 +7,14 @@ name: Check PR
 # enforced. A Linear magic word cannot be: the issue tracker it names is not
 # readable — let alone writable — from outside the organisation, so demanding
 # one would be a gate an external contributor has no way to pass.
+#
+# Dependabot is exempt from both checks. Dependency bumps are machine-authored;
+# the title and Linear policies exist to keep human and agent PRs honest, and a
+# bot cannot be asked to follow either. The exemption is a step-level `if:`
+# that succeeds with a notice rather than a job-level skip, for the same
+# reason the fork branch below is: a skipped job reports "skipped", and
+# whether that satisfies a required status check depends on branch-protection
+# configuration — a dependency worth not having.
 
 on:
   pull_request:
@@ -29,15 +37,31 @@ jobs:
     runs-on: ${{ github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'depot-ubuntu-24.04' }}
 
     steps:
+      - name: Note that the title check does not apply to Dependabot
+        if: github.event.pull_request.user.login == 'dependabot[bot]'
+        run: |
+          echo "PR title check waived: dependency bumps are machine-authored;" \
+               "the title policy is for human/agent PRs."
+          {
+            echo "### PR title: not required"
+            echo
+            echo "This pull request was opened by Dependabot. Dependency bumps"
+            echo "are machine-authored; the title policy is for human and"
+            echo "agent pull requests."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Checkout repository
+        if: github.event.pull_request.user.login != 'dependabot[bot]'
         uses: actions/checkout@v4
 
       - name: Install Dagger
+        if: github.event.pull_request.user.login != 'dependabot[bot]'
         uses: dagger/dagger-for-github@v8.2.0
         with:
           version: ${{ env.DAGGER_VERSION }}
 
       - name: Check PR title conformance
+        if: github.event.pull_request.user.login != 'dependabot[bot]'
         run: |
           dagger call -m github.com/papercomputeco/daggerverse/ghcontrib \
               --token=env://GH_TOKEN \
@@ -52,15 +76,30 @@ jobs:
     name: Check Linear Magic Word
     runs-on: ${{ github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || 'depot-ubuntu-24.04' }}
 
-    # The fork branch is a step-level `if:` inside one job rather than a
-    # job-level `if:` on two jobs, so this check reports the same name and a
+    # The fork and Dependabot branches are step-level `if:`s inside one job
+    # rather than job-level `if:`s, so this check reports the same name and a
     # real conclusion on every pull request. A job skipped by a job-level `if:`
     # reports "skipped", and whether that satisfies a required status check
     # depends on branch-protection configuration — a dependency worth not
     # having.
     steps:
+      - name: Note that the Linear check does not apply to Dependabot
+        if: github.event.pull_request.user.login == 'dependabot[bot]'
+        run: |
+          echo "Linear magic word check waived: dependency bumps are" \
+               "machine-authored; the policy is for human/agent PRs."
+          {
+            echo "### Linear magic word: not required"
+            echo
+            echo "This pull request was opened by Dependabot. Dependency bumps"
+            echo "are machine-authored; the Linear policy is for human and"
+            echo "agent pull requests."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Note that the Linear check does not apply to forks
-        if: github.event.pull_request.head.repo.full_name != github.repository
+        if: >-
+          github.event.pull_request.user.login != 'dependabot[bot]' &&
+          github.event.pull_request.head.repo.full_name != github.repository
         run: |
           {
             echo "### Linear magic word: not required"
@@ -71,17 +110,23 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Checkout repository
-        if: github.event.pull_request.head.repo.full_name == github.repository
+        if: >-
+          github.event.pull_request.user.login != 'dependabot[bot]' &&
+          github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/checkout@v4
 
       - name: Install Dagger
-        if: github.event.pull_request.head.repo.full_name == github.repository
+        if: >-
+          github.event.pull_request.user.login != 'dependabot[bot]' &&
+          github.event.pull_request.head.repo.full_name == github.repository
         uses: dagger/dagger-for-github@v8.2.0
         with:
           version: ${{ env.DAGGER_VERSION }}
 
       - name: Check Linear magic word
-        if: github.event.pull_request.head.repo.full_name == github.repository
+        if: >-
+          github.event.pull_request.user.login != 'dependabot[bot]' &&
+          github.event.pull_request.head.repo.full_name == github.repository
         run: |
           dagger call -m github.com/papercomputeco/daggerverse/ghcontrib \
               --token=env://GH_TOKEN \
