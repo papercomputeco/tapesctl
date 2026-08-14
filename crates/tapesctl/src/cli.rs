@@ -195,6 +195,41 @@ fn first_noun(argv: &[String]) -> Option<&str> {
     None
 }
 
+/// Whether the top level will print the version and exit.
+///
+/// `--version` and `-V` before the first subcommand end the parse: clap
+/// prints the stamped identity and exits, and no help — so no cassette
+/// list — is ever rendered. Discovery for that command line would be pure
+/// waste (a cache read, and on a cold or stale cache a network round-trip),
+/// so [`gated`] treats it like a non-cassette verb.
+///
+/// The scan stops at the first token that outranks the version flag: a help
+/// flag or a subcommand name. clap answers whichever of `--help` and
+/// `--version` it processes first, so `--help --version` renders the
+/// top-level help — which must list the cassette noun — while
+/// `--version --help` prints the version; a test pins that precedence
+/// against the real parser. The `--` cutoff and the value-skip for
+/// [`VALUE_TAKING_GLOBALS`] are the same ones [`first_noun`] applies.
+fn version_short_circuits(argv: &[String]) -> bool {
+    let mut arguments = argv.iter().skip(1).map(String::as_str);
+    while let Some(argument) = arguments.next() {
+        if argument == "--" {
+            return false;
+        }
+        if VALUE_TAKING_GLOBALS.contains(&argument) {
+            let _ = arguments.next();
+            continue;
+        }
+        match argument {
+            "--version" | "-V" => return true,
+            "--help" | "-h" => return false,
+            _ if !argument.starts_with('-') => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Whether this command line can possibly reach the generated cassette surface.
 ///
 /// Only three shapes can: `tapesctl cassettes …` itself, `tapesctl help …`
@@ -204,8 +239,15 @@ fn first_noun(argv: &[String]) -> Option<&str> {
 /// I/O — no cache read, no network. The fixed [`crate::cassette::command::NOUN`]
 /// literal is what makes this scan sufficient: since the retired top-level
 /// aliases went, no first token other than these three can name a cassette.
+///
+/// One flags-only shape is carved back out: a version request
+/// ([`version_short_circuits`]) prints and exits without rendering help, so
+/// it pays for no discovery either.
 #[must_use]
 pub fn gated(argv: &[String]) -> bool {
+    if version_short_circuits(argv) {
+        return false;
+    }
     matches!(
         first_noun(argv),
         None | Some(crate::cassette::command::NOUN) | Some("help")
@@ -1444,6 +1486,54 @@ mod tests {
         assert!(!gated(&argv(&["tapesctl", "start", "claude"])));
         assert!(!gated(&argv(&["tapesctl", "version"])));
         assert!(!gated(&argv(&["tapesctl", "config", "get", "tapes-url"])));
+    }
+
+    #[test]
+    fn a_version_request_is_gated_out() {
+        // `--version` prints and exits without rendering help, so discovery
+        // for it would be a cache read — and on a cold cache a network
+        // round-trip — spent on output that never shows a cassette.
+        assert!(!gated(&argv(&["tapesctl", "--version"])));
+        assert!(!gated(&argv(&["tapesctl", "-V"])));
+        assert!(!gated(&argv(&["tapesctl", "-v", "--version"])));
+        assert!(!gated(&argv(&[
+            "tapesctl",
+            "--tapes-url",
+            "http://x",
+            "--version"
+        ])));
+
+        // Whichever of `--help` and `--version` clap processes first is the
+        // one it answers, so only a version flag that comes first ends the
+        // parse without help.
+        assert!(gated(&argv(&["tapesctl", "--help", "--version"])));
+        assert!(!gated(&argv(&["tapesctl", "--version", "--help"])));
+
+        // Past a noun or a `--` cutoff the token is not the top-level flag.
+        assert!(gated(&argv(&["tapesctl", "cassettes", "--version"])));
+        assert!(gated(&argv(&["tapesctl", "--", "--version"])));
+    }
+
+    #[test]
+    fn clap_answers_the_first_of_help_and_version() {
+        // The gate's precedence rule mirrors the parser; pin the parser's
+        // half so a clap upgrade cannot silently split them.
+        use clap::error::ErrorKind;
+
+        let kind_of = |argv: &[&str]| {
+            Cli::command()
+                .try_get_matches_from(argv)
+                .expect_err("help and version both end the parse")
+                .kind()
+        };
+        assert_eq!(
+            kind_of(&["tapesctl", "--version", "--help"]),
+            ErrorKind::DisplayVersion
+        );
+        assert_eq!(
+            kind_of(&["tapesctl", "--help", "--version"]),
+            ErrorKind::DisplayHelp
+        );
     }
 
     #[test]
