@@ -132,9 +132,10 @@ func (t *Tapesctl) ReleaseLatest(
 	// script pointed at new artifacts is a live bug, not a cosmetic one — and
 	// a separate publish step is exactly the thing that gets skipped, fails
 	// quietly after the binaries are already public, or never runs at all.
-	// Folding it in here means one invocation either publishes binaries and
-	// installer together or fails as a release: a cut cannot report success
-	// while the served installer is stale.
+	// Folding it in here does not make the syncs atomic — a late failure can
+	// still leave new binaries public with a stale installer — but it makes
+	// that failure the release's failure: a cut cannot report success while
+	// the served installer is stale.
 	if err := t.uploadInstallScript(ctx, endpoint, bucket, accessKeyID, secretAccessKey); err != nil {
 		return artifacts, fmt.Errorf("could not upload install script: %w", err)
 	}
