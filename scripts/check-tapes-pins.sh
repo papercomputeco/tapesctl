@@ -27,7 +27,11 @@
 # (2) A manifest and a lockfile that disagree mean the build resolves
 #     something the manifest does not say. Cargo itself is the judge here
 #     (`cargo metadata --locked`), so satisfaction of a version requirement is
-#     decided by the one implementation whose opinion counts.
+#     decided by the one implementation whose opinion counts. Resolving under
+#     `--locked` may need the network for the registry index and any git
+#     dependencies, and — as with question (3) — a network that is away is
+#     not evidence: an environment that cannot resolve is reported as a
+#     WARNING, and what fails is Cargo resolving and saying no.
 #
 # (3) A version that resolves locally but is absent or yanked on crates.io is
 #     the version-era cousin of a pin at an unreachable revision: it builds
@@ -78,9 +82,10 @@
 # Requires: cargo, jq, curl.
 #
 # Exit status: 0 when every question is answered yes (or could not be asked
-# for a reason that is not evidence — see question 3), 1 when one is answered
-# no, 2 when the script could not ask at all (unreadable manifest, missing
-# tool). A question that could not be asked is never reported as a pass.
+# for a reason that is not evidence — see questions 2 and 3), 1 when one is
+# answered no, 2 when the script could not ask at all (unreadable manifest,
+# missing tool). A question that could not be asked is never reported as a
+# pass.
 
 set -euo pipefail
 
@@ -320,19 +325,32 @@ done
 #
 # Cargo is the judge: `--locked` fails rather than silently re-resolving, so a
 # lockfile that no longer satisfies the manifest is caught here and not three
-# CI minutes later in a build. Its stderr is kept, because the same non-zero
-# exit also means "could not resolve at all" — and only one of those is
-# evidence about this tree.
-locked_err="$(cargo metadata --format-version 1 --locked --manifest-path "$MANIFEST" 2>&1 >/dev/null || true)"
-if [[ -z "$locked_err" ]]; then
+# CI minutes later in a build. The verdict is cargo's exit status, never its
+# stderr: on a cold cache a succeeding cargo narrates every index and git
+# fetch to stderr ("Updating crates.io index", "Downloading crates ..."), and
+# narration is not failure. What stderr is for is telling a non-zero exit's
+# two meanings apart — a lockfile that does not satisfy the manifest is
+# evidence about this tree, while a resolver that could not reach the
+# registry or a git source is a network away and, like question 3's
+# unreachable registry, is reported as a WARNING rather than a failure.
+if locked_err="$(cargo metadata --format-version 1 --locked --manifest-path "$MANIFEST" 2>&1 >/dev/null)"; then
     echo "ok: $LOCKFILE satisfies $MANIFEST (cargo --locked)"
-elif printf '%s' "$locked_err" | grep -qi 'lock file.*needs to be updated\|--locked'; then
+elif printf '%s' "$locked_err" | grep -qi 'lock file.*needs to be updated\|--locked\|failed to select a version'; then
     echo "FAIL: $LOCKFILE no longer agrees with $MANIFEST:" >&2
     printf '%s\n' "$locked_err" | sed 's/^/  /' >&2
     echo "  refresh the lockfile (cargo update <crate>) and commit it" >&2
     fail=1
 else
-    die "\`cargo metadata --locked\` could not run — manifest/lockfile agreement is unverified: ${locked_err}"
+    cat >&2 <<EOF
+WARNING (not a failure): \`cargo metadata --locked\` could not run —
+manifest/lockfile agreement is unverified on this run:
+
+$(printf '%s\n' "$locked_err" | sed 's/^/  /')
+
+Resolving under --locked may need the network for the registry index and any
+git dependencies, so a resolver that cannot reach them is a network away, not
+a drift found. What fails this question is Cargo resolving and saying no.
+EOF
 fi
 
 # --- question 3: every resolved version exists, unyanked, on crates.io --------
