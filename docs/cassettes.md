@@ -13,7 +13,7 @@ command line for a cassette it has never heard of.
 Cassette commands talk to the **read API** (`8081` on a local `tapes serve`),
 and discovery uses the same server URL as everything else. Deploying and
 configuring cassettes is an operator task, documented with the server at
-<https://tapes.dev/docs/tapes/>.
+<https://tapes.dev/docs/cassettes/>.
 
 ## Listing what a server serves
 
