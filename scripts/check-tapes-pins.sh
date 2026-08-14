@@ -325,10 +325,11 @@ EOF
     # anywhere with a commit hash.
     repo_re='^git\+https://github\.com/papercomputeco/tapes-crates(\.git)?([?#]|$)'
     # Whatever was written in `rev = ...`, as Cargo echoes it into the source
-    # string. Whether it names an immovable commit is NOT judged by its shape
-    # — a branch can be named in hex — but against the lockfile: Cargo writes
-    # the resolved commit after `#` in the lock's source line, and a true sha
-    # pin is a prefix of its own resolution. A moving name never is.
+    # string. The requirement is the FULL forty-hex commit id, equal to the
+    # resolution Cargo wrote after `#` in the lock's source line. Nothing
+    # shorter or ref-shaped: a full commit id makes git fetch the object
+    # itself, so no ref by any name — not even a branch named after its own
+    # target — is ever consulted, and there is nothing left that can move.
     rev_re='[?]rev=([^#&]+)'
     hatch_rev=""
     for dep in "${declared[@]}"; do
@@ -351,17 +352,15 @@ EOF
                 }
                 found && /^\[\[package\]\]/ { exit }
             ' "$LOCKFILE")"
-            shopt -s nocasematch
             if [[ -z "$resolved" ]]; then
                 echo "FAIL: ${name} has no resolved git commit in ${LOCKFILE} — the lockfile does not carry this pin; refresh it (cargo update ${name}) and commit it" >&2
                 fail=1
-            elif [[ "$resolved" != "$rev"* ]]; then
-                echo "FAIL: ${name} names rev '${rev}' but ${LOCKFILE} resolved it to ${resolved} — that is a moving name (branch or tag), not a commit pin; pin the exact revision being built against" >&2
+            elif [[ "${rev,,}" != "$resolved" ]]; then
+                echo "FAIL: ${name} names rev '${rev}' but the pin the escape hatch takes is the full forty-hex commit id — ${LOCKFILE} resolved this to ${resolved}; write that" >&2
                 fail=1
             else
-                echo "ok: ${name} is pinned to rev ${rev} (resolves to ${resolved})"
+                echo "ok: ${name} is pinned to commit ${resolved}"
             fi
-            shopt -u nocasematch
             if [[ -z "$hatch_rev" ]]; then
                 hatch_rev="$rev"
             elif [[ "$rev" != "$hatch_rev" ]]; then
