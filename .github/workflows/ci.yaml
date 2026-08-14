@@ -97,10 +97,12 @@ jobs:
 
     # The shared tapes crates are several packages published from one
     # repository, taken from crates.io by version. This asserts the lockfile
-    # resolves exactly one version of each and that it still agrees with the
-    # manifest — cargo's own resolution is the judge of both. Registry
-    # existence is not probed here: a missing or yanked version surfaces
-    # through cargo's resolution and Dependabot's alerts.
+    # resolves exactly one version of each. Lockfile-manifest agreement is not
+    # asserted here: every resolving cargo invocation in the lint, test, and
+    # build jobs runs with `--locked`, which refuses a stale lockfile rather
+    # than silently re-resolving it. Registry existence is not probed either:
+    # a missing or yanked version surfaces through cargo's resolution and
+    # Dependabot's alerts.
     #
     # No credentials, by construction: the whole check is this checkout plus
     # cargo's anonymous reads. That is what makes it reportable on fork pull
@@ -111,8 +113,7 @@ jobs:
     # critical path without changing what is verified.
     #
     # The runner's preinstalled Rust is enough: the check reads the manifest
-    # with `cargo metadata --no-deps` and proves lockfile agreement with
-    # `cargo metadata --locked`, which resolves from the lockfile and compiles
+    # with `cargo metadata --no-deps`, which resolves nothing and compiles
     # nothing.
     steps:
       # Pinned by commit rather than by tag. A tag is a moving pointer the

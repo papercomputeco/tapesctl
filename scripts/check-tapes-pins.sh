@@ -2,16 +2,15 @@
 # check-tapes-pins.sh — assert this repository's tapes crates versions are sane.
 #
 # This repository consumes several packages published from one upstream
-# repository (tapes-crates), each taken from crates.io by version. Two
-# questions are asked about those versions, in order:
+# repository (tapes-crates), each taken from crates.io by version. One
+# question is asked about those versions:
 #
 #   1. Does Cargo.lock resolve exactly one version of each tapes crate?
-#   2. Does Cargo.lock agree with Cargo.toml?
 #
 # These were git-revision questions once — same rev everywhere, lockfile
 # agreement, and "has that rev landed on the upstream default branch". The
 # move to published versions dissolved most of what made them hard; what
-# survives is the drift each question existed to catch:
+# survives is the drift the question existed to catch:
 #
 # (1) One crate at two versions is how `tapes_client::Call` stops being
 #     `tapes_client::Call`. Cargo unifies semver-COMPATIBLE requirements, but a
@@ -20,19 +19,19 @@
 #     other. Short of a compile error, it is silent: one copy's fix present,
 #     the other's absent, every test still green.
 #
-# (2) A manifest and a lockfile that disagree mean the build resolves
-#     something the manifest does not say. Cargo itself is the judge here
-#     (`cargo metadata --locked`), and ANY refusal fails: classifying Cargo's
-#     stderr into drift-versus-environment was a losing game, and this check
-#     runs beside build jobs that need the same network and sources — an
-#     environment that cannot answer this question cannot build the crate
-#     either.
+# Questions this script once asked and no longer does:
 #
-# A question this script once asked and no longer does: whether every
-# resolved version exists, unyanked, on crates.io. Missing and yanked
-# versions surface through Dependabot alerts and through cargo's own yanked
-# handling at resolution time; a CI probe of a remote registry bought little
-# beyond those and cost real network edge-case handling on every run.
+#   * Does Cargo.lock agree with Cargo.toml? Cargo itself is the judge of
+#     that, and the build jobs already ask it: every CI cargo invocation
+#     that resolves runs with `--locked`, which refuses a stale lockfile
+#     rather than silently re-resolving it. Asking again here duplicated
+#     that verdict without strengthening it.
+#
+#   * Does every resolved version exist, unyanked, on crates.io? Missing
+#     and yanked versions surface through Dependabot alerts and through
+#     cargo's own yanked handling at resolution time; a CI probe of a
+#     remote registry bought little beyond those and cost real network
+#     edge-case handling on every run.
 #
 # # The escape hatches
 #
@@ -45,22 +44,22 @@
 # not to judgments about how the manifest spells it: for a git source, the
 # lock's source line must name the tapes-crates repository — the hatch is a
 # loan against the real crates' history, never permission to take a
-# same-named crate from elsewhere — and question (2) proves that lock is this
-# manifest's intent, which is deliberateness enough for a state the log
-# already shouts about. A path source is this checkout's neighbor, nothing
-# published to name and nothing resolved to record, so question (2) is what
-# remains asked. A MIX of git and registry sources is a failure outright — a
-# git tapes crate carries its repository's siblings with it, and they meet
-# their registry twins as duplicate crates: question (1)'s hazard — and path
-# plus git at once is refused the same way. Engage one hatch.
+# same-named crate from elsewhere. That the lock is this manifest's intent is
+# the build jobs' `--locked` to prove, here as everywhere. A path source is
+# this checkout's neighbor, nothing published to name and nothing resolved to
+# record, so the NOTICE is the whole of what is said. A MIX of git and
+# registry sources is a failure outright — a git tapes crate carries its
+# repository's siblings with it, and they meet their registry twins as
+# duplicate crates: question (1)'s hazard — and path plus git at once is
+# refused the same way. Engage one hatch.
 #
 # # What this script does NOT check
 #
 # Agreement with the sibling CLI's versions — the other client built on these
 # crates. That comparison is deliberately one-directional, and it is the
 # sibling that performs it: this repository is public and must stay runnable
-# by anyone who clones it, and questions (1)-(2) are answerable from this
-# checkout alone, which is the whole set this script asks.
+# by anyone who clones it, and question (1) is answerable from this checkout
+# alone, which is the whole of what this script asks.
 #
 # # How the versions are read
 #
@@ -81,7 +80,7 @@
 #
 # Requires: cargo, jq.
 #
-# Exit status: 0 when every question is answered yes, 1 when one is answered
+# Exit status: 0 when the question is answered yes, 1 when it is answered
 # no, 2 when the script could not ask at all (unreadable manifest, missing
 # tool). A question that could not be asked is never reported as a pass.
 
@@ -179,26 +178,6 @@ lock_facts() {
     '
 }
 
-# Question 2's whole body — the lockfile agrees with the manifest — as a
-# function, because the escape hatches ask it too.
-#
-# Cargo is the judge: `--locked` fails rather than silently re-resolving. The
-# verdict is cargo's exit status, never a reading of its stderr — stderr is
-# printed as the explanation, and ANY refusal fails, deliberately
-# unclassified: sorting drift from environment by pattern-matching stderr was
-# a losing game, and an environment that cannot answer this question cannot
-# build the crate either, so a red here never hides a green that mattered.
-check_lock_agreement() {
-    if locked_err="$(cargo metadata --format-version 1 --locked --manifest-path "$MANIFEST" 2>&1 >/dev/null)"; then
-        echo "ok: $LOCKFILE satisfies $MANIFEST (cargo --locked)"
-    else
-        echo "FAIL: \`cargo metadata --locked\` refused — $LOCKFILE, $MANIFEST, and their sources do not line up:" >&2
-        printf '%s\n' "$locked_err" | sed 's/^/  /' >&2
-        echo "  if the manifest moved, refresh the lockfile (cargo update <crate>) and commit it" >&2
-        fail=1
-    fi
-}
-
 # The one exit that reports: FAILED when any question answered no, OK (with
 # the engaged hatch named) when none did.
 finish() {
@@ -284,15 +263,13 @@ if [[ ${#git_deps[@]} -gt 0 ]]; then
             fail=1
         fi
     done < <(lock_facts <"$LOCKFILE")
-    echo
 
-    check_lock_agreement
     finish "escape hatch"
 fi
 
 if [[ ${#registry_deps[@]} -eq 0 ]]; then
-    # Every tapes crate is a path override; question 2 is what remains.
-    check_lock_agreement
+    # Every tapes crate is a path override; nothing is resolved to record,
+    # and the NOTICE above is the whole report.
     finish "path override"
 fi
 
@@ -335,9 +312,9 @@ if [[ "$fail" -eq 0 ]]; then
     echo "ok: exactly one version of each of ${#locked[@]} tapes crate(s), all from crates.io"
 fi
 
-# A set mismatch between manifest and lock is question 2's to catch; what is
-# reported here is only the case question 2 cannot see, because Cargo would
-# resolve the missing package rather than report it.
+# Manifest-lock agreement at large is the build jobs' `--locked` to enforce;
+# what is reported here is the one case these two files show on their face —
+# a declared crate the lockfile never resolved.
 for dep in "${registry_deps[@]}"; do
     name="${dep%%$'\t'*}"
     if ! grep -Fxq "$name" <<<"$locked_names"; then
@@ -345,9 +322,5 @@ for dep in "${registry_deps[@]}"; do
         fail=1
     fi
 done
-
-# --- question 2: the lockfile agrees with the manifest ------------------------
-
-check_lock_agreement
 
 finish
