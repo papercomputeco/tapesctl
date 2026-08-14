@@ -92,6 +92,7 @@ pub async fn sessions(command: SessionsCommand) -> Result<()> {
                 sort: args.sort,
                 since: args.since,
                 until: args.until,
+                harness_id: args.harness_id,
                 harness_session_id: args.harness_session_id,
                 auth_subject: args.auth_subject,
                 ..Default::default()
@@ -205,6 +206,7 @@ mod tests {
             since: None,
             until: None,
             harness_session_id: None,
+            harness_id: None,
             auth_subject: None,
         }
     }
@@ -233,10 +235,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_harness_session_id_flag_lands_on_the_wire() {
-        // The mock only answers when the query parameter is present with the
-        // given value, so a flag that stopped reaching the request would fail
-        // here rather than silently listing everything.
+    async fn the_harness_filter_pair_lands_on_the_wire() {
+        // The mock only answers when both halves of the pair reach the
+        // wire: the server 400s a lone harness param, so a flag that
+        // stopped shipping its partner would fail here rather than
+        // silently listing everything.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/v1/sessions"))
@@ -244,6 +247,7 @@ mod tests {
                 "harness_session_id",
                 "f47ac10b-58cc-4372-a567-0e02b2c3d479",
             ))
+            .and(query_param("harness_id", "claude"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_string(r#"{"items":[{"id":"s-1"}],"next_cursor":""}"#),
@@ -253,17 +257,19 @@ mod tests {
 
         let mut args = sessions_list_args(server.uri());
         args.harness_session_id = Some("f47ac10b-58cc-4372-a567-0e02b2c3d479".to_owned());
+        args.harness_id = Some("claude".to_owned());
         let result = sessions(SessionsCommand::List(args)).await;
 
         assert!(result.is_ok(), "got: {result:?}");
     }
 
     #[tokio::test]
-    async fn an_unset_harness_session_id_stays_out_of_the_query() {
+    async fn an_unset_harness_filter_stays_out_of_the_query() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/v1/sessions"))
             .and(query_param_is_missing("harness_session_id"))
+            .and(query_param_is_missing("harness_id"))
             .respond_with(
                 ResponseTemplate::new(200).set_body_string(r#"{"items":[],"next_cursor":""}"#),
             )

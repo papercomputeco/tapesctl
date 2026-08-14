@@ -121,8 +121,9 @@ Note the two ids. The one `start` printed is `harness_session_id`; the one every
 read command takes is `id`. They are different values in different namespaces,
 and feeding the printed one to `sessions get` returns a 404. That is a live
 defect, not a misunderstanding — pass the printed id to
-`sessions list --harness-session-id` to resolve it to the tapes `id`;
-[Session ids](./capture.md#session-ids) explains the split.
+`sessions list --harness-id claude --harness-session-id <id>` to resolve it to
+the tapes `id`; [Session ids](./capture.md#session-ids) explains the split and
+why the filter comes as a pair.
 
 Read the session with the `id` from the listing:
 

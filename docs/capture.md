@@ -231,8 +231,8 @@ nothing eligible — a harness launched and quit without calling a model.
 ## Session ids
 
 **The session id `start` prints is not the id read commands take.** This is a
-live defect; until it is fixed, the `--harness-session-id` filter below is the
-bridge between the two.
+live defect; until it is fixed, the `--harness-id`/`--harness-session-id`
+filter pair below is the bridge between the two.
 
 `start` prints, and builds its console link from, the **harness's** session id:
 Claude's own UUID, or pi's header value. The read API keys sessions on a
@@ -248,10 +248,12 @@ tapesctl: tapes API returned 404 for http://localhost:8081/v1/sessions/f47ac10b-
 ```
 
 To get from a printed id to a usable one, hand it to `sessions list` as the
-`--harness-session-id` filter and read the `id` on the result:
+`--harness-session-id` filter — paired with `--harness-id`, the harness you
+launched — and read the `id` on the result:
 
 ```bash
-tapesctl sessions list --harness-session-id f47ac10b-58cc-4372-a567-0e02b2c3d479 \
+tapesctl sessions list --harness-id claude \
+  --harness-session-id f47ac10b-58cc-4372-a567-0e02b2c3d479 \
   --tapes-url http://localhost:8081 | jq -r '.items[].id'
 ```
 
@@ -261,7 +263,10 @@ tapesctl sessions list --harness-session-id f47ac10b-58cc-4372-a567-0e02b2c3d479
 
 The filter is the read API's own `harness_session_id` parameter on
 `/v1/sessions`, applied server-side; a printed id that matches nothing returns
-an empty `items`.
+an empty `items`. The server accepts the harness filter only whole — a lone
+half is a 400 — so `tapesctl` requires the pair too, failing at parse with the
+missing half named. The server-side pairing requirement is expected to relax in
+a future tapes release, at which point the flag can stand alone.
 
 A second-order effect is worth knowing when the printed id looks wrong: the id
 `start` prints is whichever attributed turn the ingest server accepts **first**.
