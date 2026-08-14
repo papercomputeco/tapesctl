@@ -26,12 +26,11 @@
 #
 # (2) A manifest and a lockfile that disagree mean the build resolves
 #     something the manifest does not say. Cargo itself is the judge here
-#     (`cargo metadata --locked`), so satisfaction of a version requirement is
-#     decided by the one implementation whose opinion counts. Resolving under
-#     `--locked` may need the network for the registry index and any git
-#     dependencies, and — as with question (3) — a network that is away is
-#     not evidence: an environment that cannot resolve is reported as a
-#     WARNING, and what fails is Cargo resolving and saying no.
+#     (`cargo metadata --locked`), and ANY refusal fails: classifying Cargo's
+#     stderr into drift-versus-environment was a losing game (each new failure
+#     arrived spelled differently), and this check runs beside build jobs that
+#     need the same network and sources — an environment that cannot answer
+#     this question cannot build the crate either.
 #
 # (3) A version that resolves locally but is absent or yanked on crates.io is
 #     the version-era cousin of a pin at an unreachable revision: it builds
@@ -94,7 +93,7 @@
 # Requires: cargo, jq, curl.
 #
 # Exit status: 0 when every question is answered yes (or could not be asked
-# for a reason that is not evidence — see questions 2 and 3), 1 when one is
+# for a reason that is not evidence — see question 3), 1 when one is
 # answered no, 2 when the script could not ask at all (unreadable manifest,
 # missing tool). A question that could not be asked is never reported as a
 # pass.
@@ -207,25 +206,21 @@ lock_versions() {
 # evidence about this tree, while a resolver that could not reach the
 # registry or a git source is a network away and, like question 3's
 # unreachable registry, is reported as a WARNING rather than a failure.
+# Any failure fails, and Cargo's own words say why. This deliberately does
+# NOT classify the error: sorting drift from environment by pattern-matching
+# stderr was a losing game (stale-lock phrasing, unsatisfiable requirements,
+# and unfetchable revisions each arrived spelled differently), and the check
+# runs beside build jobs that need the same network and the same sources —
+# an environment that cannot answer this question cannot build the crate
+# either, so a red here never hides a green that mattered.
 check_lock_agreement() {
     if locked_err="$(cargo metadata --format-version 1 --locked --manifest-path "$MANIFEST" 2>&1 >/dev/null)"; then
         echo "ok: $LOCKFILE satisfies $MANIFEST (cargo --locked)"
-    elif printf '%s' "$locked_err" | grep -qi 'lock file.*needs to be updated\|--locked\|failed to select a version'; then
-        echo "FAIL: $LOCKFILE no longer agrees with $MANIFEST:" >&2
-        printf '%s\n' "$locked_err" | sed 's/^/  /' >&2
-        echo "  refresh the lockfile (cargo update <crate>) and commit it" >&2
-        fail=1
     else
-        cat >&2 <<EOF
-WARNING (not a failure): \`cargo metadata --locked\` could not run —
-manifest/lockfile agreement is unverified on this run:
-
-$(printf '%s\n' "$locked_err" | sed 's/^/  /')
-
-Resolving under --locked may need the network for the registry index and any
-git dependencies, so a resolver that cannot reach them is a network away, not
-a drift found. What fails this question is Cargo resolving and saying no.
-EOF
+        echo "FAIL: \`cargo metadata --locked\` refused — $LOCKFILE, $MANIFEST, and their sources do not line up:" >&2
+        printf '%s\n' "$locked_err" | sed 's/^/  /' >&2
+        echo "  if the manifest moved, refresh the lockfile (cargo update <crate>) and commit it" >&2
+        fail=1
     fi
 }
 
