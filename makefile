@@ -50,7 +50,7 @@ contracts-check:	## Verify the vendored tapes ingest contract against its record
 freshness-check:	## Verify each vendored fixture corpus against the upstream commit its SOURCE.md pins
 	./scripts/fixture-freshness-check.sh
 
-check-tapes-pins:	## Verify the tapes crates resolve to one crates.io version each, in a lockfile that agrees with the manifest
+check-tapes-pins:	## Verify the tapes crates resolve to one crates.io version each
 	./scripts/check-tapes-pins.sh
 
 run:	## Run the tapesctl CLI (e.g. `make run ARGS="version"`)
