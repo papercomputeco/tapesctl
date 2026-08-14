@@ -173,7 +173,7 @@ toml = "0.8"
 # and edits one key in place, so everything it does not understand survives
 # untouched. Already in the tree as a transitive dependency of `toml`, so this
 # pin costs no new download.
-toml_edit = "0.22"
+toml_edit = "0.25"
 
 # --- errors ---
 snafu = "0.8"
