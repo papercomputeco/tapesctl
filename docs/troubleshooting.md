@@ -67,20 +67,26 @@ take the **tapes** session id. They are different values in different
 namespaces, and the console link `start` builds uses the harness one too. This
 is a live defect, not a mistake on your part.
 
-**Workaround.** List sessions and match on `harness_session_id`:
+**Workaround.** Pass the printed id to `sessions list` as the
+`--harness-session-id` filter — paired with `--harness-id`, the harness you
+launched, because the server accepts the harness filter only whole — and read
+the `id` on the result:
 
 ```bash
-tapesctl sessions list --tapes-url http://localhost:8081 \
-  | jq -r '.items[] | select(.harness_session_id=="f47ac10b-58cc-4372-a567-0e02b2c3d479") | .id'
+tapesctl sessions list --harness-id claude \
+  --harness-session-id f47ac10b-58cc-4372-a567-0e02b2c3d479 \
+  --tapes-url http://localhost:8081 | jq -r '.items[].id'
 ```
 
 ```
 01JDQ8F3K2M4N6P8R0T2V4X6Z8
 ```
 
-Use that `id` with every read command. The read API does support a
-`harness_session_id` filter, but `tapesctl sessions list` exposes no flag for
-it today, which is why the match happens client-side.
+Use that `id` with every read command. The filter is the read API's own
+`harness_session_id` parameter, applied server-side; a printed id that matches
+nothing returns an empty `items`. A lone half of the pair fails at parse with
+the missing half named — that is `tapesctl` refusing a shape the server would
+400.
 
 **If the printed id looks like the wrong session entirely**, it may be: the id
 `start` prints is whichever attributed turn ingest accepts *first*, so a

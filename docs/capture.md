@@ -231,8 +231,8 @@ nothing eligible — a harness launched and quit without calling a model.
 ## Session ids
 
 **The session id `start` prints is not the id read commands take.** This is a
-live defect, and until it is fixed the workaround below is the honest
-instruction.
+live defect; until it is fixed, the `--harness-id`/`--harness-session-id`
+filter pair below is the bridge between the two.
 
 `start` prints, and builds its console link from, the **harness's** session id:
 Claude's own UUID, or pi's header value. The read API keys sessions on a
@@ -247,21 +247,26 @@ tapesctl sessions get f47ac10b-58cc-4372-a567-0e02b2c3d479 --tapes-url http://lo
 tapesctl: tapes API returned 404 for http://localhost:8081/v1/sessions/f47ac10b-58cc-4372-a567-0e02b2c3d479: {"error": "session not found", "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479"}
 ```
 
-To get from a printed id to a usable one, list sessions and match on
-`harness_session_id`:
+To get from a printed id to a usable one, hand it to `sessions list` as the
+`--harness-session-id` filter — paired with `--harness-id`, the harness you
+launched — and read the `id` on the result:
 
 ```bash
-tapesctl sessions list --tapes-url http://localhost:8081 \
-  | jq -r '.items[] | select(.harness_session_id=="f47ac10b-58cc-4372-a567-0e02b2c3d479") | .id'
+tapesctl sessions list --harness-id claude \
+  --harness-session-id f47ac10b-58cc-4372-a567-0e02b2c3d479 \
+  --tapes-url http://localhost:8081 | jq -r '.items[].id'
 ```
 
 ```
 01JDQ8F3K2M4N6P8R0T2V4X6Z8
 ```
 
-The read API does support a `harness_session_id` filter on `/v1/sessions`, but
-`tapesctl sessions list` exposes no flag for it today, which is why the match
-happens client-side.
+The filter is the read API's own `harness_session_id` parameter on
+`/v1/sessions`, applied server-side; a printed id that matches nothing returns
+an empty `items`. The server accepts the harness filter only whole — a lone
+half is a 400 — so `tapesctl` requires the pair too, failing at parse with the
+missing half named. The server-side pairing requirement is expected to relax in
+a future tapes release, at which point the flag can stand alone.
 
 A second-order effect is worth knowing when the printed id looks wrong: the id
 `start` prints is whichever attributed turn the ingest server accepts **first**.

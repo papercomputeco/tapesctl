@@ -404,6 +404,18 @@ pub struct SessionsListArgs {
     #[arg(long)]
     pub until: Option<String>,
 
+    /// Only the session captured from this harness session id — the id
+    /// `start` prints (distinct from the tapes session id read commands
+    /// take). The server takes the harness filter only as a pair, so
+    /// `--harness-id` must come with it.
+    #[arg(long, requires = "harness_id")]
+    pub harness_session_id: Option<String>,
+
+    /// The harness the session ran under (e.g. `claude`), naming the
+    /// other half of the harness filter pair.
+    #[arg(long, requires = "harness_session_id")]
+    pub harness_id: Option<String>,
+
     /// Only sessions stamped with this acting subject.
     #[arg(long)]
     pub auth_subject: Option<String>,
@@ -1297,5 +1309,38 @@ mod tests {
     fn a_missing_required_positional_is_rejected() {
         assert!(Cli::try_parse_from(["tapesctl", "sessions", "get"]).is_err());
         assert!(Cli::try_parse_from(["tapesctl", "spans", "get", "t-1"]).is_err());
+    }
+
+    #[test]
+    fn a_lone_harness_filter_flag_is_rejected_at_parse() {
+        // The server takes the harness filter only as a pair — a lone
+        // param is a 400 — so the parser refuses the shapes the server
+        // would refuse, with a message that names the missing half.
+        assert!(
+            Cli::try_parse_from([
+                "tapesctl",
+                "sessions",
+                "list",
+                "--harness-session-id",
+                "sid"
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["tapesctl", "sessions", "list", "--harness-id", "claude"])
+                .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "tapesctl",
+                "sessions",
+                "list",
+                "--harness-session-id",
+                "sid",
+                "--harness-id",
+                "claude",
+            ])
+            .is_ok()
+        );
     }
 }

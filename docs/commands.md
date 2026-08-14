@@ -249,7 +249,7 @@ reach you without a client upgrade.
 
 | leaf | route | flags |
 |---|---|---|
-| `list` | `GET /v1/sessions` | `--limit`, `--cursor`, `--sort`, `--direction`, `--since`, `--until`, `--auth-subject` |
+| `list` | `GET /v1/sessions` | `--limit`, `--cursor`, `--sort`, `--direction`, `--since`, `--until`, `--harness-id`, `--harness-session-id`, `--auth-subject` |
 | `get <ID>` | `GET /v1/sessions/{id}` | — |
 | `traces <ID>` | `GET /v1/sessions/{id}/traces` | `--payload` |
 | `raw-turns <ID>` | `GET /v1/sessions/{id}/raw_turns` | — |
@@ -260,7 +260,9 @@ tapesctl sessions get 01JDQ8F3K2M4N6P8R0T2V4X6Z8 --tapes-url http://localhost:80
 ```
 
 `sessions list` flags are all optional and all omitted from the query when
-unset, so the server's own defaults apply.
+unset, so the server's own defaults apply. The one coupling: the server accepts
+the harness filter only whole, so `--harness-id` and `--harness-session-id`
+come as a pair — a lone half fails at parse with the missing half named.
 
 | flag | behaviour |
 |---|---|
@@ -269,6 +271,8 @@ unset, so the server's own defaults apply.
 | `--sort <COL>` | e.g. `last_active`, `started_at`, `total_cost_usd` |
 | `--direction <D>` | `asc` or `desc` |
 | `--since`, `--until` | RFC 3339 |
+| `--harness-id <H>` | the harness the session ran under (e.g. `claude`) — the other half of the pair |
+| `--harness-session-id <ID>` | exact match on the harness session id — the id `start` prints; pairs with `--harness-id`; see [Session ids](./capture.md#session-ids) |
 | `--auth-subject <S>` | exact match |
 
 `--payload` takes `full` (the default) or `preview`, case-insensitively. An
