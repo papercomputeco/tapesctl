@@ -15,7 +15,7 @@ answers a given question:
 
 - **tapes** is the server. It owns `serve`, `local up`, `seed`, and the HTTP
   APIs. Running one is documented in the server's own docs at
-  <https://tapes.dev/docs/tapes/>.
+  <https://tapes.dev/docs/>.
 - **tapesctl** is the client. Every capture and read verb lives here.
 
 You bring your own server. `tapesctl` never guesses one: with no server
