@@ -65,9 +65,12 @@ is unreachable.";
 /// is never a clap unknown-command: an empty noun answers with the help above,
 /// which explains what would fill it. Costs no I/O.
 ///
-/// This is the canonical spelling, and it is the sibling CLI's too: both clients drive
-/// the same generated surface from the same crate, so `<client> cassettes
-/// <name> <method>` transfers between them unchanged.
+/// This is the only spelling, and it is the sibling CLI's too: both clients
+/// drive the same generated surface from the same crate, so `<client> cassettes
+/// <name> <method>` transfers between them unchanged. The retired top-level
+/// spelling (`tapesctl <name> <method>`) shipped one release as a hidden
+/// alias and is gone; keeping every cassette off the top level is what lets
+/// the parser for every other verb be built with no discovery at all.
 #[must_use]
 pub fn mount(base: Command, surface: &Surface) -> Command {
     let noun = Command::new(NOUN)
@@ -92,13 +95,10 @@ const CLAP_HELP: &str = "help";
 /// panicking. A deployment's choice of name must never be able to crash
 /// someone's CLI.
 ///
-/// Applied by *both* mounts, which is the whole reason it is a function. It
-/// first guarded only the noun, on the reading that the top level already had a
-/// visible `help` for `augment`'s check to find. It does not: `Cli::command()`
-/// is unbuilt when the check runs, so `help` is no more present there than
-/// under the noun, and a cassette named `help` reached the same panic through
-/// the hidden top-level alias. Two mount paths meant two chances to forget;
-/// there is now one filter and both go through it.
+/// [`mount`] is the only place cassettes become commands now, but the filter
+/// stays its own function: the retired top-level aliases reached this exact
+/// panic because a second mount path skipped it, and a named seam with its own
+/// test is what keeps a future second path from repeating that.
 fn admissible(surface: &Surface) -> Surface {
     Surface {
         cassettes: surface
@@ -117,42 +117,6 @@ fn admissible(surface: &Surface) -> Surface {
             .cloned()
             .collect(),
     }
-}
-
-/// Add a top-level subcommand for every cassette on the surface, hidden.
-///
-/// The spelling `tapesctl <cassette> <method>` was the original one and still
-/// works; it is simply no longer advertised. Hiding rather than removing is a
-/// deliberate one-release grace period: these nouns are what every existing
-/// script and muscle memory types, and a name that is discovered from a server
-/// cannot be deprecated with a compiler warning — the first sign of removal
-/// would be someone's automation failing. Help and documentation now say
-/// [`NOUN`] everywhere, so nothing teaches the old spelling to anyone new.
-///
-/// A cassette whose name collides with a built-in command is still skipped: a
-/// server must not be able to redefine what `tapesctl sessions` means on
-/// someone's machine. That check is also why the hiding is computed by
-/// difference rather than from the surface — the set actually generated is not
-/// the set offered, and hiding a name that was skipped would hide a built-in.
-///
-/// It runs through [`admissible`] for the same reason [`mount`] does. The
-/// built-in check cannot cover `help` here either: it reads the subcommands the
-/// base *declares*, and clap adds its own `help` later than that.
-#[must_use]
-pub fn augment(base: Command, surface: &Surface) -> Command {
-    let before: Vec<String> = base
-        .get_subcommands()
-        .map(|sub| sub.get_name().to_owned())
-        .collect();
-    let augmented = tapes_client::cli::augment(base, &admissible(surface), with_tapes_url);
-    let generated: Vec<String> = augmented
-        .get_subcommands()
-        .map(|sub| sub.get_name().to_owned())
-        .filter(|name| !before.contains(name))
-        .collect();
-    generated.into_iter().fold(augmented, |command, name| {
-        command.mut_subcommand(name, |sub| sub.hide(true))
-    })
 }
 
 /// The sentence the top-level help always carries about cassette commands.
@@ -295,7 +259,7 @@ mod tests {
         // check that the text clap renders is the text this module produced.
         let surface = Surface::default();
         let text = epilogue(None, &surface);
-        let rendered = augment(root(), &surface)
+        let rendered = mount(root(), &surface)
             .after_help(text.clone())
             .render_help()
             .to_string();
@@ -339,45 +303,30 @@ mod tests {
     }
 
     #[test]
-    fn a_cassette_named_like_clap_s_own_help_is_not_generated_by_either_mount() {
+    fn a_cassette_named_like_clap_s_own_help_is_not_generated() {
         // clap materializes `help` after `augment`'s collision check can see
-        // it, at the noun *and* at the top level, so a cassette by that name
-        // would panic the parser build — a crash a deployment could cause by
-        // its choice of name alone.
+        // it, so a cassette by that name would panic the parser build — a
+        // crash a deployment could cause by its choice of name alone.
         //
-        // Both paths are exercised, separately and together, and against the
-        // real derived `Cli` rather than the stub: this filter guarded only the
-        // noun at first, on the assumption that the top level already had a
-        // `help` for the built-in check to catch. It does not — `Cli::command()`
-        // is unbuilt when that check runs — so the hidden alias reached the
-        // panic anyway. A stub base would not have shown that.
+        // Exercised against the real derived `Cli` rather than the stub, which
+        // is what caught the second mount path skipping this filter before the
+        // top-level aliases were retired.
         let surface = surface_from(
             "help",
             &json!({"paths": {"/v1/cassettes/help/x": {"get": {"operationId": "getX"}}}}),
         );
         mount(real_cli(), &surface).debug_assert();
-        augment(real_cli(), &surface).debug_assert();
-        // And the composition `crate::parser` actually builds.
-        augment(mount(real_cli(), &surface), &surface).debug_assert();
 
-        // Nothing named `help` was generated at either level; clap's own is
+        // Nothing named `help` was generated under the noun; clap's own is
         // what survives.
-        let built = augment(mount(real_cli(), &surface), &surface);
-        assert_eq!(
-            built
-                .get_subcommands()
-                .filter(|sub| sub.get_name() == "help")
-                .count(),
-            0,
-            "the cassette must not have been mounted as a top-level alias",
-        );
+        let built = mount(real_cli(), &surface);
         assert_eq!(
             built
                 .get_subcommands()
                 .find(|sub| sub.get_name() == NOUN)
                 .map(|noun| noun.get_subcommands().count()),
             Some(0),
-            "nor under the noun",
+            "a cassette named `help` must not be mounted under the noun",
         );
     }
 
@@ -386,50 +335,24 @@ mod tests {
     }
 
     #[test]
-    fn the_top_level_spelling_still_parses_but_is_no_longer_advertised() {
-        // One release of grace: a name discovered from a server cannot be
-        // deprecated with a compiler warning, so the first sign of removal
-        // would be someone's automation failing.
-        let mut command = augment(root(), &hello_surface());
-        let generated = command
-            .find_subcommand("hello-world")
-            .expect("the alias should still be there");
-        assert!(generated.is_hide_set(), "but it should not be listed");
-        assert!(
-            !command
-                .render_long_help()
-                .to_string()
-                .contains("hello-world"),
-            "and the help is what teaches the canonical spelling",
+    fn the_retired_top_level_spelling_is_an_unknown_command() {
+        // `tapesctl <name> <method>` shipped one release as a hidden alias and
+        // is gone: the name now fails exactly like any other unknown command,
+        // with the noun's spelling being the one the help teaches.
+        let error = mount(root(), &hello_surface())
+            .try_get_matches_from([
+                "tapesctl",
+                "hello-world",
+                "get-hello",
+                "--tapes-url",
+                "http://x",
+            ])
+            .expect_err("the retired spelling must not parse");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::InvalidSubcommand,
+            "got: {error}",
         );
-        assert!(
-            command
-                .try_get_matches_from([
-                    "tapesctl",
-                    "hello-world",
-                    "get-hello",
-                    "--tapes-url",
-                    "http://x"
-                ])
-                .is_ok(),
-        );
-    }
-
-    #[test]
-    fn hiding_the_aliases_never_hides_a_built_in() {
-        // A cassette whose name collides with a built-in is skipped, so the set
-        // generated is not the set offered; hiding from the surface rather than
-        // from the difference would have hidden `sessions` itself.
-        let surface = surface_from(
-            "sessions",
-            &json!({"paths": {"/v1/cassettes/sessions/x": {"get": {"operationId": "getX"}}}}),
-        );
-        let command = augment(root(), &surface);
-        let sessions = command
-            .get_subcommands()
-            .find(|sub| sub.get_name() == "sessions")
-            .expect("the built-in must survive");
-        assert!(!sessions.is_hide_set());
     }
 
     #[test]
@@ -437,16 +360,20 @@ mod tests {
         // clap panics at runtime on a malformed definition, and the workspace
         // denies panics — so a spec that produced one would be a crash the user
         // triggers just by pointing tapesctl at their own server.
-        augment(root(), &hello_surface()).debug_assert();
+        mount(root(), &hello_surface()).debug_assert();
     }
 
     #[test]
     fn a_cassette_becomes_a_noun_and_its_operations_become_methods() {
-        let command = augment(root(), &hello_surface());
+        let command = mount(root(), &hello_surface());
         let cassette = command
             .get_subcommands()
-            .find(|sub| sub.get_name() == "hello-world")
-            .expect("the cassette noun should be generated");
+            .find(|sub| sub.get_name() == NOUN)
+            .and_then(|noun| {
+                noun.get_subcommands()
+                    .find(|sub| sub.get_name() == "hello-world")
+            })
+            .expect("the cassette noun should be generated under the mount");
         let methods: Vec<&str> = cassette
             .get_subcommands()
             .map(clap::Command::get_name)
@@ -456,28 +383,39 @@ mod tests {
     }
 
     #[test]
-    fn a_cassette_cannot_redefine_a_built_in_command() {
-        // A server that shipped a cassette named `sessions` would otherwise
-        // change what an existing command does on the user's machine.
+    fn a_cassette_named_like_a_built_in_stays_under_the_noun() {
+        // With no top-level mounting left, a server that ships a cassette
+        // named `sessions` cannot touch what `tapesctl sessions` means: the
+        // cassette lives under the noun, and the built-in keeps the top level.
         let surface = surface_from(
             "sessions",
             &json!({"paths": {"/v1/cassettes/sessions/x": {"get": {"operationId": "getX"}}}}),
         );
-        let command = augment(root(), &surface);
+        let command = mount(root(), &surface);
         let sessions: Vec<&clap::Command> = command
             .get_subcommands()
             .filter(|sub| sub.get_name() == "sessions")
             .collect();
-        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions.len(), 1, "the built-in must keep the top level");
         assert_eq!(sessions[0].get_subcommands().count(), 0);
+        assert!(
+            command
+                .get_subcommands()
+                .find(|sub| sub.get_name() == NOUN)
+                .is_some_and(|noun| noun
+                    .get_subcommands()
+                    .any(|sub| sub.get_name() == "sessions")),
+            "and the cassette is reachable under the noun",
+        );
     }
 
     #[test]
     fn the_generated_help_names_the_route_it_calls() {
         // The one thing a user cannot infer from the command name.
-        let mut command = augment(root(), &hello_surface());
+        let mut command = mount(root(), &hello_surface());
         let help = command
-            .find_subcommand_mut("hello-world")
+            .find_subcommand_mut(NOUN)
+            .and_then(|noun| noun.find_subcommand_mut("hello-world"))
             .and_then(|c| c.find_subcommand_mut("get-hello"))
             .unwrap()
             .render_long_help()
@@ -499,9 +437,10 @@ mod tests {
                 ]}
             }}}),
         );
-        let matches = augment(root(), &surface)
+        let matches = mount(root(), &surface)
             .try_get_matches_from([
                 "tapesctl",
+                NOUN,
                 "summary",
                 "get-report",
                 "r-1",
@@ -512,7 +451,8 @@ mod tests {
             ])
             .unwrap();
 
-        let (name, cassette) = matches.subcommand().unwrap();
+        let (_, noun) = matches.subcommand().unwrap();
+        let (name, cassette) = noun.subcommand().unwrap();
         assert_eq!(name, "summary");
         let (_, method) = cassette.subcommand().unwrap();
         assert_eq!(method.get_one::<String>("id").unwrap(), "r-1");
@@ -528,9 +468,10 @@ mod tests {
             }}}),
         );
         assert!(
-            augment(root(), &surface)
+            mount(root(), &surface)
                 .try_get_matches_from([
                     "tapesctl",
+                    NOUN,
                     "summary",
                     "get-report",
                     "--tapes-url",
@@ -542,12 +483,13 @@ mod tests {
 
     #[test]
     fn a_required_body_is_required_and_an_absent_one_is_not_offered() {
-        let command = augment(root(), &hello_surface());
+        let command = mount(root(), &hello_surface());
         assert!(
             command
                 .clone()
                 .try_get_matches_from([
                     "tapesctl",
+                    NOUN,
                     "hello-world",
                     "create-hello",
                     "--tapes-url",
@@ -561,6 +503,7 @@ mod tests {
             command
                 .try_get_matches_from([
                     "tapesctl",
+                    NOUN,
                     "hello-world",
                     "get-hello",
                     "--body",
@@ -583,16 +526,18 @@ mod tests {
                 "get": {"operationId": "listReports"}
             }}}),
         );
-        let matches = augment(root(), &surface)
+        let matches = mount(root(), &surface)
             .try_get_matches_from([
                 "tapesctl",
+                NOUN,
                 "summary",
                 "list-reports",
                 "--tapes-url",
                 "http://x",
             ])
             .unwrap();
-        let (_, cassette) = matches.subcommand().unwrap();
+        let (_, noun) = matches.subcommand().unwrap();
+        let (_, cassette) = noun.subcommand().unwrap();
         let (_, method_matches) = cassette.subcommand().unwrap();
 
         let cassette_spec = surface.cassette("summary").unwrap();
@@ -631,9 +576,10 @@ mod tests {
                 ]}
             }}}),
         );
-        let matches = augment(root(), &surface)
+        let matches = mount(root(), &surface)
             .try_get_matches_from([
                 "tapesctl",
+                NOUN,
                 "summary",
                 "list-reports",
                 "--auth-subject",
@@ -644,7 +590,8 @@ mod tests {
                 "http://x",
             ])
             .unwrap();
-        let (_, cassette) = matches.subcommand().unwrap();
+        let (_, noun) = matches.subcommand().unwrap();
+        let (_, cassette) = noun.subcommand().unwrap();
         let (_, method_matches) = cassette.subcommand().unwrap();
 
         let cassette_spec = surface.cassette("summary").unwrap();
@@ -682,9 +629,10 @@ mod tests {
                 ]}
             }}}),
         );
-        let matches = augment(root(), &surface)
+        let matches = mount(root(), &surface)
             .try_get_matches_from([
                 "tapesctl",
+                NOUN,
                 "summary",
                 "get-report",
                 "r-1",
@@ -694,7 +642,8 @@ mod tests {
                 &server.uri(),
             ])
             .unwrap();
-        let (name, cassette_matches) = matches.subcommand().unwrap();
+        let (_, noun) = matches.subcommand().unwrap();
+        let (name, cassette_matches) = noun.subcommand().unwrap();
 
         let result = dispatch(&surface, name, cassette_matches).await;
         assert!(result.is_ok(), "got: {result:?}");
@@ -720,16 +669,18 @@ mod tests {
                 "get": {"operationId": "listReports"}
             }}}),
         );
-        let matches = augment(root(), &surface)
+        let matches = mount(root(), &surface)
             .try_get_matches_from([
                 "tapesctl",
+                NOUN,
                 "summary",
                 "list-reports",
                 "--tapes-url",
                 &server.uri(),
             ])
             .unwrap();
-        let (name, cassette_matches) = matches.subcommand().unwrap();
+        let (_, noun) = matches.subcommand().unwrap();
+        let (name, cassette_matches) = noun.subcommand().unwrap();
 
         let err = dispatch(&surface, name, cassette_matches)
             .await

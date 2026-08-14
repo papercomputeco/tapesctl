@@ -162,6 +162,98 @@ where
     count
 }
 
+/// Global flags that take a value in the space-separated spelling.
+///
+/// [`gated`]'s argv scan must not mistake a global flag's *value* for the
+/// first subcommand: `tapesctl --tapes-url http://x cassettes …` names
+/// `cassettes`, not `http://x`. Nothing has been parsed when the scan runs, so
+/// it carries its own list of value-taking globals; a test pins the list to
+/// the derived [`Cli`] so it cannot drift.
+const VALUE_TAKING_GLOBALS: [&str; 1] = [TAPES_URL_FLAG];
+
+/// The first token that can be a subcommand name, before any `--` cutoff.
+fn first_noun(argv: &[String]) -> Option<&str> {
+    let mut arguments = argv.iter().skip(1).map(String::as_str);
+    while let Some(argument) = arguments.next() {
+        // Everything after a bare `--` belongs to a launched harness, not to
+        // tapesctl — a harness argument spelled `cassettes` must not run
+        // discovery. The same cutoff `discovery_url` and `verbosity` apply.
+        if argument == "--" {
+            return None;
+        }
+        if VALUE_TAKING_GLOBALS.contains(&argument) {
+            // Space-separated flag value; skip it. The `--flag=value`
+            // spelling is one token and starts with `-`, so it needs no
+            // special case.
+            let _ = arguments.next();
+            continue;
+        }
+        if !argument.starts_with('-') {
+            return Some(argument);
+        }
+    }
+    None
+}
+
+/// Whether the top level will print the version and exit.
+///
+/// `--version` and `-V` before the first subcommand end the parse: clap
+/// prints the stamped identity and exits, and no help — so no cassette
+/// list — is ever rendered. Discovery for that command line would be pure
+/// waste (a cache read, and on a cold or stale cache a network round-trip),
+/// so [`gated`] treats it like a non-cassette verb.
+///
+/// The scan stops at the first token that outranks the version flag: a help
+/// flag or a subcommand name. clap answers whichever of `--help` and
+/// `--version` it processes first, so `--help --version` renders the
+/// top-level help — which must list the cassette noun — while
+/// `--version --help` prints the version; a test pins that precedence
+/// against the real parser. The `--` cutoff and the value-skip for
+/// [`VALUE_TAKING_GLOBALS`] are the same ones [`first_noun`] applies.
+fn version_short_circuits(argv: &[String]) -> bool {
+    let mut arguments = argv.iter().skip(1).map(String::as_str);
+    while let Some(argument) = arguments.next() {
+        if argument == "--" {
+            return false;
+        }
+        if VALUE_TAKING_GLOBALS.contains(&argument) {
+            let _ = arguments.next();
+            continue;
+        }
+        match argument {
+            "--version" | "-V" => return true,
+            "--help" | "-h" => return false,
+            _ if !argument.starts_with('-') => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Whether this command line can possibly reach the generated cassette surface.
+///
+/// Only three shapes can: `tapesctl cassettes …` itself, `tapesctl help …`
+/// (whose output may descend into the noun), and a bare / flags-only
+/// invocation (whose help must list the noun and explain where its contents
+/// come from). Every other verb builds its parser with **zero** discovery
+/// I/O — no cache read, no network. The fixed [`crate::cassette::command::NOUN`]
+/// literal is what makes this scan sufficient: since the retired top-level
+/// aliases went, no first token other than these three can name a cassette.
+///
+/// One flags-only shape is carved back out: a version request
+/// ([`version_short_circuits`]) prints and exits without rendering help, so
+/// it pays for no discovery either.
+#[must_use]
+pub fn gated(argv: &[String]) -> bool {
+    if version_short_circuits(argv) {
+        return false;
+    }
+    matches!(
+        first_noun(argv),
+        None | Some(crate::cassette::command::NOUN) | Some("help")
+    )
+}
+
 /// Top-level subcommands.
 ///
 /// The `<resource> <method>` surface is hand-written here for the core data
@@ -1228,7 +1320,13 @@ mod tests {
             Some("http://x".to_owned()),
         );
         assert_eq!(
-            discovery_url(["tapesctl", "summary", "reports", "--tapes-url=http://y"]),
+            discovery_url([
+                "tapesctl",
+                "cassettes",
+                "summary",
+                "reports",
+                "--tapes-url=http://y"
+            ]),
             Some("http://y".to_owned()),
         );
     }
@@ -1342,5 +1440,141 @@ mod tests {
             ])
             .is_ok()
         );
+    }
+
+    fn argv(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn value_taking_globals_track_the_real_cli() {
+        // The gate's list must match the derived CLI exactly: a value-taking
+        // global missing here makes the gate misread that flag's value as the
+        // subcommand, and a listed flag that stopped taking a value makes the
+        // gate swallow a real subcommand.
+        let command = Cli::command();
+        let mut expected: Vec<String> = command
+            .get_arguments()
+            .filter(|a| a.is_global_set() && a.get_action().takes_values())
+            .map(|a| format!("--{}", a.get_long().expect("globals are long flags")))
+            .collect();
+        expected.sort();
+        let mut actual: Vec<String> = VALUE_TAKING_GLOBALS
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        actual.sort();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn only_cassettes_help_and_bare_invocations_are_gated_in() {
+        assert!(gated(&argv(&["tapesctl"])));
+        assert!(gated(&argv(&["tapesctl", "--help"])));
+        assert!(gated(&argv(&["tapesctl", "-v"])));
+        assert!(gated(&argv(&["tapesctl", "cassettes"])));
+        assert!(gated(&argv(&[
+            "tapesctl",
+            "cassettes",
+            "summary",
+            "reports"
+        ])));
+        assert!(gated(&argv(&["tapesctl", "help"])));
+        assert!(gated(&argv(&["tapesctl", "help", "cassettes"])));
+
+        assert!(!gated(&argv(&["tapesctl", "sessions", "list"])));
+        assert!(!gated(&argv(&["tapesctl", "start", "claude"])));
+        assert!(!gated(&argv(&["tapesctl", "version"])));
+        assert!(!gated(&argv(&["tapesctl", "config", "get", "tapes-url"])));
+    }
+
+    #[test]
+    fn a_version_request_is_gated_out() {
+        // `--version` prints and exits without rendering help, so discovery
+        // for it would be a cache read — and on a cold cache a network
+        // round-trip — spent on output that never shows a cassette.
+        assert!(!gated(&argv(&["tapesctl", "--version"])));
+        assert!(!gated(&argv(&["tapesctl", "-V"])));
+        assert!(!gated(&argv(&["tapesctl", "-v", "--version"])));
+        assert!(!gated(&argv(&[
+            "tapesctl",
+            "--tapes-url",
+            "http://x",
+            "--version"
+        ])));
+
+        // Whichever of `--help` and `--version` clap processes first is the
+        // one it answers, so only a version flag that comes first ends the
+        // parse without help.
+        assert!(gated(&argv(&["tapesctl", "--help", "--version"])));
+        assert!(!gated(&argv(&["tapesctl", "--version", "--help"])));
+
+        // Past a noun or a `--` cutoff the token is not the top-level flag.
+        assert!(gated(&argv(&["tapesctl", "cassettes", "--version"])));
+        assert!(gated(&argv(&["tapesctl", "--", "--version"])));
+    }
+
+    #[test]
+    fn clap_answers_the_first_of_help_and_version() {
+        // The gate's precedence rule mirrors the parser; pin the parser's
+        // half so a clap upgrade cannot silently split them.
+        use clap::error::ErrorKind;
+
+        let kind_of = |argv: &[&str]| {
+            Cli::command()
+                .try_get_matches_from(argv)
+                .expect_err("help and version both end the parse")
+                .kind()
+        };
+        assert_eq!(
+            kind_of(&["tapesctl", "--version", "--help"]),
+            ErrorKind::DisplayVersion
+        );
+        assert_eq!(
+            kind_of(&["tapesctl", "--help", "--version"]),
+            ErrorKind::DisplayHelp
+        );
+    }
+
+    #[test]
+    fn a_global_flag_value_is_not_mistaken_for_the_subcommand() {
+        // `http://x` is --tapes-url's value, not the first noun.
+        assert!(gated(&argv(&[
+            "tapesctl",
+            "--tapes-url",
+            "http://x",
+            "cassettes",
+            "summary",
+        ])));
+        assert!(!gated(&argv(&[
+            "tapesctl",
+            "--tapes-url",
+            "http://x",
+            "sessions",
+            "list",
+        ])));
+        // The `=` spelling is one token and needs no lookahead.
+        assert!(!gated(&argv(&[
+            "tapesctl",
+            "--tapes-url=http://x",
+            "sessions",
+            "list",
+        ])));
+    }
+
+    #[test]
+    fn tokens_after_a_bare_dash_dash_never_gate_discovery_in() {
+        // Everything after `--` belongs to the launched harness; a harness
+        // argument spelled `cassettes` must not cost a discovery round trip.
+        assert!(!gated(&argv(&[
+            "tapesctl",
+            "start",
+            "claude",
+            "--",
+            "cassettes"
+        ])));
+        // A `--` with nothing before it means no subcommand of tapesctl's own
+        // was named — and nothing after it is tapesctl's either.
+        assert!(gated(&argv(&["tapesctl", "--", "sessions"])));
     }
 }

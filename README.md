@@ -292,8 +292,10 @@ unaffected. Deploying and configuring cassettes is an operator task and is not
 part of this surface.
 
 Cassettes used to mount as top-level nouns (`tapesctl hello-world get-hello`).
-That spelling still parses and will keep working through the next release; it is
-simply no longer listed, and everything here names the `cassettes` form.
+That spelling shipped one release as a hidden alias and has been removed: it
+now fails like any other unknown command. Write `tapesctl cassettes <name>
+<method>`. Retiring it is also what makes every non-cassette command start
+without touching the discovery cache or the network at all.
 
 ## Develop
 

@@ -145,13 +145,13 @@ server onto the paths a client can actually call.
 Four flag names are reserved and can never be handed to a cassette parameter:
 `tapes-url`, `body`, `help`, and `verbose`.
 
-Two collisions are resolved by skipping the cassette rather than failing:
-
-- A cassette **named `help`** is silently skipped, because a duplicate would
-  crash the parser and a deployment's choice of name must not crash someone's
-  CLI.
-- A cassette whose name collides with a **built-in** is skipped. A server must
-  not be able to redefine what `tapesctl sessions` means.
+One collision is resolved by skipping the cassette rather than failing: a
+cassette **named `help`** is silently skipped, because a duplicate would crash
+the parser and a deployment's choice of name must not crash someone's CLI. A
+cassette named after a **built-in** needs no special case any more — with the
+whole surface under the `cassettes` noun, `tapesctl cassettes sessions` and
+`tapesctl sessions` are different commands, and a server cannot redefine what
+the second one means.
 
 ### Why discovery is a runtime step
 
@@ -165,8 +165,12 @@ cassette are exactly the ones a stale list would fail.
 ## Discovery never fails
 
 Discovery runs before your arguments are parsed, resolving the server from the
-same three sources as everything else. Every failure mode degrades instead of
-raising:
+same three sources as everything else — but only when the command line can
+actually reach the generated surface: `tapesctl cassettes …`, `tapesctl help
+…`, or a bare / flags-only invocation whose help must describe the noun. Every
+other command builds its command tree with no discovery at all — no cache
+read, no network. When discovery does run, every failure mode degrades instead
+of raising:
 
 - no server configured,
 - a URL that does not parse,
@@ -254,11 +258,17 @@ names none lists nothing at all. That is the strongest reason to run
 ## The older spelling
 
 Cassettes used to mount as top-level nouns — `tapesctl <name> <method>`. That
-spelling still parses and will keep working through the next release. The only
-change is that it is no longer listed: it appears nowhere in `--help`.
+spelling has been removed: it shipped one release as a hidden alias (parsing
+but unlisted, so nothing taught it to anyone new) and now fails like any other
+unknown command. A script still typing it gets clap's normal error; the fix is
+mechanical — insert `cassettes` before the name:
 
-The grace period is deliberate. Those nouns are what existing scripts type, and
-a name discovered from a server cannot be deprecated with a compiler warning —
-so without it, the first sign of removal would be someone's automation failing.
+```console
+$ tapesctl hello-world get-hello        # old, now an error
+$ tapesctl cassettes hello-world get-hello
+```
 
-Write the `cassettes` form in anything new.
+Retiring the aliases is what bought the startup behavior described above: when
+any first token could have been a cassette, every invocation had to run
+discovery just to build its command tree. With the surface confined to the
+`cassettes` noun, everything else skips discovery entirely.
