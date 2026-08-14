@@ -97,16 +97,14 @@ jobs:
 
     # The shared tapes crates are several packages published from one
     # repository, taken from crates.io by version. This asserts the lockfile
-    # resolves exactly one version of each, that it still agrees with the
-    # manifest, and that every resolved version exists (unyanked) on the
-    # registry — a version that only resolves out of a cached registry builds
-    # here and nowhere clean, which is a failure this repository can only
-    # discover from someone else's clone. The registry probe is advisory: an
-    # unreachable network is reported as a warning, never a failure.
+    # resolves exactly one version of each and that it still agrees with the
+    # manifest — cargo's own resolution is the judge of both. Registry
+    # existence is not probed here: a missing or yanked version surfaces
+    # through cargo's resolution and Dependabot's alerts.
     #
-    # No credentials, by construction: crates.io is public, so the whole check
-    # is this checkout plus anonymous registry reads. That is what makes it
-    # reportable on fork pull requests.
+    # No credentials, by construction: the whole check is this checkout plus
+    # cargo's anonymous reads. That is what makes it reportable on fork pull
+    # requests.
     #
     # Not a Dagger job, for the same reason as the freshness job above: bash
     # against an external source of truth, where an engine would add to the
