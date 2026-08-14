@@ -178,7 +178,7 @@ What `tapesctl` writes:
 | `~/.pi/agent/extensions/tapes-gateway.ts` | `plugin install pi` |
 | `~/.config/opencode/plugins/tapes-gateway.ts` | `plugin install opencode` |
 | `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`) | `plugin install`/`uninstall codex-app`, patched in place |
-| `<platform cache>/tapesctl/cassettes/<key>.json` | any command, when cassette discovery runs |
+| `<platform cache>/tapesctl/cassettes/<key>.json` | `cassettes`, `help`, and bare invocations — the only shapes that run cassette discovery |
 
 Skill documents, log files, and installed plugin files are written `0600`.
 

@@ -88,9 +88,10 @@ impl Invocation {
 ///
 /// Discovery happens before parsing because the generated commands have to be
 /// in the parser for `tapesctl cassettes <name> <method>` to parse at all, and
-/// for `tapesctl cassettes` to list them. It is cheap in the common case: the surface
-/// comes from [`cassette::cache`] and only reaches the network when that has
-/// gone stale.
+/// for `tapesctl cassettes` to list them. And it is gated: only a command line
+/// that can reach the generated surface — `cassettes …`, `help …`, or a bare /
+/// flags-only invocation — runs it at all. Every other verb builds its parser
+/// with zero discovery I/O; see [`build_parser`].
 ///
 /// Exits the process on a parse error or on `--help`, which is what
 /// `clap::Parser::parse` does and what the caller already expects.
@@ -103,17 +104,13 @@ where
     let (command, surface) = build_parser(&argv, config).await;
     let matches = command.get_matches_from(&argv);
 
-    // Two ways to reach a generated command, and they resolve to the same thing:
-    // the canonical `tapesctl cassettes <name> <method>`, and the hidden
-    // top-level `tapesctl <name> <method>` the surface used to be spelled as.
-    // Built-ins win the name in both — neither `mount` nor `augment` generates
-    // over one.
+    // One way to reach a generated command: the `cassettes` noun. The retired
+    // top-level spelling is an ordinary unknown command now, and clap has
+    // already answered it above. Built-ins win the name — `mount` does not
+    // generate over one.
     let verbose = matches.get_count("verbose");
     let generated = match matches.subcommand() {
         Some((cassette::command::NOUN, noun_matches)) => noun_matches.subcommand(),
-        Some((name, cassette_matches)) if surface.cassette(name).is_some() => {
-            Some((name, cassette_matches))
-        }
         _ => None,
     };
     if let Some((name, cassette_matches)) = generated {
@@ -136,7 +133,24 @@ where
 /// Split out of [`resolve`] so the help a real run prints can be *rendered* by
 /// a test: `get_matches_from` answers `--help` by exiting the process, which
 /// leaves nothing to assert on.
+///
+/// Discovery is gated on [`cli::gated`]: only `cassettes …`, `help …`, and a
+/// bare / flags-only invocation can reach the generated surface, so only those
+/// shapes pay for it. Everything else — `sessions list`, `start`, all of
+/// them — gets a parser with the empty noun mounted and **zero** discovery
+/// I/O: no cache read, no network. The empty noun still parses, so `tapesctl
+/// cassettes` is never an unknown command; it is simply never reached from a
+/// non-gated command line.
 pub async fn build_parser(argv: &[String], config: &Config) -> (clap::Command, Surface) {
+    if !cli::gated(argv) {
+        let surface = Surface::default();
+        // No epilogue text is ever rendered from here: clap only prints the
+        // top-level help — the only place `after_help` shows — for the bare
+        // and `help` shapes, and those are gated in.
+        let command = parser(&surface, None, config.tapes_url.as_deref());
+        return (command, surface);
+    }
+
     // Flag, then environment, then the configured default — the same three
     // sources, in the same order, that the parse below applies to every command
     // that needs a server. Discovery has to resolve them itself because it runs
@@ -157,14 +171,8 @@ fn parser(surface: &Surface, server: Option<&str>, configured: Option<&str>) -> 
     // carry a constant, and a constant cannot tell a reader whether the missing
     // cassette commands are missing because no server was named or because the
     // named one served none.
-    //
-    // The noun is mounted before the hidden top-level aliases are added, so a
-    // deployment that serves a cassette actually named `cassettes` finds the
-    // name taken and lands under the noun like every other — rather than
-    // replacing the noun and taking its siblings with it.
-    let command =
-        cassette::command::augment(cassette::command::mount(Cli::command(), surface), surface)
-            .after_help(cassette::command::epilogue(server, surface));
+    let command = cassette::command::mount(Cli::command(), surface)
+        .after_help(cassette::command::epilogue(server, surface));
 
     // The configured server enters as clap's *default* for the global flag, so
     // the precedence is clap's own rather than a second implementation of it: a
@@ -352,42 +360,47 @@ mod tests {
         );
     }
 
-    /// Both spellings have to arrive at the same place, because for one release
-    /// they are the same command: the canonical `cassettes hello-world
-    /// get-hello` and the hidden `hello-world get-hello` it replaced.
+    /// The canonical spelling is the only one: `cassettes hello-world
+    /// get-hello` parses, and the retired top-level `hello-world get-hello`
+    /// fails exactly like any other unknown command — even with the cassette
+    /// on the discovered surface.
     #[test]
-    fn both_spellings_resolve_to_the_same_generated_invocation() {
-        for argv in [
-            vec![
-                "tapesctl".to_owned(),
-                cassette::command::NOUN.to_owned(),
-                "hello-world".to_owned(),
-                "get-hello".to_owned(),
-                "--tapes-url".to_owned(),
-                "http://x".to_owned(),
-            ],
-            vec![
-                "tapesctl".to_owned(),
-                "hello-world".to_owned(),
-                "get-hello".to_owned(),
-                "--tapes-url".to_owned(),
-                "http://x".to_owned(),
-            ],
-        ] {
-            // `resolve` would reach the network for a URL it has no cache for,
-            // so the parse is driven directly off a known surface instead.
-            let surface = hello_surface();
-            let matches = parser(&surface, Some("http://x"), None)
-                .try_get_matches_from(&argv)
-                .unwrap();
-            let (name, cassette_matches) = match matches.subcommand() {
-                Some((cassette::command::NOUN, noun)) => noun.subcommand(),
-                other => other,
-            }
-            .expect("both spellings should reach a cassette");
-            assert_eq!(name, "hello-world");
-            assert!(cassette_matches.subcommand_name() == Some("get-hello"));
+    fn only_the_cassettes_spelling_reaches_a_generated_command() {
+        // `resolve` would reach the network for a URL it has no cache for,
+        // so the parse is driven directly off a known surface instead.
+        let surface = hello_surface();
+        let matches = parser(&surface, Some("http://x"), None)
+            .try_get_matches_from([
+                "tapesctl",
+                cassette::command::NOUN,
+                "hello-world",
+                "get-hello",
+                "--tapes-url",
+                "http://x",
+            ])
+            .unwrap();
+        let (name, cassette_matches) = match matches.subcommand() {
+            Some((cassette::command::NOUN, noun)) => noun.subcommand(),
+            other => other,
         }
+        .expect("the canonical spelling should reach the cassette");
+        assert_eq!(name, "hello-world");
+        assert!(cassette_matches.subcommand_name() == Some("get-hello"));
+
+        let error = parser(&surface, Some("http://x"), None)
+            .try_get_matches_from([
+                "tapesctl",
+                "hello-world",
+                "get-hello",
+                "--tapes-url",
+                "http://x",
+            ])
+            .expect_err("the retired top-level spelling must not parse");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::InvalidSubcommand,
+            "got: {error}",
+        );
     }
 
     fn hello_surface() -> Surface {
@@ -400,6 +413,143 @@ mod tests {
                 }}}),
             )],
         }
+    }
+
+    /// Serializes tests that redirect [`cassette::cache::CACHE_DIR_ENV`]: the
+    /// process environment is global state and cargo runs tests on threads, so
+    /// two tests pointing the cache at two directories would race.
+    static CACHE_DIR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Points the cassette cache at a directory for the guard's lifetime,
+    /// restoring an unset variable on drop.
+    struct CacheDirGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl CacheDirGuard {
+        fn set(dir: &std::path::Path) -> Self {
+            let lock = CACHE_DIR_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // SAFETY: the lock serializes every mutation of this variable, and
+            // only these tests read it.
+            unsafe { std::env::set_var(cassette::cache::CACHE_DIR_ENV, dir) };
+            Self { _lock: lock }
+        }
+    }
+
+    impl Drop for CacheDirGuard {
+        fn drop(&mut self) {
+            // SAFETY: still under the lock held by `_lock`.
+            unsafe { std::env::remove_var(cassette::cache::CACHE_DIR_ENV) };
+        }
+    }
+
+    /// A mock deployment serving one cassette named `hello-world`.
+    async fn serve_hello_world() -> wiremock::MockServer {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/cassettes"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "contract_version": "v1",
+                "cassettes": [{
+                    "name": "hello-world",
+                    "route_prefix": "/v1/cassettes/hello-world",
+                    "openapi_path": "/v1/cassettes/hello-world/openapi.json",
+                    "openapi_status": "fresh"
+                }]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/cassettes/hello-world/openapi.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "paths": {"/v1/cassettes/hello-world/hello": {
+                    "get": {"operationId": "getHello"}
+                }}
+            })))
+            .mount(&server)
+            .await;
+        server
+    }
+
+    #[tokio::test]
+    async fn a_non_cassette_invocation_builds_its_parser_with_zero_discovery_io() {
+        // The observables: a mock server standing in as the named deployment,
+        // and an empty cache directory. The cache is cold, so if discovery ran
+        // at all it would have to fetch — the cassette would land on the
+        // surface, the server would see the requests, and the cache directory
+        // would gain the entry it writes. All three must stay untouched.
+        let cache_dir = tempfile::tempdir().unwrap();
+        let _env = CacheDirGuard::set(cache_dir.path());
+        let server = serve_hello_world().await;
+
+        let configured = Config {
+            tapes_url: Some(server.uri()),
+        };
+        let url_flag = format!("--tapes-url={}", server.uri());
+        for shape in [
+            vec!["tapesctl", "sessions", "list"],
+            vec!["tapesctl", url_flag.as_str(), "sessions", "list"],
+            vec!["tapesctl", "version"],
+            vec!["tapesctl", "start", "claude", "--", "cassettes"],
+        ] {
+            let argv: Vec<String> = shape.iter().map(|s| (*s).to_owned()).collect();
+            let (_, surface) = build_parser(&argv, &configured).await;
+            assert!(surface.cassettes.is_empty(), "{shape:?} must not discover");
+        }
+
+        assert!(
+            server.received_requests().await.unwrap().is_empty(),
+            "a non-cassette invocation reached the server during parser build",
+        );
+        assert!(
+            std::fs::read_dir(cache_dir.path())
+                .unwrap()
+                .next()
+                .is_none(),
+            "nor may it touch the cassette cache",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cassettes_invocation_still_discovers_and_parses() {
+        let cache_dir = tempfile::tempdir().unwrap();
+        let _env = CacheDirGuard::set(cache_dir.path());
+        let server = serve_hello_world().await;
+
+        let argv: Vec<String> = [
+            "tapesctl",
+            cassette::command::NOUN,
+            "hello-world",
+            "get-hello",
+            "--tapes-url",
+            &server.uri(),
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        let (command, surface) = build_parser(&argv, &Config::default()).await;
+
+        assert!(
+            surface.cassette("hello-world").is_some(),
+            "a `cassettes` invocation is gated in and must discover",
+        );
+        assert!(
+            !server.received_requests().await.unwrap().is_empty(),
+            "the cold cache means discovery had to fetch",
+        );
+
+        let matches = command.try_get_matches_from(&argv).unwrap();
+        let (name, cassette_matches) = matches
+            .subcommand()
+            .and_then(|(_, noun)| noun.subcommand())
+            .expect("the generated command should parse");
+        assert_eq!(name, "hello-world");
+        assert_eq!(cassette_matches.subcommand_name(), Some("get-hello"));
     }
 
     #[test]
