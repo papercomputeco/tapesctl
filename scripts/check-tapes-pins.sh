@@ -1,149 +1,107 @@
 #!/usr/bin/env bash
-# check-tapes-pins.sh — assert this repository's tapes crates pins are sane.
+# check-tapes-pins.sh — assert this repository's tapes crates versions are sane.
 #
-# This repository consumes several packages from one upstream repository, each
-# pinned by git revision. Three questions are asked about those pins, in order:
+# This repository consumes several packages published from one upstream
+# repository (tapes-crates), each taken from crates.io by version. Two
+# questions are asked about those versions, in order:
 #
-#   1. Does every pin in Cargo.toml name the SAME revision?
-#   2. Does Cargo.lock resolve exactly those packages, each to that revision?
-#   3. Has that revision landed on the upstream default branch?
+#   1. Does Cargo.lock resolve exactly one version of each tapes crate?
+#   2. Does Cargo.lock agree with Cargo.toml?
 #
-# Why each one is worth a job:
+# These were git-revision questions once — same rev everywhere, lockfile
+# agreement, and "has that rev landed on the upstream default branch". The
+# move to published versions dissolved most of what made them hard; what
+# survives is the drift each question existed to catch:
 #
-# (1) The packages are one repository and are pinned as one. Two revisions of
-#     one repository is how `tapes_client::Call` stops being
-#     `tapes_client::Call`: Cargo keys a git source on the URL *and* the rev,
-#     so the same type vendored twice is two types, and the compiler reports it
-#     by naming two identical-looking types. Short of that, it is silent — one
-#     package's fix present, another's absent, every test still green.
+# (1) One crate at two versions is how `tapes_client::Call` stops being
+#     `tapes_client::Call`. Cargo unifies semver-COMPATIBLE requirements, but a
+#     semver-incompatible split vendors one crate twice at two points in its
+#     history, and a type from one is not the same type as its twin from the
+#     other. Short of a compile error, it is silent: one copy's fix present,
+#     the other's absent, every test still green.
 #
-# (2) A manifest and a lockfile that disagree mean the build resolves something
-#     the manifest does not say. `bump-harnesses.sh` refreshes both and proves
-#     they agree; this catches the tree where that refresh was interrupted or a
-#     `rev =` was hand-edited without one.
+# (2) A manifest and a lockfile that disagree mean the build resolves
+#     something the manifest does not say. Cargo itself is the judge here
+#     (`cargo metadata --locked`), and ANY refusal fails: classifying Cargo's
+#     stderr into drift-versus-environment was a losing game, and this check
+#     runs beside build jobs that need the same network and sources — an
+#     environment that cannot answer this question cannot build the crate
+#     either.
 #
-#     "Exactly those packages" is the whole of it, in both directions. A loop
-#     that walks the lock and checks each entry against the declared revision
-#     passes a lock that is simply missing a package: every entry it *does*
-#     have agrees, and the one the manifest declares and the lock never
-#     mentions is never visited. So the comparison is set equality — every
-#     declared package present in the lock, and no package from that repository
-#     in the lock that the manifest does not declare — and only then a revision
-#     comparison per package.
+# A question this script once asked and no longer does: whether every
+# resolved version exists, unyanked, on crates.io. Missing and yanked
+# versions surface through Dependabot alerts and through cargo's own yanked
+# handling at resolution time; a CI probe of a remote registry bought little
+# beyond those and cost real network edge-case handling on every run.
 #
-# (3) A pin that is not on the upstream default branch is a pin at a revision
-#     nobody else can reach: a pull-request head, an amended commit, a branch
-#     that was force-pushed away. It builds here, today, from a cached checkout
-#     — and stops building for everyone else the moment that object is
-#     collected, with no change to this repository to explain why. This has
-#     happened, which is why the gate is here rather than described in a
-#     comment.
+# # The escape hatches
 #
-# # Where this check belongs
-#
-# Upstream used to run a version of (1) that compared its consumers' manifests
-# against each other. The placement could not work: reading a private
-# consumer's manifest needs a token scoped beyond the crate repository, and the
-# job never had one, so every run failed on an unreadable source rather than on
-# a comparison — a permanently red check, which teaches everyone to stop
-# reading that repository's status.
-#
-# Consumer-side, the token direction is the easy one. The crates repository is
-# public, so this script needs no credential at all to answer (3): a checkout's
-# own default token can already read it. That dissolves the blocker rather than
-# working around it.
+# During a burst of tight co-development an entry in Cargo.toml may
+# temporarily become a git or path source again, to build against crate work
+# that has not been published yet. That is intended, not a regression (see
+# .github/dependabot.yml) — a loan, repaid by re-pointing at the next
+# published version once the burst lands. Either hatch is reported loudly (a
+# NOTICE, so CI logs show it engaged) and held to what the lockfile records,
+# not to judgments about how the manifest spells it: for a git source, the
+# lock's source line must name the tapes-crates repository — the hatch is a
+# loan against the real crates' history, never permission to take a
+# same-named crate from elsewhere — and question (2) proves that lock is this
+# manifest's intent, which is deliberateness enough for a state the log
+# already shouts about. A path source is this checkout's neighbor, nothing
+# published to name and nothing resolved to record, so question (2) is what
+# remains asked. A MIX of git and registry sources is a failure outright — a
+# git tapes crate carries its repository's siblings with it, and they meet
+# their registry twins as duplicate crates: question (1)'s hazard — and path
+# plus git at once is refused the same way. Engage one hatch.
 #
 # # What this script does NOT check
 #
-# Agreement with the sibling CLI's pin — the other client built on these
+# Agreement with the sibling CLI's versions — the other client built on these
 # crates. That comparison is deliberately one-directional, and it is the
-# sibling that performs it, because it can: it is the one that can read both
-# manifests. This repository is public and must stay runnable by anyone who
-# clones it, so a gate here that depended on reading a private repository would
-# be a gate most contributors could never pass. Questions (1)-(3) are
-# answerable from this checkout plus a public URL, and that is the whole set
-# this script asks.
+# sibling that performs it: this repository is public and must stay runnable
+# by anyone who clones it, and questions (1)-(2) are answerable from this
+# checkout alone, which is the whole set this script asks.
 #
-# The gateway asset is not checked here either, and needs no check. It is not
-# rendered per consumer any more: `tapes-gateway.ts` is one file owned by the
-# crate, compiled into it with `include_str!` (see the crate's `plugin` module,
-# `PI_GATEWAY_EXTENSION` / `OPENCODE_GATEWAY_EXTENSION`), and every client
-# installs those bytes to that one path — `crates/tapesctl/src/plugin.rs`
-# asserts byte-for-byte identity with the crate's asset on the install path.
-# What a product says for itself it says through the environment of its own
-# launch, not through a rendering. So once the pins agree, the installed asset
-# bytes agree by construction, and a digest comparison between clients would be
-# a second statement of what `include_str!` already guarantees. The pins are
-# the thing that can drift; they are what is gated.
-#
-# # How the pins are read
+# # How the versions are read
 #
 # Through Cargo, not through a regex over the manifest text. `cargo metadata
 # --no-deps` reports every dependency each workspace member declares, with the
-# source Cargo itself resolved the declaration to — so a pin is found wherever
-# TOML permits it to be written: an inline table, a `[workspace.dependencies.x]`
-# section, a member's own `[dependencies]`, an inline table split across lines.
-# A line-oriented parser sees only the spelling it was written for, and the
-# failure is the bad kind: a pin it cannot parse is a pin it reports nothing
-# about, so reformatting a dependency silently narrows the gate.
+# source Cargo itself resolved the declaration to — so a dependency is found
+# wherever TOML permits it to be written. The lockfile is read with awk, which
+# is not the same risk: Cargo writes it, in one canonical form, one key per
+# line.
 #
-# Two properties survive the change and are load-bearing. The set of checked
-# packages is still discovered by matching the repository URL rather than
-# listed here, so a fourth package from that repository is checked the day it
-# is added. And both spellings of the URL are still matched, for the reason
-# given at UPSTREAM_REPO_RE.
-#
-# One property is new, and is a consequence of asking Cargo rather than the
-# file: what is checked is what this workspace actually builds with. An entry
-# catalogued in `[workspace.dependencies]` that no crate references yet is
-# invisible to Cargo, so it is invisible here, and it is absent from the
-# lockfile too — which is what keeps question (2)'s set comparison from failing
-# on it. It comes under the gate the moment a crate references it, which is
-# also the moment it can vendor anything.
-#
-# The lockfile is read with awk, and that is not the same risk: Cargo writes
-# it, in one canonical form, one key per line.
-#
-# # When these become crates.io versions
-#
-# The extraction is deliberately the only part that knows about revisions.
-# `manifest_pins` and `lock_pins` each read a stream and emit `name<TAB>
-# revision`, and everything downstream compares opaque strings. Published
-# versions replace git revisions by rewriting those two functions to emit
-# `name<TAB>version`; questions (1) and (2) then hold unchanged, and question
-# (3) — "does this exist where others can get it" — becomes an index lookup
-# rather than an ancestry test.
+# The set of checked packages is discovered by name prefix (`tapes-`) rather
+# than listed here, so a fourth crate from the family is checked the day a
+# workspace member references it.
 #
 # Usage:
 #   ./scripts/check-tapes-pins.sh
 #   make check-tapes-pins
 #
-# Requires: cargo, jq, git.
+# Requires: cargo, jq.
 #
 # Exit status: 0 when every question is answered yes, 1 when one is answered
-# no, 2 when the script could not ask (unreadable manifest, missing tool, no
-# network). A question that could not be asked is never reported as a pass: a
-# check that passes when it could not look reports a verification it never
-# performed.
+# no, 2 when the script could not ask at all (unreadable manifest, missing
+# tool). A question that could not be asked is never reported as a pass.
 
 set -euo pipefail
 
-# The upstream repository whose pins are checked. Both spellings are matched
-# because the repository was renamed and its consumers adopted the new name at
-# different times; the check must keep working against whichever name this
-# repository's manifest currently uses, and must notice a pin under the old
-# name rather than walking past it. Anchored to the papercomputeco path so no
-# other git dependency is ever caught by it.
-#
-# The literal dot is bracketed rather than backslash-escaped because this one
-# string is handed to two regex engines — awk's via -v, jq's via --arg — and in
-# both of them `\.` is a string escape before it is ever a pattern. Bracketing
-# is what makes one constant serve both.
-UPSTREAM_REPO_RE='https://github[.]com/papercomputeco/(tapes-crates|tapes-harnesses)'
+# The crate-name prefix that marks a package as one of the shared tapes
+# crates. Names rather than a repository URL, because a registry source is the
+# same string for every crates.io package and identifies nothing.
+TAPES_NAME_RE='^tapes-'
 
-# The canonical URL and branch the ancestry question is asked against.
-UPSTREAM_URL="https://github.com/papercomputeco/tapes-crates"
-UPSTREAM_BRANCH="main"
+# Registry source as Cargo spells it in metadata and lockfiles. The `+` and
+# each literal dot are bracketed rather than backslash-escaped because this
+# one string is handed to two regex engines — awk's via -v, jq's via --arg —
+# and in both of them a backslash is a string escape before it is ever a
+# pattern. Bracketing is what makes one constant serve both.
+REGISTRY_RE='registry[+]https://github[.]com/rust-lang/crates[.]io-index'
+
+# The one repository the git escape hatch covers, as Cargo records it in the
+# lockfile's `source = "git+..."` line.
+TAPES_CRATES_REPO_RE='^git[+]https://github[.]com/papercomputeco/tapes-crates([.]git)?([?#]|$)'
 
 MANIFEST="Cargo.toml"
 LOCKFILE="Cargo.lock"
@@ -168,363 +126,228 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 [[ -f "$MANIFEST" ]] || die "no $MANIFEST at repo root"
 [[ -f "$LOCKFILE" ]] || die "no $LOCKFILE at repo root"
 
-for tool in cargo jq git; do
+for tool in cargo jq; do
     command -v "$tool" >/dev/null 2>&1 ||
-        die "$tool is required to read and check the pins — nothing here was verified"
+        die "$tool is required to read and check the versions — nothing here was verified"
 done
 
 # --- extraction ---------------------------------------------------------------
-# The seam described under "When these become crates.io versions". Both
-# functions read a stream and emit `name<TAB>revision`, one line per pinned
-# package.
 
-# Every dependency in `cargo metadata` output on stdin whose resolved source is
-# the upstream repository.
-#
-# A git source reads `git+<url>?rev=<request>`, and the `rev=` is what makes a
-# pin a pin: a dependency taken from that repository by branch or by tag
-# resolves to a source with no `rev=` at all, and is emitted here with an empty
-# revision so the caller can say so rather than skip it. Silently dropping it
-# is what a regex that only looks for `rev` does, and a dependency the gate
-# cannot see is the one worth naming out loud.
-#
-# `unique_by` collapses the same package declared by several workspace members,
-# which is one pin stated repeatedly — but only when they agree. Two members
-# naming two revisions survive as two entries, which is exactly what question
-# (1) exists to catch.
-manifest_pins() {
-    jq -r --arg re "$UPSTREAM_REPO_RE" '
+# Every tapes-crates dependency each workspace member declares, as
+# `name<TAB>kind<TAB>detail`: `registry` with the version requirement, `git`
+# with the source URL, or `path`. Cargo reports a null source for a path
+# override, because nothing resolvable is behind it but this filesystem.
+manifest_deps() {
+    jq -r --arg name_re "$TAPES_NAME_RE" --arg reg_re "$REGISTRY_RE" '
         [ .packages[].dependencies[]
-          | select(.source != null and (.source | test($re)))
-          | { name: .name,
-              rev: ([ .source
-                      | match("[?&]rev=([0-9a-fA-F]+)(?:&|$)")
-                      | .captures[0].string ] | first // "")
-            }
+          | select(.name | test($name_re))
+          | if .source == null then
+              { name: .name, kind: "path", detail: (.path // "local path") }
+            elif (.source | test($reg_re)) then
+              { name: .name, kind: "registry", detail: .req }
+            else
+              { name: .name, kind: "git", detail: .source }
+            end
         ]
-        | unique_by([.name, .rev])
+        | unique_by([.name, .kind, .detail])
         | .[]
-        | [.name, .rev]
+        | [.name, .kind, .detail]
         | @tsv
     '
 }
 
-# Every locked package on stdin that resolved from the upstream repository,
-# with the revision Cargo actually resolved. A lock source reads
-# `git+<url>?rev=<request>#<resolved>`; the fragment is the answer and is
-# always a full 40-character SHA, which is why it — not the request — is what
-# gets compared and what the ancestry question is asked about.
-lock_pins() {
-    awk -v re="$UPSTREAM_REPO_RE" '
-        /^name = / { name = $3; gsub(/"/, "", name) }
-        /^source = / && $0 ~ re {
-            if (match($0, /#[0-9a-fA-F]+"/)) {
-                print name "\t" substr($0, RSTART + 1, RLENGTH - 2)
+# Every locked tapes crate on stdin, as `name<TAB>kind<TAB>detail` — the
+# version for a registry source, the recorded `git+` URL (with its resolved
+# commit) for a git source. The lock is what the build actually resolved, in
+# the one canonical spelling Cargo writes; reading a stream rather than a
+# path keeps the function usable on a lockfile that never touches disk.
+lock_facts() {
+    awk -v name_re="$TAPES_NAME_RE" -v reg_re="$REGISTRY_RE" '
+        /^name = / {
+            name = $3; gsub(/"/, "", name)
+            matched = (name ~ name_re)
+        }
+        /^version = / && matched { version = $3; gsub(/"/, "", version) }
+        /^source = / && matched {
+            if ($0 ~ reg_re) { print name "\tregistry\t" version }
+            else if ($0 ~ /git[+]/) {
+                src = $3; gsub(/"/, "", src)
+                print name "\tgit\t" src
             }
+            matched = 0
         }
     '
 }
 
-# Read once, up front, so a Cargo that could not parse the manifest is reported
-# as "could not ask" rather than reaching the pin loop as an empty result and
-# being reported as "this repository pins nothing".
+# Question 2's whole body — the lockfile agrees with the manifest — as a
+# function, because the escape hatches ask it too.
 #
-# `--no-deps` keeps this to the workspace's own declarations: no resolution, no
-# fetch, no network, and no write to the lockfile this script is about to read.
+# Cargo is the judge: `--locked` fails rather than silently re-resolving. The
+# verdict is cargo's exit status, never a reading of its stderr — stderr is
+# printed as the explanation, and ANY refusal fails, deliberately
+# unclassified: sorting drift from environment by pattern-matching stderr was
+# a losing game, and an environment that cannot answer this question cannot
+# build the crate either, so a red here never hides a green that mattered.
+check_lock_agreement() {
+    if locked_err="$(cargo metadata --format-version 1 --locked --manifest-path "$MANIFEST" 2>&1 >/dev/null)"; then
+        echo "ok: $LOCKFILE satisfies $MANIFEST (cargo --locked)"
+    else
+        echo "FAIL: \`cargo metadata --locked\` refused — $LOCKFILE, $MANIFEST, and their sources do not line up:" >&2
+        printf '%s\n' "$locked_err" | sed 's/^/  /' >&2
+        echo "  if the manifest moved, refresh the lockfile (cargo update <crate>) and commit it" >&2
+        fail=1
+    fi
+}
+
+# The one exit that reports: FAILED when any question answered no, OK (with
+# the engaged hatch named) when none did.
+finish() {
+    echo
+    if [[ "$fail" -ne 0 ]]; then
+        echo "check-tapes-pins: FAILED" >&2
+        exit 1
+    fi
+    echo "check-tapes-pins: OK${1:+ ($1)}"
+    exit 0
+}
+
+# Read once, up front, so a Cargo that could not parse the manifest is
+# reported as "could not ask" rather than as "this repository declares
+# nothing". `--no-deps` resolves nothing: no fetch, no network, no write to
+# the lockfile this script is about to read.
 metadata="$(cargo metadata --format-version 1 --no-deps --manifest-path "$MANIFEST" 2>/dev/null || true)"
 [[ -n "$metadata" ]] ||
-    die "\`cargo metadata\` could not read $MANIFEST — the pins are unread, so nothing here was verified"
+    die "\`cargo metadata\` could not read $MANIFEST — the versions are unread, so nothing here was verified"
 
 # Collected with read loops rather than `mapfile`, which is bash 4+ and so
 # absent from the bash macOS still ships as /bin/bash.
-manifest=()
+declared=()
 while IFS= read -r line; do
-    [[ -n "$line" ]] && manifest+=("$line")
-done < <(printf '%s\n' "$metadata" | manifest_pins)
+    [[ -n "$line" ]] && declared+=("$line")
+done < <(printf '%s\n' "$metadata" | manifest_deps)
+
+[[ ${#declared[@]} -gt 0 ]] ||
+    die "no tapes crate dependency found in $MANIFEST (checked names matching ${TAPES_NAME_RE})"
+
+# --- the escape hatches, before any question ----------------------------------
+
+path_deps=()
+git_deps=()
+registry_deps=()
+for dep in "${declared[@]}"; do
+    IFS=$'\t' read -r name kind detail <<<"$dep"
+    case "$kind" in
+        path) path_deps+=("$name") ;;
+        git) git_deps+=("$name") ;;
+        registry) registry_deps+=("$name"$'\t'"$detail") ;;
+    esac
+done
+
+fail=0
+
+if [[ ${#path_deps[@]} -gt 0 ]]; then
+    echo "NOTICE: PATH OVERRIDE ENGAGED — ${path_deps[*]} taken from a local path, not from crates.io (the tightest co-development loan; see the header)."
+    echo
+fi
+
+# One hatch at a time: a path crate's version requirements on its siblings
+# cannot unify with a git-pinned twin — the duplicate-crate hazard by another
+# road.
+if [[ ${#path_deps[@]} -gt 0 && ${#git_deps[@]} -gt 0 ]]; then
+    echo "FAIL: $MANIFEST takes tapes crates from a local path (${path_deps[*]}) and by git revision (${git_deps[*]}) at once — one escape hatch at a time" >&2
+    fail=1
+    finish
+fi
+
+# Git and registry at once is question (1)'s hazard by construction: Cargo
+# treats the two sources as different packages, so the git copy's siblings
+# meet their registry twins as duplicate crates. All of them or none.
+if [[ ${#git_deps[@]} -gt 0 && ${#registry_deps[@]} -gt 0 ]]; then
+    echo "FAIL: $MANIFEST takes tapes crates by git revision (${git_deps[*]}) and from crates.io ($(for d in "${registry_deps[@]}"; do printf '%s ' "${d%%$'\t'*}"; done | sed 's/ $//')) at once — the escape hatch is every tapes crate or none" >&2
+    fail=1
+    finish
+fi
+
+if [[ ${#git_deps[@]} -gt 0 ]]; then
+    echo "NOTICE: ESCAPE HATCH ENGAGED — ${git_deps[*]} taken by git revision, not from crates.io (the documented co-development loan; see .github/dependabot.yml)."
+    echo
+
+    # The provenance fact, read from the lock rather than the manifest: the
+    # hatch is a loan against the real crates' history, never permission to
+    # take a same-named crate from anywhere with a commit hash.
+    while IFS=$'\t' read -r name kind detail; do
+        [[ "$kind" == "git" ]] || continue
+        if [[ "$detail" =~ $TAPES_CRATES_REPO_RE ]]; then
+            echo "ok: ${name} is locked to the tapes-crates repository"
+        else
+            echo "FAIL: ${name} is locked to a git source that is not the tapes-crates repository (${detail}) — the escape hatch pins a revision of the real crates, never a same-named crate from elsewhere" >&2
+            fail=1
+        fi
+    done < <(lock_facts <"$LOCKFILE")
+    echo
+
+    check_lock_agreement
+    finish "escape hatch"
+fi
+
+if [[ ${#registry_deps[@]} -eq 0 ]]; then
+    # Every tapes crate is a path override; question 2 is what remains.
+    check_lock_agreement
+    finish "path override"
+fi
+
+# --- question 1: one version of each crate ------------------------------------
 
 locked=()
 while IFS= read -r line; do
     [[ -n "$line" ]] && locked+=("$line")
-done < <(lock_pins <"$LOCKFILE")
-
-if [[ ${#manifest[@]} -eq 0 ]]; then
-    die "no git dependency on $UPSTREAM_REPO_RE found in $MANIFEST (have the dependencies moved to crates.io? see the header)"
-fi
-
-# A dependency on that repository that names no revision — taken by branch or
-# by tag — is asked about before anything else, because the three questions
-# below are all about "the pinned revision" and there is not one. It is also
-# the failure the old line-oriented reader could not report: no `rev` on the
-# line meant no line, which meant no pin, which meant nothing said.
-unpinned=()
-for pin in "${manifest[@]}"; do
-    [[ "${pin##*$'\t'}" == "" ]] && unpinned+=("${pin%%$'\t'*}")
-done
-if [[ ${#unpinned[@]} -gt 0 ]]; then
-    cat >&2 <<EOF
-FAIL: $MANIFEST takes ${unpinned[*]} from ${UPSTREAM_URL} without pinning a revision.
-
-A dependency on that repository by branch or by tag is a dependency that moves
-under this repository without a commit here to say so — the build is no longer
-described by the tree that produced it, and neither the lockfile agreement nor
-the ancestry question below has a revision to be asked about.
-
-Pin every one of them to one revision with:
-
-    make bump-harnesses REV=<sha>
-
-EOF
-    echo "check-tapes-pins: FAILED" >&2
-    exit 1
-fi
-
-echo "Pinned packages from ${UPSTREAM_URL}:"
-for pin in "${manifest[@]}"; do
-    printf '  %-28s %s  (%s)\n' "${pin%%$'\t'*}" "${pin##*$'\t'}" "$MANIFEST"
-done
-for pin in "${locked[@]}"; do
-    printf '  %-28s %s  (%s)\n' "${pin%%$'\t'*}" "${pin##*$'\t'}" "$LOCKFILE"
-done
-echo
-
-fail=0
-
-# --- question 1: one repository, one revision ---------------------------------
-
-declared="${manifest[0]##*$'\t'}"
-declared_ok=1
-for pin in "${manifest[@]}"; do
-    if [[ "${pin##*$'\t'}" != "$declared" ]]; then
-        cat >&2 <<EOF
-FAIL: $MANIFEST pins one repository at more than one revision.
-
-Packages from ${UPSTREAM_URL} are a single source and are pinned as one. Two
-revisions of one repository means one repository vendored twice at two points
-in its history: a type from one is not the same type as its twin from the
-other, and short of a compile error nothing reports it — one package carries a
-fix the other does not while every test stays green.
-
-Re-point every pin at one revision with:
-
-    make bump-harnesses REV=<sha>
-
-EOF
-        fail=1
-        declared_ok=0
-        break
-    fi
-done
-if [[ "$declared_ok" -eq 1 ]]; then
-    echo "ok: all ${#manifest[@]} pin(s) in $MANIFEST name $declared"
-fi
-
-# Questions 2 and 3 both ask about "the pinned revision", which the manifest
-# has just failed to name. Asking them anyway against whichever pin happened to
-# be read first would answer a question nobody posed, and would print an "ok"
-# next to a tree that is not ok. They are declared unasked instead, on the same
-# principle as every other could-not-look path here.
-if [[ "$declared_ok" -eq 0 ]]; then
-    echo
-    echo "not asked: lockfile agreement and ${UPSTREAM_BRANCH} ancestry, because $MANIFEST does not name a single revision to ask about" >&2
-    echo "check-tapes-pins: FAILED" >&2
-    exit 1
-fi
-
-# --- question 2: the lockfile resolves exactly what the manifest declares -----
-#
-# Set equality first, then revisions. Walking only the lock's entries answers
-# "is everything the lock has correct", which a lock that has lost a package
-# answers yes — the missing one is never an entry, so it is never wrong.
-
-# bash 3.2 has no associative arrays, so membership is a scan. The sets are
-# three or four packages; the loop is the clearest thing that works everywhere
-# this script runs.
-contains() {
-    local needle="$1" item
-    shift
-    for item in "$@"; do
-        [[ "$item" == "$needle" ]] && return 0
-    done
-    return 1
-}
-
-declared_names=()
-for pin in "${manifest[@]}"; do
-    declared_names+=("${pin%%$'\t'*}")
-done
-locked_names=()
-for pin in "${locked[@]}"; do
-    locked_names+=("${pin%%$'\t'*}")
-done
+done < <(lock_facts <"$LOCKFILE")
 
 if [[ ${#locked[@]} -eq 0 ]]; then
-    echo "FAIL: $MANIFEST pins ${UPSTREAM_URL} but $LOCKFILE resolves nothing from it" >&2
-    echo "  run \`cargo update\` (or \`make bump-harnesses REV=$declared\`) and commit the lockfile" >&2
+    echo "FAIL: $MANIFEST declares tapes crates but $LOCKFILE resolves none of them — refresh the lockfile (cargo update) and commit it" >&2
     fail=1
-else
-    lock_ok=1
-
-    missing=()
-    for name in "${declared_names[@]}"; do
-        contains "$name" "${locked_names[@]}" || missing+=("$name")
-    done
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        cat >&2 <<EOF
-FAIL: $LOCKFILE does not resolve ${missing[*]}, which $MANIFEST declares.
-
-  $MANIFEST declares:  ${declared_names[*]}
-  $LOCKFILE resolves:  ${locked_names[*]}
-
-A package the lockfile never mentions is not a package whose revision agrees —
-it is a package this check has nothing to compare, and a lockfile written from
-a different manifest than the one in this tree. Refresh it and commit it:
-
-    make bump-harnesses REV=$declared
-
-EOF
-        lock_ok=0
-        fail=1
-    fi
-
-    undeclared=()
-    for name in "${locked_names[@]}"; do
-        contains "$name" "${declared_names[@]}" || undeclared+=("$name")
-    done
-    if [[ ${#undeclared[@]} -gt 0 ]]; then
-        cat >&2 <<EOF
-FAIL: $LOCKFILE resolves ${undeclared[*]} from ${UPSTREAM_URL}, which $MANIFEST does not declare.
-
-  $MANIFEST declares:  ${declared_names[*]}
-  $LOCKFILE resolves:  ${locked_names[*]}
-
-The build vendors a package from that repository which nothing in this tree
-asks for. Usually that is a stale lockfile — a dependency dropped from the
-manifest without the lockfile being refreshed — in which case refreshing it is
-the fix:
-
-    make bump-harnesses REV=$declared
-
-If instead the package arrived transitively, because a crate this repository
-does declare grew a dependency on a sibling crate in its own repository, then
-declaring it here is the fix: it is being vendored either way, and the manifest
-should say so.
-
-EOF
-        lock_ok=0
-        fail=1
-    fi
-
-    for pin in "${locked[@]}"; do
-        name="${pin%%$'\t'*}"
-        resolved="${pin##*$'\t'}"
-        # The declared pin may be an abbreviated SHA; the resolved one never
-        # is. Prefix rather than equality is what makes a short pin legal
-        # without making a *different* revision legal.
-        if [[ "$resolved" != "$declared"* ]]; then
-            cat >&2 <<EOF
-FAIL: $LOCKFILE resolves $name to a revision $MANIFEST does not declare.
-
-  $MANIFEST declares:  $declared
-  $LOCKFILE resolved:  $resolved  ($name)
-
-The build uses the lockfile, so this tree compiles something the manifest does
-not say. Refresh the lockfile and commit it:
-
-    make bump-harnesses REV=$declared
-
-EOF
-            lock_ok=0
-            fail=1
-            break
-        fi
-    done
-
-    if [[ "$lock_ok" -eq 1 ]]; then
-        echo "ok: $LOCKFILE resolves all ${#declared_names[@]} declared package(s), each to $declared"
-    fi
+    finish
 fi
 
-# --- question 3: the revision is on the upstream default branch ---------------
-#
-# Answered against the public repository over the network, with no credential.
-# The resolved (full) revision is the subject where one is available, because
-# ancestry needs a complete object name.
-
-subject="$declared"
-if [[ ${#locked[@]} -gt 0 ]]; then
-    subject="${locked[0]##*$'\t'}"
-fi
-
-# A probe, and only a probe. It answers "is that branch reachable from here at
-# all", which the clone below cannot distinguish from "the host is down" — but
-# its answer is deliberately NOT what the ancestry test compares against. The
-# upstream branch moves; a revision that landed a moment ago would be tested
-# against a tip read before the clone that contains it, and would be reported
-# unreachable for having landed too recently. The graph and the tip must come
-# from the same snapshot, so the tip is read back out of the clone.
-#
-# `|| true` so a failed lookup falls through to the die below. Without it the
-# assignment's non-zero status trips `set -e` and the script exits 1 — the code
-# for "an invariant is broken" — silently, on what is only a machine that could
-# not reach the network or has no working git. The distinction is the whole
-# point of having two failing exit codes.
-probe="$(git ls-remote "$UPSTREAM_URL" "refs/heads/${UPSTREAM_BRANCH}" 2>/dev/null | awk '{print $1}' || true)"
-[[ -n "$probe" ]] ||
-    die "could not read ${UPSTREAM_BRANCH} from ${UPSTREAM_URL} (no network, or the branch is gone) — the pin's reachability is unverified"
-
-work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
-
-# Blob-filtered rather than shallow. `--depth` would fetch a truncated history
-# in which almost every real pin looks unreachable — the check would fail on
-# its own fetch options. The filter drops file contents, which this question
-# never reads, and keeps the complete commit graph, which is the whole subject.
-# The clone is a few hundred kilobytes.
-git clone --quiet --bare --filter=blob:none \
-    --single-branch --branch "$UPSTREAM_BRANCH" \
-    "$UPSTREAM_URL" "$work/upstream.git" 2>/dev/null ||
-    die "could not clone ${UPSTREAM_BRANCH} from ${UPSTREAM_URL} — the pin's reachability is unverified"
-
-# The tip as this clone has it: one snapshot for both the commit graph and the
-# ref the graph is measured against. See the probe above for why it is not read
-# over the wire a second time.
-tip="$(git -C "$work/upstream.git" rev-parse "refs/heads/${UPSTREAM_BRANCH}" 2>/dev/null || true)"
-[[ -n "$tip" ]] ||
-    die "cloned ${UPSTREAM_BRANCH} from ${UPSTREAM_URL} but the clone has no ${UPSTREAM_BRANCH} to measure against — the pin's reachability is unverified"
-
-# Only ${UPSTREAM_BRANCH} was fetched, so a commit that never landed on it is
-# simply not here. Absence is checked first: `merge-base` errors on an unknown
-# object, and that error says "Not a valid object name" where what a reader
-# needs to be told is which revision, on which branch, is missing.
-if ! git -C "$work/upstream.git" cat-file -e "${subject}^{commit}" 2>/dev/null ||
-    ! git -C "$work/upstream.git" merge-base --is-ancestor "$subject" "$tip" 2>/dev/null; then
-    cat >&2 <<EOF
-FAIL: the pinned revision is not on ${UPSTREAM_BRANCH}.
-
-  pinned revision:  $subject
-  upstream branch:  ${UPSTREAM_BRANCH} (tip $tip)
-  upstream repo:    ${UPSTREAM_URL}
-
-Nothing that is not on ${UPSTREAM_BRANCH} is reachable by anyone else. A pull-request
-head, an amended commit, or a branch that has since been force-pushed builds
-here today out of a cached checkout and stops building for every other clone —
-and for this one, once that object is collected — with no change in this
-repository to explain it.
-
-Land the revision on ${UPSTREAM_BRANCH} upstream, then re-point this repository at the
-landed commit:
-
-    make bump-harnesses REV=<sha landed on ${UPSTREAM_BRANCH}>
-
-EOF
-    fail=1
-else
-    echo "ok: $subject is on ${UPSTREAM_BRANCH} (tip $tip)"
-fi
-
+echo "Tapes crates in $LOCKFILE:"
+for entry in "${locked[@]}"; do
+    IFS=$'\t' read -r name kind detail <<<"$entry"
+    printf '  %-28s %s  (%s)\n' "$name" "$detail" "$kind"
+done
 echo
-if [[ "$fail" -ne 0 ]]; then
-    echo "check-tapes-pins: FAILED" >&2
-    exit 1
+
+locked_names="$(printf '%s\n' "${locked[@]}" | cut -f1)"
+lock_git="$(printf '%s\n' "${locked[@]}" | awk -F'\t' '$2 == "git" { print $1 }' | xargs)"
+dupes="$(sort <<<"$locked_names" | uniq -d | xargs)"
+
+if [[ -n "$lock_git" ]]; then
+    echo "FAIL: $LOCKFILE resolves ${lock_git} from a git source while $MANIFEST names only crates.io versions — the lockfile was written from a different manifest; refresh it (cargo update ${lock_git}) and commit it" >&2
+    fail=1
 fi
-echo "check-tapes-pins: OK"
+
+if [[ -n "$dupes" ]]; then
+    echo "FAIL: $LOCKFILE resolves more than one version of: ${dupes} — one crate vendored twice, and a type from one is not the same type as its twin from the other" >&2
+    echo "  find the semver-incompatible requirement (cargo tree --invert --package <name>) and bring both onto one version" >&2
+    fail=1
+fi
+
+if [[ "$fail" -eq 0 ]]; then
+    echo "ok: exactly one version of each of ${#locked[@]} tapes crate(s), all from crates.io"
+fi
+
+# A set mismatch between manifest and lock is question 2's to catch; what is
+# reported here is only the case question 2 cannot see, because Cargo would
+# resolve the missing package rather than report it.
+for dep in "${registry_deps[@]}"; do
+    name="${dep%%$'\t'*}"
+    if ! grep -Fxq "$name" <<<"$locked_names"; then
+        echo "FAIL: $MANIFEST declares $name but $LOCKFILE does not resolve it — refresh the lockfile (cargo update $name) and commit it" >&2
+        fail=1
+    fi
+done
+
+# --- question 2: the lockfile agrees with the manifest ------------------------
+
+check_lock_agreement
+
+finish
