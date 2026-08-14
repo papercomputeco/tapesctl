@@ -115,7 +115,14 @@ use crate::transcript::tailer::SessionTracker;
 
 /// How much of a request body is buffered so the turn can be described to
 /// ingest. Beyond this the turn is forwarded but not captured.
-pub const REQUEST_PEEK_BYTES: usize = 4 * 1024 * 1024;
+///
+/// Wired to the shared client capture cap rather than a local number: 32 MiB
+/// is the provider request ceiling the gateway commits to forwarding and
+/// capturing (tko `ProviderMaxRequestBytes`, tapes ingest
+/// `MaxDecodedRequestBytes`), and a peek sized below it silently records less
+/// on the standalone route than the platform records for the same traffic —
+/// two capture paths, two answers. Forwarding never gates on this value.
+pub const REQUEST_PEEK_BYTES: usize = envelope::REQUEST_CAPTURE_CAP;
 
 /// How many response bytes are retained for `raw_response`. Matches ingest's
 /// own per-turn raw cap: retaining more only to have the server drop it wastes
@@ -960,8 +967,13 @@ impl TurnCapture {
         self.meta.response_bytes = raw.len();
         self.meta.elapsed_seconds = self.started.elapsed().as_secs_f64();
 
+        // Skips carry the gateway's drop-reason vocabulary (`reason` matches
+        // tapes-extproc's shed labels) so a capture gap looks the same in
+        // client logs as it does on the platform's drop dashboards — one
+        // vocabulary for "forwarded but not captured", wherever it happens.
         if buffer.overflowed {
             warn!(
+                reason = "response_over_budget",
                 cap_bytes = RAW_RESPONSE_CAP,
                 request_id = %self.meta.request_id,
                 "response exceeded the raw cap; turn forwarded but not captured",
@@ -970,6 +982,7 @@ impl TurnCapture {
         }
         let Some(body) = self.request_body.as_ref() else {
             warn!(
+                reason = "request_over_budget",
                 peek_bytes = REQUEST_PEEK_BYTES,
                 request_id = %self.meta.request_id,
                 "request body exceeded the peek cap; turn forwarded but not captured",
