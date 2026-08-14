@@ -257,6 +257,7 @@ for dep in "${declared[@]}"; do
 done
 
 fail=0
+warned=0
 
 if [[ ${#path_deps[@]} -gt 0 ]]; then
     cat <<EOF
@@ -269,6 +270,16 @@ way: re-point at the next published version once the burst lands. The
 registry questions are not asked for these crates while it is in place.
 
 EOF
+fi
+
+# Both escape hatches at once is not a supported state: a path crate's own
+# version requirements on its siblings cannot unify with a git-pinned twin,
+# which is the duplicate-crate hazard by another road. Engage one hatch.
+if [[ ${#path_deps[@]} -gt 0 && ${#git_deps[@]} -gt 0 ]]; then
+    echo "FAIL: $MANIFEST takes tapes crates from a local path (${path_deps[*]}) and by git revision (${git_deps[*]}) at once — one escape hatch at a time" >&2
+    echo
+    echo "check-tapes-pins: FAILED" >&2
+    exit 1
 fi
 
 if [[ ${#git_deps[@]} -gt 0 && ${#registry_deps[@]} -gt 0 ]]; then
@@ -514,6 +525,7 @@ for entry in "${locked[@]}"; do
                     ;;
                 *)
                     echo "WARNING (not a failure): crates.io answered 200 for ${name} ${version} but the body did not parse to a yanked verdict — existence unverified on this run" >&2
+                    warned=$((warned + 1))
                     ;;
             esac
             ;;
@@ -523,6 +535,7 @@ for entry in "${locked[@]}"; do
             ;;
         *)
             echo "WARNING (not a failure): could not ask crates.io about ${name} ${version} (HTTP ${code}) — existence unverified on this run" >&2
+            warned=$((warned + 1))
             ;;
     esac
     rm -f "$body"
@@ -533,4 +546,11 @@ if [[ "$fail" -ne 0 ]]; then
     echo "check-tapes-pins: FAILED" >&2
     exit 1
 fi
-echo "check-tapes-pins: OK"
+# An unanswered question is not a pass, and the summary line says so: OK
+# means every question answered yes; OK-with-warnings means nothing was
+# answered no, and names how many answers are missing.
+if [[ "$warned" -ne 0 ]]; then
+    echo "check-tapes-pins: OK (${warned} question(s) unanswered — see warnings above)"
+else
+    echo "check-tapes-pins: OK"
+fi
