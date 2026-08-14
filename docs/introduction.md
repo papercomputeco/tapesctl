@@ -120,8 +120,9 @@ tapesctl sessions list --limit 20 --tapes-url http://localhost:8081
 Note the two ids. The one `start` printed is `harness_session_id`; the one every
 read command takes is `id`. They are different values in different namespaces,
 and feeding the printed one to `sessions get` returns a 404. That is a live
-defect, not a misunderstanding — [Session ids](./capture.md#session-ids)
-explains it and gives the workaround.
+defect, not a misunderstanding — pass the printed id to
+`sessions list --harness-session-id` to resolve it to the tapes `id`;
+[Session ids](./capture.md#session-ids) explains the split.
 
 Read the session with the `id` from the listing:
 

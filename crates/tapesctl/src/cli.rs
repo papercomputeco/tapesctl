@@ -404,6 +404,12 @@ pub struct SessionsListArgs {
     #[arg(long)]
     pub until: Option<String>,
 
+    /// Only the session captured from this harness session id — the id
+    /// `start` prints (distinct from the tapes session id read commands
+    /// take).
+    #[arg(long)]
+    pub harness_session_id: Option<String>,
+
     /// Only sessions stamped with this acting subject.
     #[arg(long)]
     pub auth_subject: Option<String>,

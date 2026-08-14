@@ -249,7 +249,7 @@ reach you without a client upgrade.
 
 | leaf | route | flags |
 |---|---|---|
-| `list` | `GET /v1/sessions` | `--limit`, `--cursor`, `--sort`, `--direction`, `--since`, `--until`, `--auth-subject` |
+| `list` | `GET /v1/sessions` | `--limit`, `--cursor`, `--sort`, `--direction`, `--since`, `--until`, `--harness-session-id`, `--auth-subject` |
 | `get <ID>` | `GET /v1/sessions/{id}` | — |
 | `traces <ID>` | `GET /v1/sessions/{id}/traces` | `--payload` |
 | `raw-turns <ID>` | `GET /v1/sessions/{id}/raw_turns` | — |
@@ -269,6 +269,7 @@ unset, so the server's own defaults apply.
 | `--sort <COL>` | e.g. `last_active`, `started_at`, `total_cost_usd` |
 | `--direction <D>` | `asc` or `desc` |
 | `--since`, `--until` | RFC 3339 |
+| `--harness-session-id <ID>` | exact match on the harness session id — the id `start` prints; see [Session ids](./capture.md#session-ids) |
 | `--auth-subject <S>` | exact match |
 
 `--payload` takes `full` (the default) or `preview`, case-insensitively. An
