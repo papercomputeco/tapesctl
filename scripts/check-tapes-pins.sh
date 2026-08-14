@@ -308,12 +308,17 @@ EOF
     # or the git siblings meet each other at two points of one history: the
     # mix hazard again, one source kind in.
     #
-    # The source must also BE the tapes-crates repository: a hex rev proves
+    # The source must also BE the tapes-crates repository: a rev proves
     # immovability, not provenance, and the hatch is a loan against the real
     # crates' history — not permission to take a same-named crate from
     # anywhere with a commit hash.
     repo_re='^git\+https://github\.com/papercomputeco/tapes-crates(\.git)?([?#]|$)'
-    rev_re='[?]rev=([0-9a-fA-F]{7,40})([#&]|$)'
+    # Whatever was written in `rev = ...`, as Cargo echoes it into the source
+    # string. Whether it names an immovable commit is NOT judged by its shape
+    # — a branch can be named in hex — but against the lockfile: Cargo writes
+    # the resolved commit after `#` in the lock's source line, and a true sha
+    # pin is a prefix of its own resolution. A moving name never is.
+    rev_re='[?]rev=([^#&]+)'
     hatch_rev=""
     for dep in "${declared[@]}"; do
         IFS=$'\t' read -r name kind detail <<<"$dep"
@@ -325,7 +330,27 @@ EOF
         fi
         if [[ "$detail" =~ $rev_re ]]; then
             rev="${BASH_REMATCH[1]}"
-            echo "ok: ${name} is pinned to rev ${rev}"
+            resolved="$(awk -v crate="$name" '
+                $0 == "name = \"" crate "\"" { found = 1; next }
+                found && /^source = "git\+/ {
+                    if (match($0, /#[0-9a-f]{40}"$/)) {
+                        print substr($0, RSTART + 1, RLENGTH - 2)
+                    }
+                    exit
+                }
+                found && /^\[\[package\]\]/ { exit }
+            ' "$LOCKFILE")"
+            shopt -s nocasematch
+            if [[ -z "$resolved" ]]; then
+                echo "FAIL: ${name} has no resolved git commit in ${LOCKFILE} — the lockfile does not carry this pin; refresh it (cargo update ${name}) and commit it" >&2
+                fail=1
+            elif [[ "$resolved" != "$rev"* ]]; then
+                echo "FAIL: ${name} names rev '${rev}' but ${LOCKFILE} resolved it to ${resolved} — that is a moving name (branch or tag), not a commit pin; pin the exact revision being built against" >&2
+                fail=1
+            else
+                echo "ok: ${name} is pinned to rev ${rev} (resolves to ${resolved})"
+            fi
+            shopt -u nocasematch
             if [[ -z "$hatch_rev" ]]; then
                 hatch_rev="$rev"
             elif [[ "$rev" != "$hatch_rev" ]]; then
