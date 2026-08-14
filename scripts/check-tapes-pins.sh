@@ -47,12 +47,24 @@
 # During a burst of tight co-development an entry in Cargo.toml may
 # temporarily become a `git = "...", rev = "..."` pin again, to build against
 # crate work that has not been published yet. That is intended, not a
-# regression (see .github/dependabot.yml). This script reports it loudly and
-# skips the version questions for the duration — but a MIX of git and registry
-# sources for the tapes crates is a failure outright, because a git
-# tapes-client carries its repository's own siblings with it, and those meet
-# their registry twins as duplicate crates: exactly the two-types hazard of
-# question (1).
+# regression (see .github/dependabot.yml). This script reports it loudly (a
+# NOTICE, so CI logs show the hatch engaged) and holds it to the git-era
+# guarantees instead of the registry ones: every git entry must carry
+# `rev = <commit sha>` — a branch moves under the lockfile, so a branch is
+# not a pin — every tapes crate must name the SAME revision, and question (2)
+# still runs, because a git pin and its lockfile can disagree exactly like a
+# version can. Only question (3) is skipped, because a git source has no
+# version on crates.io to ask about. A MIX of git and registry sources for
+# the tapes crates is a failure outright, because a git tapes-client carries
+# its repository's own siblings with it, and those meet their registry twins
+# as duplicate crates: exactly the two-types hazard of question (1).
+#
+# A `path = "..."` override is the third source kind and the tightest
+# co-development loop of all: the crate is this checkout's neighbor, so there
+# is no published version to probe and no revision to hold still. It is
+# reported with the same NOTICE loudness and the registry questions are
+# skipped for that crate — never failed, and never mistaken for a registry
+# dependency.
 #
 # # What this script does NOT check
 #
@@ -105,6 +117,9 @@ REGISTRY_RE='registry[+]https://github[.]com/rust-lang/crates[.]io-index'
 # polite half of question (3) being cheap.
 CRATES_IO_UA='tapesctl-check-tapes-pins (https://github.com/papercomputeco/tapesctl)'
 
+# The registry endpoint question (3) probes, one crate-version at a time.
+CRATES_IO_API='https://crates.io/api/v1/crates'
+
 MANIFEST="Cargo.toml"
 LOCKFILE="Cargo.lock"
 
@@ -136,14 +151,18 @@ done
 # --- extraction ---------------------------------------------------------------
 
 # Every tapes-crates dependency each workspace member declares, as
-# `name<TAB>kind<TAB>detail`: kind `registry` with the version requirement, or
+# `name<TAB>kind<TAB>detail`: kind `registry` with the version requirement,
 # kind `git` with the source URL (the escape hatch, or a mistake — the caller
-# decides which).
+# decides which), or kind `path` with the local path. A null source is a path
+# override, not a registry dependency: Cargo reports no source for it because
+# there is nothing resolvable behind it but this filesystem.
 manifest_deps() {
     jq -r --arg name_re "$TAPES_NAME_RE" --arg reg_re "$REGISTRY_RE" '
         [ .packages[].dependencies[]
           | select(.name | test($name_re))
-          | if .source == null or (.source | test($reg_re)) then
+          | if .source == null then
+              { name: .name, kind: "path", detail: (.path // "local path") }
+            elif (.source | test($reg_re)) then
               { name: .name, kind: "registry", detail: .req }
             else
               { name: .name, kind: "git", detail: .source }
@@ -174,6 +193,42 @@ lock_versions() {
     '
 }
 
+# Question 2's whole body — the lockfile agrees with the manifest — as a
+# function, because the escape hatch asks it too: a git pin and its lockfile
+# can disagree exactly like a version can.
+#
+# Cargo is the judge: `--locked` fails rather than silently re-resolving, so a
+# lockfile that no longer satisfies the manifest is caught here and not three
+# CI minutes later in a build. The verdict is cargo's exit status, never its
+# stderr: on a cold cache a succeeding cargo narrates every index and git
+# fetch to stderr ("Updating crates.io index", "Downloading crates ..."), and
+# narration is not failure. What stderr is for is telling a non-zero exit's
+# two meanings apart — a lockfile that does not satisfy the manifest is
+# evidence about this tree, while a resolver that could not reach the
+# registry or a git source is a network away and, like question 3's
+# unreachable registry, is reported as a WARNING rather than a failure.
+check_lock_agreement() {
+    if locked_err="$(cargo metadata --format-version 1 --locked --manifest-path "$MANIFEST" 2>&1 >/dev/null)"; then
+        echo "ok: $LOCKFILE satisfies $MANIFEST (cargo --locked)"
+    elif printf '%s' "$locked_err" | grep -qi 'lock file.*needs to be updated\|--locked\|failed to select a version'; then
+        echo "FAIL: $LOCKFILE no longer agrees with $MANIFEST:" >&2
+        printf '%s\n' "$locked_err" | sed 's/^/  /' >&2
+        echo "  refresh the lockfile (cargo update <crate>) and commit it" >&2
+        fail=1
+    else
+        cat >&2 <<EOF
+WARNING (not a failure): \`cargo metadata --locked\` could not run —
+manifest/lockfile agreement is unverified on this run:
+
+$(printf '%s\n' "$locked_err" | sed 's/^/  /')
+
+Resolving under --locked may need the network for the registry index and any
+git dependencies, so a resolver that cannot reach them is a network away, not
+a drift found. What fails this question is Cargo resolving and saying no.
+EOF
+    fi
+}
+
 # Read once, up front, so a Cargo that could not parse the manifest is
 # reported as "could not ask" rather than as "this repository declares
 # nothing". `--no-deps` resolves nothing: no fetch, no network, no write to
@@ -192,17 +247,34 @@ done < <(printf '%s\n' "$metadata" | manifest_deps)
 [[ ${#declared[@]} -gt 0 ]] ||
     die "no tapes crate dependency found in $MANIFEST (checked names matching ${TAPES_NAME_RE})"
 
-# --- the escape hatch, before any question ------------------------------------
+# --- the escape hatches, before any question ----------------------------------
 
+path_deps=()
 git_deps=()
 registry_deps=()
 for dep in "${declared[@]}"; do
     IFS=$'\t' read -r name kind detail <<<"$dep"
     case "$kind" in
+        path) path_deps+=("$name") ;;
         git) git_deps+=("$name") ;;
         registry) registry_deps+=("$name"$'\t'"$detail") ;;
     esac
 done
+
+fail=0
+
+if [[ ${#path_deps[@]} -gt 0 ]]; then
+    cat <<EOF
+NOTICE: PATH OVERRIDE ENGAGED — ${path_deps[*]} taken from a local path, not from crates.io.
+
+This is the same co-development loan as the git escape hatch, one step
+tighter — the crate is this checkout's neighbor, so there is no published
+version to probe and no revision to hold still — and it is repaid the same
+way: re-point at the next published version once the burst lands. The
+registry questions are not asked for these crates while it is in place.
+
+EOF
+fi
 
 if [[ ${#git_deps[@]} -gt 0 && ${#registry_deps[@]} -gt 0 ]]; then
     cat >&2 <<EOF
@@ -224,15 +296,65 @@ fi
 
 if [[ ${#git_deps[@]} -gt 0 ]]; then
     cat <<EOF
-ESCAPE HATCH ENGAGED: ${git_deps[*]} taken by git revision, not from crates.io.
+NOTICE: ESCAPE HATCH ENGAGED — ${git_deps[*]} taken by git revision, not from crates.io.
 
 This is the documented co-development loan (see .github/dependabot.yml): fine
 while unpublished crate work is being built against, and repaid by re-pointing
-at the next published version once it lands. The version questions are not
-asked while it is engaged.
+at the next published version once it lands. The registry questions cannot be
+asked of a git source, but the git-era guarantees still hold and are checked
+here: one immovable revision for every tapes crate, and a lockfile that
+agrees with the manifest.
 
-check-tapes-pins: OK (escape hatch)
 EOF
+
+    # `rev = <commit sha>` or it is not a pin: a branch (or a bare git URL)
+    # moves under the lockfile, and Cargo accepts a branch name in `rev` too —
+    # a name is a pointer, not a revision. And one revision for all of them,
+    # or the git siblings meet each other at two points of one history: the
+    # mix hazard again, one source kind in.
+    rev_re='[?]rev=([0-9a-fA-F]{7,40})([#&]|$)'
+    hatch_rev=""
+    for dep in "${declared[@]}"; do
+        IFS=$'\t' read -r name kind detail <<<"$dep"
+        [[ "$kind" == "git" ]] || continue
+        if [[ "$detail" =~ $rev_re ]]; then
+            rev="${BASH_REMATCH[1]}"
+            echo "ok: ${name} is pinned to rev ${rev}"
+            if [[ -z "$hatch_rev" ]]; then
+                hatch_rev="$rev"
+            elif [[ "$rev" != "$hatch_rev" ]]; then
+                echo "FAIL: ${name} is pinned to ${rev} while another tapes crate is pinned to ${hatch_rev} — the escape hatch is one revision for all of them" >&2
+                fail=1
+            fi
+        else
+            echo "FAIL: ${name} is taken from git without \`rev = <commit sha>\` (source: ${detail}) — a branch or tag moves under the lockfile; pin the exact revision being built against" >&2
+            fail=1
+        fi
+    done
+    echo
+
+    check_lock_agreement
+
+    echo
+    if [[ "$fail" -ne 0 ]]; then
+        echo "check-tapes-pins: FAILED" >&2
+        exit 1
+    fi
+    echo "check-tapes-pins: OK (escape hatch)"
+    exit 0
+fi
+
+if [[ ${#registry_deps[@]} -eq 0 ]]; then
+    # Every tapes crate is a path override. The registry questions have
+    # nothing left to ask; what remains askable is question 2.
+    check_lock_agreement
+
+    echo
+    if [[ "$fail" -ne 0 ]]; then
+        echo "check-tapes-pins: FAILED" >&2
+        exit 1
+    fi
+    echo "check-tapes-pins: OK (path override)"
     exit 0
 fi
 
@@ -256,8 +378,6 @@ for entry in "${locked[@]}"; do
     printf '  %-28s %s  (%s)\n' "$name" "$version" "$kind"
 done
 echo
-
-fail=0
 
 # bash 3.2 has no associative arrays, so membership is a scan. The sets are a
 # few packages; the loop is the clearest thing that works everywhere this
@@ -323,35 +443,10 @@ done
 
 # --- question 2: the lockfile agrees with the manifest ------------------------
 #
-# Cargo is the judge: `--locked` fails rather than silently re-resolving, so a
-# lockfile that no longer satisfies the manifest is caught here and not three
-# CI minutes later in a build. The verdict is cargo's exit status, never its
-# stderr: on a cold cache a succeeding cargo narrates every index and git
-# fetch to stderr ("Updating crates.io index", "Downloading crates ..."), and
-# narration is not failure. What stderr is for is telling a non-zero exit's
-# two meanings apart — a lockfile that does not satisfy the manifest is
-# evidence about this tree, while a resolver that could not reach the
-# registry or a git source is a network away and, like question 3's
-# unreachable registry, is reported as a WARNING rather than a failure.
-if locked_err="$(cargo metadata --format-version 1 --locked --manifest-path "$MANIFEST" 2>&1 >/dev/null)"; then
-    echo "ok: $LOCKFILE satisfies $MANIFEST (cargo --locked)"
-elif printf '%s' "$locked_err" | grep -qi 'lock file.*needs to be updated\|--locked\|failed to select a version'; then
-    echo "FAIL: $LOCKFILE no longer agrees with $MANIFEST:" >&2
-    printf '%s\n' "$locked_err" | sed 's/^/  /' >&2
-    echo "  refresh the lockfile (cargo update <crate>) and commit it" >&2
-    fail=1
-else
-    cat >&2 <<EOF
-WARNING (not a failure): \`cargo metadata --locked\` could not run —
-manifest/lockfile agreement is unverified on this run:
+# The body lives in check_lock_agreement, defined with the extraction helpers,
+# because the escape hatch asks this question too.
 
-$(printf '%s\n' "$locked_err" | sed 's/^/  /')
-
-Resolving under --locked may need the network for the registry index and any
-git dependencies, so a resolver that cannot reach them is a network away, not
-a drift found. What fails this question is Cargo resolving and saying no.
-EOF
-fi
+check_lock_agreement
 
 # --- question 3: every resolved version exists, unyanked, on crates.io --------
 #
@@ -367,17 +462,29 @@ for entry in "${locked[@]}"; do
     body="$(mktemp)"
     code="$(curl -sS -o "$body" -w '%{http_code}' --max-time 15 \
         -A "$CRATES_IO_UA" \
-        "https://crates.io/api/v1/crates/${name}/${version}" 2>/dev/null || echo 000)"
+        "${CRATES_IO_API}/${name}/${version}" 2>/dev/null || echo 000)"
 
     case "$code" in
         200)
-            yanked="$(jq -r '.version.yanked // false' <"$body" 2>/dev/null || echo unknown)"
-            if [[ "$yanked" == "true" ]]; then
-                echo "FAIL: ${name} ${version} is YANKED on crates.io — it builds here out of a cached registry and nowhere clean; move to a live version" >&2
-                fail=1
-            else
-                echo "ok: ${name} ${version} exists on crates.io"
-            fi
+            # A 200 whose body does not carry a `yanked` boolean is not an
+            # answer: the registry was reached, but what it said could not be
+            # read, and an unreadable answer is the same non-evidence as no
+            # answer at all. Only a parsed boolean settles the question —
+            # `false` is the pass, `true` is the failure, anything else is
+            # the advisory path.
+            yanked="$(jq -er '.version.yanked | select(type == "boolean") | tostring' <"$body" 2>/dev/null || echo unreadable)"
+            case "$yanked" in
+                true)
+                    echo "FAIL: ${name} ${version} is YANKED on crates.io — it builds here out of a cached registry and nowhere clean; move to a live version" >&2
+                    fail=1
+                    ;;
+                false)
+                    echo "ok: ${name} ${version} exists on crates.io"
+                    ;;
+                *)
+                    echo "WARNING (not a failure): crates.io answered 200 for ${name} ${version} but the body did not parse to a yanked verdict — existence unverified on this run" >&2
+                    ;;
+            esac
             ;;
         404)
             echo "FAIL: ${name} ${version} does not exist on crates.io — it resolves here out of a cached or private registry and will not resolve for a clean clone" >&2
