@@ -64,7 +64,7 @@ use url::Url;
 use crate::error::{Result, error};
 
 /// Directory, relative to the user's home, holding everything this harness's
-/// integration owns. Under `~/.tapes` beside the skills directory rather than
+/// integration owns. Under `~/.tapes` beside this client's other state rather than
 /// inside `~/.codex`, because these are tapesctl's files: an uninstall must be
 /// able to delete the whole tree without wondering what else lives there.
 pub const STATE_DIR: [&str; 2] = [".tapes", "codex-app"];

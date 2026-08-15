@@ -231,36 +231,29 @@ context — "find the turn where X happened". This needs a server with span
 embeddings written; a deployment without them answers `503` rather than an
 empty result set.
 
-`--quiet` prints bare session ids in score order, which is what `skill generate`
-takes as arguments:
-
-```bash
-tapesctl skill generate $(tapesctl search "charm CLI" --quiet --top 1) --name charm-patterns
-```
+`--quiet` prints bare session ids in score order, ready to compose into other
+commands through a shell substitution.
 
 ## Skills
 
-A skill is a markdown file with frontmatter under `~/.tapes/skills/`. Generate
-one from captured sessions, list what you have, and install it where an agent
-will look:
+Skills are served by the **skills cassette** — a tapes API extension that
+stores, versions, and generates skills server-side. When a deployment serves
+it, `tapesctl` discovers it like any other cassette and the whole surface
+appears as generated commands, always in step with what the server actually
+runs:
 
 ```bash
-tapesctl skill generate <session-id> --name debug-react-hooks
-tapesctl skill generate --search "react hooks" --search-top 3 --name react-debug
-tapesctl skill generate <session-id> --name morning-work --since 2026-02-17
-tapesctl skill list --type workflow
-tapesctl skill sync debug-react-hooks --claude   # copy it into place
+tapesctl cassettes skills list-skills
+tapesctl cassettes skills generate-skill \
+  --body '{"sessionIds": ["<session-id>"], "hint": {"name": "debug-react-hooks"}}'
+tapesctl cassettes skills get-skill-markdown <id>
 ```
 
-`generate` talks to two servers, and they are not the same one: `--tapes-url`
-for the session transcript, and an LLM provider for the extraction. The provider
-is `--provider` (`openai`, `anthropic`, or `ollama`), keyed from `--api-key` or
-the provider's own environment variable — prefer the variable, since an argument
-is visible in the process list. `--model` overrides that provider's default, and
-`--preview` renders the skill without writing it.
-
-Skill files are written `0600`, and a skills path that resolves outside the
-directory you selected is refused rather than followed.
+Generation runs on the server, against the LLM the deployment configured — no
+client-side provider keys. A deployment without the skills cassette has no
+skills surface; there is no local fallback. (Earlier tapesctl versions
+authored skills locally under `~/.tapes/skills/`; that second implementation
+is gone, and any files there are yours to keep or delete.)
 
 ## Cassettes
 

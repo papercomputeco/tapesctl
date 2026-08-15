@@ -34,7 +34,7 @@ cannot steer `tapesctl`.
 `tapesctl --tapes-url A sessions list --tapes-url B` uses `B`.
 
 **`--tapes-url` appears in the help of commands that never make an HTTP
-call** — `config set`, `config get`, `config path`, `skill list`, `skill sync`,
+call** — `config set`, `config get`, `config path`,
 `version`, and `plugin uninstall` — because the global flag propagates into
 every leaf's help. It is inert there. Its presence in `config`'s help is
 actively misleading, since the point of `config set tapes-url` is that you do
@@ -73,8 +73,7 @@ Every variable `tapesctl` reads.
 | `TAPESCTL_CACHE_DIR` | the cassette surface cache |
 | `CODEX_HOME` | `plugin install`/`uninstall codex-app`, `capture codex-app`, `start codex` |
 | `USER`, then `USERNAME` | the default `--auth-subject` (`local:<user>`, else `local:unknown`) |
-| `OPENAI_API_KEY` | `start codex` upstream selection; `skill generate` |
-| `ANTHROPIC_API_KEY` | `skill generate` |
+| `OPENAI_API_KEY` | `start codex` upstream selection |
 
 There is no telemetry variable, because there is no telemetry.
 
@@ -328,12 +327,10 @@ tapesctl search "error handling patterns" --top 10 --tapes-url http://localhost:
 Route: `GET /v1/cassettes/search/spans?query=&top_k=` — the search cassette's
 serving of the span-search contract. Both parameters are always sent.
 
-`--quiet` is a **pipe format, not a verbosity setting**. It emits exactly the
-shape `skill generate` takes as positionals, so the two compose:
-
-```bash
-tapesctl skill generate $(tapesctl search "charm CLI" -q -k 1) --name charm-patterns
-```
+`--quiet` is a **pipe format, not a verbosity setting**: one bare session id
+per line, deduplicated in score order, ready for command substitution into
+anything that takes session ids — for example the skills cassette's generate
+operation (`tapesctl skills --help` shows its current shape).
 
 Non-quiet output is a ranked list — rank, score to four decimals, `trace/span`
 ids, the turn's prompt elided at 80 characters, a snippet elided at 100, then
@@ -403,110 +400,15 @@ This writes into the server's single-tenant org. It is not something to point
 at a populated deployment. A server without the raw-turn layer answers `501`,
 surfaced with its body.
 
-## skill
+## skills
 
-### skill generate
-
-Extract a skill document from one or more captured sessions using an LLM.
-
-**Two servers are involved and they are not the same one.** `--tapes-url`
-addresses the tapes read API for the transcript; `--provider`, `--model`, and
-`--api-key` address the LLM doing the extraction.
-
-```bash
-tapesctl skill generate 01JDQ8F3K2M4N6P8R0T2V4X6Z8 --name debug-react-hooks --tapes-url http://localhost:8081
-tapesctl skill generate --search "react hooks" --search-top 3 --name react-debug --tapes-url http://localhost:8081
-```
-
-| flag | default |
-|---|---|
-| `[SESSION_IDS]...` | — takes priority over `--search` |
-| `--name <NAME>` | **required**, kebab-case |
-| `--type <T>` | `workflow`; also `domain-knowledge`, `prompt-template` |
-| `--preview` | off — render without writing |
-| `--provider <P>` | `openai` |
-| `--model <M>` | the provider's own default |
-| `--api-key <K>` | the provider's environment variable |
-| `--since`, `--until` | none — `YYYY-MM-DD` or RFC 3339 |
-| `--search <Q>` | none |
-| `--search-top <N>` | `3` |
-| `--source-dir <D>` | `~/.tapes/skills` |
-| `--tapes-url <URL>` | configured default (`TAPES_URL`) |
-
-| provider | default model | default base URL | key from | key required |
-|---|---|---|---|---|
-| `openai` | `gpt-4o-mini` | `https://api.openai.com` | `OPENAI_API_KEY` | yes |
-| `anthropic` | `claude-haiku-4-5-20251001` | `https://api.anthropic.com` | `ANTHROPIC_API_KEY` | yes |
-| `ollama` | `llama3.2` | `http://localhost:11434` | `OPENAI_API_KEY`, else `ANTHROPIC_API_KEY` | no |
-
-**Prefer the environment variable over `--api-key`.** A key passed as an
-argument is visible in the process list and in shell history to everything on
-the machine, for as long as the command runs. Its own help says so.
-
-The combined transcript is capped at 30 000 characters and truncated at a
-session boundary, with a note on stderr. The model is asked up to three times
-for parseable JSON. The extraction call has a 30-second timeout and one retry
-on a transient provider failure.
-
-Errors include `no session ids provided and no --search query; name a session
-or pass --search`, `no sessions found for search <query>`, `no turns in session
-<s> after applying --since/--until`, `no API key for <provider>: set <env_var>
-or pass --api-key`, and `the model did not return valid JSON in <n> attempts`.
-
-### skill list
-
-Read a skills directory and print what is there. **Touches no server** — the
-`--tapes-url` in its help is the propagated global.
-
-```bash
-tapesctl skill list
-tapesctl skill list --type workflow
-```
-
-```
-Skills (1)
-
-  demo-skill  workflow  v0.1.0
-  A demo
-```
-
-| flag | default |
-|---|---|
-| `--type <T>` | none — no filter |
-| `--source-dir <D>` | `~/.tapes/skills` |
-
-An empty directory and a filter that matches nothing print **different**
-messages, because the fix differs:
-
-```
-No skills found. Generate one with: tapesctl skill generate <session-id> --name <name>
-No skills found with type "prompt-template"
-```
-
-Both exit `0`.
-
-### skill sync
-
-Copy `~/.tapes/skills/<name>.md` into an agent's skills directory. Makes no
-HTTP call at all.
-
-```bash
-tapesctl skill sync demo-skill --claude
-tapesctl skill sync demo-skill --claude --dry-run
-```
-
-| flags | destination |
-|---|---|
-| *(none)* | `~/.agents/skills` |
-| `--local` | `./.agents/skills` |
-| `--claude` | `~/.claude/skills` |
-| `--claude --local` | `./.claude/skills` |
-
-Plus `--dry-run` and `--source-dir`. Written files are `0600`. A skill name
-must be a bare file stem — letters, digits, `.`, `_`, `-`, never a path — and a
-skills directory that resolves outside the selected base is refused rather than
-followed. The final create is exclusive after an unlink, so a planted symlink
-makes the write fail rather than redirect.
+Skills are served by the skills cassette, so the `skills` command is not
+hand-built here: it is generated from the cassette's own OpenAPI document at
+invocation time, exactly like every other [cassette command](#cassettes). Run
+`tapesctl skills --help` against a deployment serving the cassette to see the
+verbs it currently vends — a new cassette capability reaches this CLI with no
+release. The retired local `skill` verb family (`generate`/`list`/`sync`,
+which authored files under `~/.tapes/skills/`) has been removed.
 
 ## plugin
 

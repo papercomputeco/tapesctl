@@ -2,19 +2,22 @@
 //!
 //! These exist here so a user of the open client never has to install the
 //! operator binary to do ordinary things: pull a session out, fill a fresh
-//! server with something to look at, find the turn where something happened,
-//! author a skill from it, and put that skill where an agent will find it.
+//! server with something to look at, find the turn where something happened.
 //!
-//! `search` and the `skill` commands are expected to move again: they are
-//! client-shaped surfaces over the API rather than core client plumbing, and
-//! the plan is for them to be extracted as cassettes once that surface exists.
-//! They live here in the meantime so nothing is lost between the two homes.
+//! `search` is expected to move again: it is a client-shaped surface over the
+//! API rather than core client plumbing, and the plan is for it to be served
+//! by a cassette, at which point the discovered `cassettes` surface covers it
+//! and this port retires. The `skill` commands already made that move: skills
+//! are the skills cassette's product, reached through the discovered
+//! `tapesctl cassettes skills <method>` surface, and the local authoring port
+//! that predated it has been removed rather than kept as a second
+//! implementation.
 //!
 //! They are *thin* ports on purpose. Where the Go command's behaviour is a
-//! contract — the export bundle's bytes, the seed route's request, the skill
-//! file's mode — this reproduces it exactly. Where the behaviour was an artifact
-//! — a flag that was parsed and ignored, a flag the server now refuses — it is
-//! dropped, and the drop is documented at the site.
+//! contract — the export bundle's bytes, the seed route's request — this
+//! reproduces it exactly. Where the behaviour was an artifact — a flag that
+//! was parsed and ignored, a flag the server now refuses — it is dropped, and
+//! the drop is documented at the site.
 //!
 //! Coverage here does **not** remove anything from the `tapes` CLI. Retiring the
 //! duplicated commands is Track 2's decision, and it should be made with both
@@ -23,10 +26,3 @@
 pub mod export;
 pub mod search;
 pub mod seed;
-pub mod skill;
-pub mod skill_document;
-pub mod skill_generate;
-pub mod skill_list;
-pub mod skill_llm;
-pub mod skill_paths;
-pub mod skill_transcript;
