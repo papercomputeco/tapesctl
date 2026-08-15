@@ -29,7 +29,7 @@
 //!
 //! # Where it lives
 //!
-//! `~/.tapes/config.toml`, beside the logs, the authored skills, and the
+//! `~/.tapes/config.toml`, beside the logs and the
 //! codex-app state this client already keeps in `~/.tapes` — one directory to
 //! inspect, back up, or delete. It is deliberately not `$XDG_CONFIG_HOME`: a
 //! user's tapesctl state is already in one place, and splitting configuration

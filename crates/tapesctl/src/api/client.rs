@@ -14,7 +14,7 @@
 //!
 //! The named methods on [`tapes_client::CoreClient`] return the vendored
 //! contract's models, and every command that *renders* a response — search,
-//! seed, the skill transcript — uses them. The `<resource> <method>` commands
+//! seed — uses them. The `<resource> <method>` commands
 //! do not render: they print the server's document, and a document that had
 //! been through a model would be missing whatever fields this build predates.
 //! For those, [`tapes_client::CoreClient::call`] is the documented escape

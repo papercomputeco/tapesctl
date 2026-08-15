@@ -320,10 +320,6 @@ pub enum Command {
     /// Populate a server with demo sessions.
     Seed(SeedArgs),
 
-    /// Manage agent skills.
-    #[command(subcommand)]
-    Skill(SkillCommand),
-
     /// Install or manage harness capture plugins.
     #[command(subcommand)]
     Plugin(PluginCommand),
@@ -646,8 +642,8 @@ pub struct SearchArgs {
 
     /// Print only session ids, one per line, deduplicated in score order.
     ///
-    /// The shape `skill generate` takes as positional arguments, so the two
-    /// compose: `tapesctl skill generate $(tapesctl search "..." -q -k 1)`.
+    /// The shape the skills cassette's generate takes as sessionIds, so the
+    /// two compose through a shell substitution.
     #[arg(long, short = 'q')]
     pub quiet: bool,
 }
@@ -675,125 +671,6 @@ pub struct ExportArgs {
 pub struct SeedArgs {
     #[command(flatten)]
     pub api: ApiArgs,
-}
-
-/// `tapesctl skill` subcommands.
-///
-/// `generate` carries far more flags than its siblings, so the variants differ
-/// in size. Boxing it is the usual fix and is not available here — clap derives
-/// a subcommand from a type implementing `Args`, which `Box<T>` does not — and
-/// the enum is built exactly once, at parse time, so the difference costs
-/// nothing worth contorting the surface for.
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug, Subcommand)]
-pub enum SkillCommand {
-    /// Extract a skill from one or more captured sessions.
-    Generate(SkillGenerateArgs),
-
-    /// List authored skills.
-    List(SkillListArgs),
-
-    /// Copy an authored skill into an agent's skills directory.
-    Sync(SkillSyncArgs),
-}
-
-/// Arguments for `tapesctl skill generate`.
-///
-/// Two servers are involved and they are not the same one: the tapes API
-/// supplies the session transcript, and an LLM provider does the extraction.
-/// `--tapes-url` addresses the first; `--provider`/`--model`/`--api-key`
-/// address the second.
-#[derive(Debug, Args)]
-pub struct SkillGenerateArgs {
-    #[command(flatten)]
-    pub api: ApiArgs,
-
-    /// Sessions to extract from. Takes priority over `--search`.
-    pub session_ids: Vec<String>,
-
-    /// Skill name, kebab-case.
-    #[arg(long)]
-    pub name: String,
-
-    /// `workflow` (default), `domain-knowledge`, or `prompt-template`.
-    #[arg(long = "type", default_value = "workflow")]
-    pub skill_type: String,
-
-    /// Render the generated skill without writing it.
-    #[arg(long)]
-    pub preview: bool,
-
-    /// LLM provider: `openai` (default), `anthropic`, or `ollama`.
-    #[arg(long, default_value = "openai")]
-    pub provider: String,
-
-    /// Model for the extraction call. Each provider has its own default.
-    #[arg(long)]
-    pub model: Option<String>,
-
-    /// API key for the LLM provider.
-    ///
-    /// Prefer the provider's environment variable — a key passed here is
-    /// visible in the process list and in shell history to everything on the
-    /// machine, for as long as the command runs.
-    #[arg(long)]
-    pub api_key: Option<String>,
-
-    /// Only include turns starting on or after this date (`YYYY-MM-DD` or
-    /// RFC 3339).
-    #[arg(long)]
-    pub since: Option<String>,
-
-    /// Only include turns starting on or before this date.
-    #[arg(long)]
-    pub until: Option<String>,
-
-    /// Resolve sessions by span search instead of naming them.
-    #[arg(long)]
-    pub search: Option<String>,
-
-    /// How many search hits to draw sessions from.
-    #[arg(long = "search-top", default_value_t = 3)]
-    pub search_top: u64,
-
-    /// Where authored skills are written. Defaults to `~/.tapes/skills`.
-    #[arg(long)]
-    pub source_dir: Option<PathBuf>,
-}
-
-/// Arguments for `tapesctl skill list`.
-#[derive(Debug, Args)]
-pub struct SkillListArgs {
-    /// Only show skills of this type.
-    #[arg(long = "type")]
-    pub skill_type: Option<String>,
-
-    /// Where authored skills live. Defaults to `~/.tapes/skills`.
-    #[arg(long)]
-    pub source_dir: Option<PathBuf>,
-}
-
-/// Arguments for `tapesctl skill sync`.
-#[derive(Debug, Args)]
-pub struct SkillSyncArgs {
-    /// The skill name, without the `.md` suffix.
-    pub name: String,
-
-    /// Write into a Claude skills directory rather than the agent-neutral one.
-    #[arg(long)]
-    pub claude: bool,
-
-    /// Write into this project rather than the user's home.
-    #[arg(long)]
-    pub local: bool,
-
-    /// Report the destination without writing anything.
-    #[arg(long)]
-    pub dry_run: bool,
-
-    /// Where authored skills live. Defaults to `~/.tapes/skills`.
-    #[arg(long)]
-    pub source_dir: Option<PathBuf>,
 }
 
 /// `tapesctl plugin` subcommands.
@@ -1138,17 +1015,13 @@ mod tests {
     }
 
     #[test]
-    fn skill_sync_needs_no_server() {
-        // It is a local file copy; requiring --tapes-url would be a lie.
-        let cli = parse(&["tapesctl", "skill", "sync", "review", "--claude", "--local"]);
-        match cli.command {
-            Command::Skill(SkillCommand::Sync(args)) => {
-                assert_eq!(args.name, "review");
-                assert!(args.claude);
-                assert!(args.local);
-            }
-            other => panic!("got: {other:?}"),
-        }
+    fn skill_is_not_a_built_in_noun() {
+        // Skills are the skills cassette's product: the surface is discovered
+        // (`tapesctl cassettes skills <method>`), never compiled in. A
+        // built-in `skill` noun would also shadow-block a cassette named
+        // `skill` from ever being mounted.
+        assert!(Cli::try_parse_from(["tapesctl", "skill", "list"]).is_err());
+        assert!(Cli::try_parse_from(["tapesctl", "skill", "sync", "review"]).is_err());
     }
 
     #[test]
@@ -1298,36 +1171,6 @@ mod tests {
     }
 
     #[test]
-    fn generate_requires_a_name_and_defaults_the_rest() {
-        let cli = parse(&[
-            "tapesctl",
-            "skill",
-            "generate",
-            "s-1",
-            "s-2",
-            "--name",
-            "debug-hooks",
-            "--tapes-url",
-            "http://x",
-        ]);
-        match cli.command {
-            Command::Skill(SkillCommand::Generate(args)) => {
-                assert_eq!(args.session_ids, vec!["s-1", "s-2"]);
-                assert_eq!(args.name, "debug-hooks");
-                assert_eq!(args.skill_type, "workflow");
-                assert_eq!(args.provider, "openai");
-                assert_eq!(args.search_top, 3);
-                assert!(!args.preview);
-            }
-            other => panic!("got: {other:?}"),
-        }
-        assert!(
-            Cli::try_parse_from(["tapesctl", "skill", "generate", "s-1"]).is_err(),
-            "--name is required",
-        );
-    }
-
-    #[test]
     fn the_discovery_server_is_found_under_both_spellings_clap_accepts() {
         // The cassette nouns must exist before argv is parsed, so this scan is
         // what stands in for the parse that has not happened yet.
@@ -1345,43 +1188,6 @@ mod tests {
             ]),
             Some("http://y".to_owned()),
         );
-    }
-
-    #[test]
-    fn generate_can_take_its_sessions_from_a_search_instead() {
-        let cli = parse(&[
-            "tapesctl",
-            "skill",
-            "generate",
-            "--search",
-            "react hooks",
-            "--search-top",
-            "5",
-            "--name",
-            "react-debug",
-            "--tapes-url",
-            "http://x",
-        ]);
-        match cli.command {
-            Command::Skill(SkillCommand::Generate(args)) => {
-                assert!(args.session_ids.is_empty());
-                assert_eq!(args.search.as_deref(), Some("react hooks"));
-                assert_eq!(args.search_top, 5);
-            }
-            other => panic!("got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn skill_list_needs_no_server() {
-        // It reads the authoring directory; requiring --tapes-url would be a lie.
-        let cli = parse(&["tapesctl", "skill", "list", "--type", "workflow"]);
-        match cli.command {
-            Command::Skill(SkillCommand::List(args)) => {
-                assert_eq!(args.skill_type.as_deref(), Some("workflow"));
-            }
-            other => panic!("got: {other:?}"),
-        }
     }
 
     #[test]

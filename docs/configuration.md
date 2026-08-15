@@ -171,10 +171,8 @@ What `tapesctl` writes:
 |---|---|
 | `~/.tapes/config.toml` | `config set` |
 | `~/.tapes/logs/start-*.log` | `start`, at default verbosity |
-| `~/.tapes/skills/<name>.md` | `skill generate` |
 | `~/.tapes/codex-app/handoff.json` | `plugin install codex-app` |
 | `~/.tapes/codex-app/plugin/` | `plugin install codex-app` |
-| `~/.agents/skills/`, `./.agents/skills/`, `~/.claude/skills/`, `./.claude/skills/` | `skill sync` |
 | `~/.pi/agent/extensions/tapes-gateway.ts` | `plugin install pi` |
 | `~/.config/opencode/plugins/tapes-gateway.ts` | `plugin install opencode` |
 | `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`) | `plugin install`/`uninstall codex-app`, patched in place |
@@ -203,8 +201,7 @@ What it reads but never writes:
 | `TAPESCTL_CACHE_DIR` | the cassette surface cache |
 | `CODEX_HOME` | `plugin install`/`uninstall codex-app`, `capture codex-app`, `start codex` |
 | `USER`, then `USERNAME` | the default `--auth-subject`: `local:<user>`, else `local:unknown` |
-| `OPENAI_API_KEY` | `start codex` upstream selection; `skill generate` |
-| `ANTHROPIC_API_KEY` | `skill generate` |
+| `OPENAI_API_KEY` | `start codex` upstream selection |
 
 There is no telemetry variable, because there is no telemetry. `tapesctl`
 reports nothing about you anywhere.
@@ -217,9 +214,8 @@ unchanged.
 
 Because the global flag propagates into every leaf's help, `--tapes-url` is
 rendered for commands that never make an HTTP call: `config set`, `config get`,
-`config path`, `skill list`, `skill sync`, `version`, and `plugin uninstall`.
+`config path`, `version`, and `plugin uninstall`.
 It is inert in all of them.
 
 The reverse is worth stating too: `plugin install` and `plugin uninstall` write
-local files from bytes the binary already carries and fetch nothing; `skill
-sync` is a pure local copy; `skill list` reads a directory.
+local files from bytes the binary already carries and fetch nothing.

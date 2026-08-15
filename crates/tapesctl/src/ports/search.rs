@@ -6,7 +6,7 @@
 //! rather than reproduced.
 //!
 //! What *is* reproduced is the layout, because `--quiet` is a pipe format:
-//! `tapesctl skill generate $(tapesctl search "charm CLI" -q -k 1)` depends on
+//! piping `tapesctl search "charm CLI" -q -k 1` into another command depends on
 //! one bare session id per line, deduplicated in score order.
 //!
 //! Two other drops. The Go renderer coloured each field through the CLI's
@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn quiet_output_is_deduplicated_in_score_order() {
-        // This is the pipe contract `skill generate` consumes.
+        // This is the pipe contract shell substitutions consume.
         // Decoded rather than constructed: a response model is
         // `#[non_exhaustive]`, which is the shipped shape saying the server
         // owns it.

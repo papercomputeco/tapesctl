@@ -21,7 +21,7 @@ use tapes_client::DirectHttp;
 use url::Url;
 
 use cassette::Surface;
-use cli::{Cli, Command, PluginCommand, SkillCommand, StartArgs};
+use cli::{Cli, Command, PluginCommand, StartArgs};
 use config::Config;
 pub use error::{Error, Result};
 
@@ -280,9 +280,6 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Search(args) => ports::search::run(args).await,
         Command::Export(args) => ports::export::run(args).await,
         Command::Seed(args) => ports::seed::run(args).await,
-        Command::Skill(SkillCommand::Generate(args)) => ports::skill_generate::run(args).await,
-        Command::Skill(SkillCommand::List(args)) => ports::skill_list::run(args),
-        Command::Skill(SkillCommand::Sync(args)) => ports::skill::run(args),
         Command::Plugin(PluginCommand::Install(args)) => plugin::run(args),
         Command::Plugin(PluginCommand::Uninstall(args)) => plugin::uninstall(args),
         Command::Plugin(PluginCommand::Hook(args)) => codex_app::hook::run(&args).await,

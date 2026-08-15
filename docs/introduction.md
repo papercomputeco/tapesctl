@@ -33,7 +33,7 @@ were not watching.
 
 | port | listener | the commands that use it |
 |---|---|---|
-| `8081` | read API | `sessions`, `traces`, `spans`, `search`, `export`, `seed`, `skill generate`, `cassettes` |
+| `8081` | read API | `sessions`, `traces`, `spans`, `search`, `export`, `seed`, `skills`, `cassettes` |
 | `8082` | ingest | `start`, `capture`, `sync` |
 
 Those are the defaults of a local `tapes serve`. A deployment that fronts both

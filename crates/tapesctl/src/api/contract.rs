@@ -25,11 +25,9 @@
 //! reason, not a default.
 //!
 //! The tables stay here rather than moving with the contract because they are
-//! a statement about *this CLI's* surface: this client authors skills locally
-//! and deliberately does not speak the server-side skills store, and a client
-//! that does would allow-list a different set. A shared table would report on
-//! the union of two surfaces and silently stop protecting whichever one
-//! differs.
+//! a statement about *this CLI's* surface: another client exposes a different
+//! set, and a shared table would report on the union of two surfaces and
+//! silently stop protecting whichever one differs.
 
 /// The vendored ingest contract. Nothing at runtime reads it — the capture
 /// path keeps its hand-written request construction — but the conformance
@@ -111,47 +109,49 @@ pub const UNEXPOSED_OPERATIONS: &[(&str, &str)] = &[
     ),
     (
         "listSessionSkills",
-        "server-side skills store; tapesctl's skill commands author locally (~/.tapes/skills) and do not speak this API",
+        "core's copy of a surface the skills cassette owns; tapesctl reaches skills through the \
+         discovered `cassettes skills` commands, and these routes are deleted from core with the \
+         cassette cutover's batched removal",
     ),
     (
         "listSkills",
-        "server-side skills store; see listSessionSkills",
+        "core's copy of a cassette-owned surface; see listSessionSkills",
     ),
     (
         "createSkill",
-        "server-side skills store; see listSessionSkills",
+        "core's copy of a cassette-owned surface; see listSessionSkills",
     ),
     (
         "getSkill",
-        "server-side skills store; see listSessionSkills",
+        "core's copy of a cassette-owned surface; see listSessionSkills",
     ),
     (
         "updateSkill",
-        "server-side skills store; see listSessionSkills",
+        "core's copy of a cassette-owned surface; see listSessionSkills",
     ),
     (
         "deleteSkill",
-        "server-side skills store; see listSessionSkills",
+        "core's copy of a cassette-owned surface; see listSessionSkills",
     ),
     (
         "duplicateSkill",
-        "server-side skills store; see listSessionSkills",
+        "core's copy of a cassette-owned surface; see listSessionSkills",
     ),
     (
         "getSkillMarkdown",
-        "server-side skills store; see listSessionSkills",
+        "core's copy of a cassette-owned surface; see listSessionSkills",
     ),
     (
         "listSkillVersions",
-        "server-side skills store; see listSessionSkills",
+        "core's copy of a cassette-owned surface; see listSessionSkills",
     ),
     (
         "publishSkill",
-        "server-side skills store; see listSessionSkills",
+        "core's copy of a cassette-owned surface; see listSessionSkills",
     ),
     (
         "generateSkill",
-        "server-side generation; tapesctl skill generate runs its own extraction against a user-chosen LLM instead",
+        "core's copy of a cassette-owned surface; see listSessionSkills",
     ),
 ];
 

@@ -18,14 +18,13 @@
 //! # Writing into someone's home
 //!
 //! The destinations are dot-directories in the user's home that the harness —
-//! not tapesctl — created, which is a hostile enough place to write that the
-//! containment discipline from [`crate::ports::skill`] applies unchanged: the
-//! resolved destination must still sit beneath the home it was derived from, and
-//! the final create is `O_EXCL` after an unlink so a symlink planted at the
-//! target makes the write *fail* rather than redirect. The one thing that does
-//! not carry over is name validation — a skill name is user input, whereas these
-//! path components are `&'static str` constants in the crate, and the crate
-//! tests that none of them can traverse.
+//! not tapesctl — created, which is a hostile enough place to write that a
+//! strict containment discipline applies: the resolved destination must sit
+//! beneath the home it was derived from, and the final create is `O_EXCL`
+//! after an unlink so a symlink planted at the target makes the write *fail*
+//! rather than redirect. Name validation is not needed on top — these path
+//! components are `&'static str` constants in the crate, and the crate tests
+//! that none of them can traverse.
 
 use std::path::{Path, PathBuf};
 
@@ -210,8 +209,7 @@ fn open_staging(staged: &Path) -> std::io::Result<std::fs::File> {
 ///
 /// The artifact's contents are public source, so this is not about secrecy: it
 /// is code that the user's agent will load and execute, landing in a directory
-/// only that user's agent reads. Owner-only is the conservative default, and it
-/// matches what `skill sync` writes.
+/// only that user's agent reads. Owner-only is the conservative default.
 #[cfg(unix)]
 fn restrict_permissions(file: &std::fs::File, path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
