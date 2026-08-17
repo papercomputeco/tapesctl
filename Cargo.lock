@@ -1791,9 +1791,9 @@ dependencies = [
 
 [[package]]
 name = "tapes-client"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42886939ef6542fb8abc0d6cd8c648d9d2377dda327a6e57595db2d8ea3c5e24"
+checksum = "4039f5d38407e5ea8ea612e244daffdec7116d9a4bd36bacbb1c8c251c46c2c1"
 dependencies = [
  "clap",
  "dirs",
@@ -1803,6 +1803,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "snafu",
+ "tokio",
  "tracing",
  "url",
 ]

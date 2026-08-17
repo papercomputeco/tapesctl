@@ -325,7 +325,8 @@ tapesctl search "error handling patterns" --top 10 --tapes-url http://localhost:
 | `-k`, `--top <N>` | `5` | the server has no ceiling on this |
 | `-q`, `--quiet` | off | one bare session id per line, deduplicated in score order |
 
-Route: `GET /v1/search/spans?query=&top_k=`. Both parameters are always sent.
+Route: `GET /v1/cassettes/search/spans?query=&top_k=` — the search cassette's
+serving of the span-search contract. Both parameters are always sent.
 
 `--quiet` is a **pipe format, not a verbosity setting**. It emits exactly the
 shape `skill generate` takes as positionals, so the two compose:

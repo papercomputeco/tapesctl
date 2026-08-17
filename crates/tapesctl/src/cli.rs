@@ -235,10 +235,11 @@ fn version_short_circuits(argv: &[String]) -> bool {
 /// Only three shapes can: `tapesctl cassettes …` itself, `tapesctl help …`
 /// (whose output may descend into the noun), and a bare / flags-only
 /// invocation (whose help must list the noun and explain where its contents
-/// come from). Every other verb builds its parser with **zero** discovery
-/// I/O — no cache read, no network. The fixed [`crate::cassette::command::NOUN`]
-/// literal is what makes this scan sufficient: since the retired top-level
-/// aliases went, no first token other than these three can name a cassette.
+/// come from). A first noun this binary does not know joins them: it may be a
+/// cassette's own top-level command (`tapesctl search …`), which only
+/// discovery can mount. Every *static* verb — `sessions list`, `start`, all
+/// of them — still builds its parser with **zero** discovery I/O: a known
+/// noun short-circuits before any cache read or network.
 ///
 /// One flags-only shape is carved back out: a version request
 /// ([`version_short_circuits`]) prints and exits without rendering help, so
@@ -248,10 +249,25 @@ pub fn gated(argv: &[String]) -> bool {
     if version_short_circuits(argv) {
         return false;
     }
-    matches!(
-        first_noun(argv),
-        None | Some(crate::cassette::command::NOUN) | Some("help")
-    )
+    match first_noun(argv) {
+        None | Some("help") => true,
+        Some(noun) if noun == crate::cassette::command::NOUN => true,
+        Some(noun) => !is_static_noun(noun),
+    }
+}
+
+/// Whether the noun is one of this binary's own compiled-in commands.
+///
+/// The boundary the generated surface must not cross: a name listed here is
+/// never mounted from discovery (a server must not redefine what a consumer's
+/// own command means), and — the same fact read the other way — an invocation
+/// that starts with one never pays for discovery.
+#[must_use]
+pub fn is_static_noun(noun: &str) -> bool {
+    use clap::CommandFactory;
+    Cli::command()
+        .get_subcommands()
+        .any(|sub| sub.get_name() == noun || sub.get_all_aliases().any(|alias| alias == noun))
 }
 
 /// Top-level subcommands.

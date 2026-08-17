@@ -54,6 +54,32 @@ pub fn write(cached: &Cached) {
     tapes_client::cassettes::cache::write(&config(&cached.base), cached);
 }
 
+/// How long live discovery may run before the cache stands in. ETag
+/// revalidation keeps the common case to one cheap request per document,
+/// and a refused or unroutable connection fails well inside this — only a
+/// black-holed host pays the whole deadline. Hitting it is a signal worth
+/// warning about, not routine.
+pub const LIVE_DEADLINE: Duration = Duration::from_millis(2500);
+
+pub use tapes_client::cassettes::cache::Provenance;
+
+/// Get the cassette surface for a server, live-first.
+///
+/// The listing this feeds is how a user validates that a cassette is being
+/// vended, so the server is always asked, under [`LIVE_DEADLINE`]; the cache
+/// only stands in — labeled through the returned [`Provenance`] — when the
+/// server cannot answer.
+pub async fn load_live(transport: &DirectHttp) -> (Surface, Provenance) {
+    let base = transport.base().to_string();
+    tapes_client::cassettes::cache::load_live(
+        &Wire::new(transport.clone()),
+        &config(&base),
+        &spec::REDUCER,
+        LIVE_DEADLINE,
+    )
+    .await
+}
+
 /// Get the cassette surface for a server, from cache or from the network.
 ///
 /// Never fails. See [`tapes_client::cassettes::cache`] for the degradation
