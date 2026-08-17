@@ -98,7 +98,7 @@ mod tests {
     async fn export_server(body: &str) -> MockServer {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/v1/sessions/s-1/export"))
+            .and(path("/v1/cassettes/export/sessions/s-1"))
             .respond_with(ResponseTemplate::new(200).set_body_string(body))
             .mount(&server)
             .await;
@@ -122,7 +122,7 @@ mod tests {
     async fn the_detail_grain_reaches_the_server() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/v1/sessions/s-1/export"))
+            .and(path("/v1/cassettes/export/sessions/s-1"))
             .and(query_param("detail", "traces"))
             .respond_with(ResponseTemplate::new(200).set_body_string(BUNDLE))
             .mount(&server)
@@ -149,7 +149,7 @@ mod tests {
         // A 404 body written into the output file would be a bundle-shaped lie.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/v1/sessions/s-1/export"))
+            .and(path("/v1/cassettes/export/sessions/s-1"))
             .respond_with(ResponseTemplate::new(404).set_body_string(r#"{"error":"not found"}"#))
             .mount(&server)
             .await;
