@@ -482,7 +482,7 @@ mod tests {
     async fn search_resolves_sessions_deduplicated_in_score_order() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/v1/search/spans"))
+            .and(path("/v1/cassettes/search/spans"))
             .and(query_param("query", "react hooks"))
             .and(query_param("top_k", "2"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"results": [
@@ -506,7 +506,7 @@ mod tests {
     async fn a_search_matching_nothing_names_the_query() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/v1/search/spans"))
+            .and(path("/v1/cassettes/search/spans"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"results": []})))
             .mount(&server)
             .await;

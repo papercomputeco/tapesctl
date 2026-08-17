@@ -103,7 +103,7 @@ tapes-capture = { version = "0.1" }
 # is built at runtime from a document this binary has never seen, which is the
 # one surface that cannot be written by hand. `direct-http` is `DirectHttp`,
 # the no-redirect transport this CLI talks to a tapes server with.
-tapes-client = { version = "0.2", features = [
+tapes-client = { version = "0.3", features = [
   "cli",
   "direct-http",
 ] }

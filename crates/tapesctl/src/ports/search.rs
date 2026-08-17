@@ -238,7 +238,7 @@ mod tests {
     async fn search_server(body: Value) -> MockServer {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/v1/search/spans"))
+            .and(path("/v1/cassettes/search/spans"))
             .and(query_param("query", "charm CLI"))
             .respond_with(ResponseTemplate::new(200).set_body_json(body))
             .mount(&server)
@@ -277,7 +277,7 @@ mod tests {
     async fn the_result_count_reaches_the_server_as_top_k() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/v1/search/spans"))
+            .and(path("/v1/cassettes/search/spans"))
             .and(query_param("top_k", "3"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"results": []})))
             .mount(&server)

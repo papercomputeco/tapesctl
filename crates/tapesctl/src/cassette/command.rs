@@ -13,6 +13,7 @@ use snafu::{OptionExt, ResultExt};
 use url::Url;
 
 use crate::api::print_json;
+use crate::cassette::cache::Provenance;
 use crate::cassette::spec::Surface;
 use crate::error::{Result, error};
 use tapes_client::DirectHttp;
@@ -32,7 +33,7 @@ const TAPES_URL_FLAG: &str = "tapes-url";
 /// panics the parser build. Under the first it skips the propagation, and the
 /// value the user gave at either position, or the configured default, reaches
 /// here.
-fn with_tapes_url(command: Command) -> Command {
+pub(crate) fn with_tapes_url(command: Command) -> Command {
     command.arg(
         Arg::new(crate::cli::TAPES_URL_ARG)
             .long(TAPES_URL_FLAG)
@@ -128,29 +129,56 @@ fn admissible(surface: &Surface) -> Surface {
 /// difference between "cassettes unsupported" and "nothing to discover from
 /// yet".
 const CASSETTES_ARE_DISCOVERED: &str = "Cassette commands are served by your tapes deployment, not built into this \
-     binary: they\nare discovered from the server and mounted under `tapesctl cassettes`.";
+     binary: they\nare discovered from the server and mounted both at the top level and under\n\
+     `tapesctl cassettes` (the collision-proof spelling).";
 
 /// Build the top-level help epilogue for one run's discovery result.
 ///
-/// `server` is the URL discovery was pointed at, if any, and `surface` is what
-/// came back. The base sentence is unconditional; the second one exists because
-/// "no cassette commands" has two very different causes and the caller's next
-/// move differs — name a server, versus look at why the named one served
-/// nothing.
+/// `server` is the URL discovery was pointed at, if any; `surface` is what
+/// came back; and `provenance` is how — live, or from the cache and why. The
+/// base sentence is unconditional; the rest exists because "no cassette
+/// commands" and "these cassette commands" each have several causes and the
+/// reader's next move differs. A listing that is not the server's current
+/// truth always says so: the whole point of showing it live-first is that a
+/// user validates a deployment by reading this screen.
 #[must_use]
-pub fn epilogue(server: Option<&str>, surface: &Surface) -> String {
-    match server {
-        None => format!(
+pub fn epilogue(server: Option<&str>, surface: &Surface, provenance: Option<Provenance>) -> String {
+    let Some(server) = server else {
+        return format!(
             "{CASSETTES_ARE_DISCOVERED}\nNo server is configured, so none are listed; \
              pass --tapes-url, set TAPES_URL, or\nrun `tapesctl config set tapes-url <url>` \
              to see them from here on."
+        );
+    };
+
+    let source = match provenance {
+        Some(Provenance::Live) => format!("Discovered live from {server}."),
+        Some(Provenance::TimedOut { .. }) => {
+            format!("Listed from the local cache: discovery against {server} timed out.")
+        }
+        Some(Provenance::FetchFailed { .. }) => format!(
+            "Listed from the local cache: discovery against {server} failed; re-run with -v for why."
         ),
-        Some(server) if surface.cassettes.is_empty() => format!(
-            "{CASSETTES_ARE_DISCOVERED}\nNo cassettes were discovered from {server}, \
-             so none are listed; re-run with -v for why."
-        ),
-        Some(_) => format!("{CASSETTES_ARE_DISCOVERED}\nRun `tapesctl cassettes` to list them."),
+        None => format!("Discovered from {server}."),
+    };
+
+    if surface.cassettes.is_empty() {
+        let cause = match provenance {
+            Some(Provenance::Live) | None => {
+                format!("No cassettes were discovered from {server}; re-run with -v for why.")
+            }
+            Some(Provenance::TimedOut { .. }) => format!(
+                "None are listed: discovery against {server} timed out and nothing is cached."
+            ),
+            Some(Provenance::FetchFailed { .. }) => format!(
+                "None are listed: discovery against {server} failed and nothing is cached; \
+                 re-run with -v for why."
+            ),
+        };
+        return format!("{CASSETTES_ARE_DISCOVERED}\n{cause}");
     }
+
+    format!("{CASSETTES_ARE_DISCOVERED}\n{source} Run `tapesctl cassettes` to list them.")
 }
 
 /// Run a matched cassette invocation.
@@ -209,9 +237,9 @@ mod tests {
         // The whole point of the line: an empty cassette list must not be
         // readable as "this build has no cassette support".
         for text in [
-            epilogue(None, &Surface::default()),
-            epilogue(Some("http://tapes.example"), &Surface::default()),
-            epilogue(Some("http://tapes.example"), &hello_surface()),
+            epilogue(None, &Surface::default(), None),
+            epilogue(Some("http://tapes.example"), &Surface::default(), None),
+            epilogue(Some("http://tapes.example"), &hello_surface(), None),
         ] {
             assert!(text.contains("Cassette commands"), "got: {text}");
         }
@@ -221,10 +249,10 @@ mod tests {
     fn the_epilogue_separates_no_server_from_a_server_that_served_none() {
         // Two different next moves — configure a server, versus find out what
         // the configured one did — so the help must not blur them together.
-        let unconfigured = epilogue(None, &Surface::default());
+        let unconfigured = epilogue(None, &Surface::default(), None);
         assert!(unconfigured.contains("TAPES_URL"), "got: {unconfigured}");
 
-        let empty = epilogue(Some("http://tapes.example"), &Surface::default());
+        let empty = epilogue(Some("http://tapes.example"), &Surface::default(), None);
         assert!(
             empty.contains("http://tapes.example"),
             "the server that served nothing should be named: {empty}"
@@ -234,7 +262,7 @@ mod tests {
 
     #[test]
     fn the_epilogue_stops_explaining_once_there_is_something_to_list() {
-        let listed = epilogue(Some("http://tapes.example"), &hello_surface());
+        let listed = epilogue(Some("http://tapes.example"), &hello_surface(), None);
         assert!(!listed.contains("none are listed"), "got: {listed}");
     }
 
@@ -244,9 +272,9 @@ mod tests {
         // is where a reader learns where they went. It is also the only place
         // the old spelling could survive by accident.
         for text in [
-            epilogue(None, &Surface::default()),
-            epilogue(Some("http://tapes.example"), &Surface::default()),
-            epilogue(Some("http://tapes.example"), &hello_surface()),
+            epilogue(None, &Surface::default(), None),
+            epilogue(Some("http://tapes.example"), &Surface::default(), None),
+            epilogue(Some("http://tapes.example"), &hello_surface(), None),
         ] {
             assert!(text.contains(NOUN), "got: {text}");
             assert!(!text.contains("listed above"), "got: {text}");
@@ -258,7 +286,7 @@ mod tests {
         // `after_help` is applied by the caller in `crate::resolve`; this is the
         // check that the text clap renders is the text this module produced.
         let surface = Surface::default();
-        let text = epilogue(None, &surface);
+        let text = epilogue(None, &surface, None);
         let rendered = mount(root(), &surface)
             .after_help(text.clone())
             .render_help()
