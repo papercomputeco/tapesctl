@@ -12,6 +12,10 @@ You bring your own tapes server; `tapesctl` never guesses one. Everything below
 that reads or writes data takes a `--tapes-url`, and
 [Naming your server](#naming-your-server) is the one-time way to stop typing it.
 
+This README is the tour. The reference — every command, its flags, the capture
+matrix, and what each failure mode means — is at
+[tapes.dev/docs/tapesctl](https://tapes.dev/docs/tapesctl/).
+
 ## Install
 
 ```bash
