@@ -74,7 +74,7 @@ impl SyncSummary {
 #[derive(Debug, Clone)]
 pub struct SyncConfig {
     /// Base URL of the tapes ingest server.
-    pub tapes_url: Url,
+    pub ingest_url: Url,
     /// Root of the transcript tree to sweep.
     pub projects_root: PathBuf,
     /// Acting subject stamped on uploaded transcripts.
@@ -86,7 +86,7 @@ pub struct SyncConfig {
 impl SyncConfig {
     /// Resolve CLI arguments and the environment into a config.
     pub fn resolve(args: SyncArgs) -> Result<Self> {
-        let tapes_url = args
+        let ingest_url = args
             .ingest_url
             .as_deref()
             .context(error::MissingTapesUrlSnafu)?;
@@ -95,7 +95,7 @@ impl SyncConfig {
             None => default_projects_root().context(error::NoHomeDirSnafu)?,
         };
         Ok(Self {
-            tapes_url: Url::parse(tapes_url).context(error::TapesUrlSnafu)?,
+            ingest_url: Url::parse(ingest_url).context(error::TapesUrlSnafu)?,
             projects_root,
             auth_subject: args
                 .auth_subject
@@ -123,7 +123,7 @@ impl SyncConfig {
 /// Run one sweep.
 pub async fn run(args: SyncArgs) -> Result<()> {
     let config = SyncConfig::resolve(args)?;
-    let client = TranscriptClient::new(&config.tapes_url)?;
+    let client = TranscriptClient::new(&config.ingest_url)?;
     info!(
         projects_root = %config.projects_root.display(),
         ingest = %client.endpoint(),
@@ -232,7 +232,7 @@ mod tests {
 
     fn config_for(server: &MockServer, root: PathBuf) -> SyncConfig {
         SyncConfig {
-            tapes_url: Url::parse(&server.uri()).unwrap(),
+            ingest_url: Url::parse(&server.uri()).unwrap(),
             projects_root: root,
             auth_subject: "local:test".to_owned(),
             since: None,
@@ -275,7 +275,7 @@ mod tests {
         write_session(tree.path(), "/tmp/two", "sid-2", &[]);
 
         let config = config_for(&server, tree.path().to_path_buf());
-        let client = TranscriptClient::new(&config.tapes_url).unwrap();
+        let client = TranscriptClient::new(&config.ingest_url).unwrap();
         let summary = sweep_into(&client, &config).await;
 
         assert_eq!(summary.sessions, 2);
@@ -296,7 +296,7 @@ mod tests {
         write_session(tree.path(), "/tmp/one", "sid-1", &[]);
 
         let config = config_for(&server, tree.path().to_path_buf());
-        let client = TranscriptClient::new(&config.tapes_url).unwrap();
+        let client = TranscriptClient::new(&config.ingest_url).unwrap();
         let summary = sweep_into(&client, &config).await;
 
         assert_eq!(summary.deduped, 1);
@@ -314,7 +314,7 @@ mod tests {
         write_session(tree.path(), "/tmp/one", "sid-1", &[]);
 
         let config = config_for(&server, tree.path().to_path_buf());
-        let client = TranscriptClient::new(&config.tapes_url).unwrap();
+        let client = TranscriptClient::new(&config.ingest_url).unwrap();
         sweep_into(&client, &config).await;
 
         let requests = server.received_requests().await.unwrap();
@@ -338,7 +338,7 @@ mod tests {
         write_session(tree.path(), "/tmp/one", "sid-1", &[]);
 
         let config = config_for(&server, tree.path().to_path_buf());
-        let client = TranscriptClient::new(&config.tapes_url).unwrap();
+        let client = TranscriptClient::new(&config.ingest_url).unwrap();
         let summary = sweep_into(&client, &config).await;
 
         assert_eq!(summary.failed, 1);
@@ -352,7 +352,7 @@ mod tests {
         let tree = tempfile::tempdir().unwrap();
 
         let config = config_for(&server, tree.path().to_path_buf());
-        let client = TranscriptClient::new(&config.tapes_url).unwrap();
+        let client = TranscriptClient::new(&config.ingest_url).unwrap();
         let summary = sweep_into(&client, &config).await;
 
         assert_eq!(summary, SyncSummary::default());

@@ -495,8 +495,8 @@ would be a circle.
 | `path` | none | prints the path whether or not the file exists |
 
 ```bash
-tapesctl config set tapes-url http://localhost:8081
-tapesctl config get tapes-url
+tapesctl config set api-url http://localhost:8081
+tapesctl config get api-url
 tapesctl config path
 ```
 
@@ -507,13 +507,13 @@ tapesctl config path
 Validation, all exiting `1` and writing nothing:
 
 ```
-tapesctl: unknown config key "tapes-erl" (known keys: tapes-url)
+tapesctl: unknown config key "tapes-erl" (known keys: api-url)
 tapesctl: invalid tapes URL
-tapesctl: tapes-url must be an http or https URL; "ftp" is not a scheme this client can call
+tapesctl: api-url must be an http or https URL; "ftp" is not a scheme this client can call
 ```
 
 **A known-but-unset key prints nothing and exits `0`**, so
-`$(tapesctl config get tapes-url)` is empty rather than an error a script has
+`$(tapesctl config get api-url)` is empty rather than an error a script has
 to special-case. That also means `config get` can print nothing from a file
 that is not empty — only known and set keys are listed. See
 [Configuration](./configuration.md).

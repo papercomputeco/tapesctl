@@ -51,7 +51,7 @@ tapesctl start claude --ingest-url http://localhost:8082
 - **The harness never called a model.** Launched and quit produces exactly the
   same line, honestly.
 - **You are reading a different server than you wrote to.** Check
-  `TAPES_API_URL` / `tapes-url` for reads and `TAPES_INGEST_URL` / `ingest-url`
+  `TAPES_API_URL` / `api-url` for reads and `TAPES_INGEST_URL` / `ingest-url`
   for capture.
 
 ## `sessions get` 404s the id that `start` printed
@@ -101,7 +101,7 @@ Read commands default to `http://localhost:8081`; capture commands default to
 corresponding flags) when your deployment uses other addresses.
 
 **If you set it and still get this**, check which endpoint the command wants:
-`--api-url` / `tapes-url` is read-only; `--ingest-url` / `ingest-url` is for
+`--api-url` / `api-url` is read-only; `--ingest-url` / `ingest-url` is for
 capture.
 
 **If `config get` prints nothing but the file is not empty**, that is expected:

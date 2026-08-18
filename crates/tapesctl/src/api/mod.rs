@@ -53,7 +53,7 @@ use contract::ops;
 /// Resolve the API base URL from arguments and the environment.
 pub fn resolve_client(args: &ApiArgs) -> Result<ApiClient> {
     let raw = args
-        .tapes_url
+        .api_url
         .as_deref()
         .context(error::MissingTapesUrlSnafu)?;
     Ok(connect(Url::parse(raw).context(error::TapesUrlSnafu)?))
@@ -193,7 +193,7 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn api_args(url: Option<String>) -> ApiArgs {
-        ApiArgs { tapes_url: url }
+        ApiArgs { api_url: url }
     }
 
     fn sessions_list_args(url: String) -> SessionsListArgs {

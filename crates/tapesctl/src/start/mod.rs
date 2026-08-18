@@ -740,7 +740,7 @@ pub struct StartConfig {
     /// two thirds of the session somewhere they did not ask for.
     pub provider_routes: bool,
     /// Base URL of the tapes ingest server.
-    pub tapes_url: Url,
+    pub ingest_url: Url,
     /// Base URL of the web console, for the printed session link.
     pub web_url: Option<Url>,
     /// Org id stamped on captured turns.
@@ -778,7 +778,7 @@ impl StartConfig {
             harness_args: args.harness_args,
             provider_routes: harness.registers_several_providers() && args.upstream.is_none(),
             upstream: Url::parse(upstream).context(error::UpstreamUrlSnafu)?,
-            tapes_url: ingest_url,
+            ingest_url,
             web_url,
             org_id: args.org_id.unwrap_or_default(),
             // A standalone client has no gateway to stamp validated claims, so
@@ -887,7 +887,7 @@ pub async fn run(args: StartArgs) -> Result<()> {
     let state = ProxyState {
         tally: Arc::clone(&tally),
         upstream: config.upstream.clone(),
-        ingest: IngestClient::new(&config.tapes_url)?,
+        ingest: IngestClient::new(&config.ingest_url)?,
         transcript_tracker: tracker.clone(),
         attribution: Arc::new(attribution),
         attribution_config: Arc::new(AttributionConfig::new(
@@ -938,7 +938,7 @@ pub async fn run(args: StartArgs) -> Result<()> {
         harness = config.harness.program(),
         proxy = %addr,
         upstream = %config.upstream,
-        ingest = %config.tapes_url,
+        ingest = %config.ingest_url,
         "capture proxy listening",
     );
 
@@ -1035,7 +1035,7 @@ fn spawn_tailer(
         claude_sessions_dir()?,
         config.auth_subject.clone(),
     );
-    let client = TranscriptClient::new(&config.tapes_url)?;
+    let client = TranscriptClient::new(&config.ingest_url)?;
     Ok(Some(tailer::spawn(client, tracker, tailer_config)))
 }
 
@@ -1062,7 +1062,7 @@ fn spawn_codex_anchor_lane(
     if !config.transcripts || !config.harness.is_codex() {
         return Ok(None);
     }
-    let client = TranscriptClient::new(&config.tapes_url)?;
+    let client = TranscriptClient::new(&config.ingest_url)?;
     Ok(Some(codex_anchors::spawn(
         client,
         snapshot,

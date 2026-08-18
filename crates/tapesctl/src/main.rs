@@ -10,13 +10,6 @@ use std::process::ExitCode;
 #[tokio::main]
 async fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().collect();
-    if tapesctl::cli::uses_retired_tapes_url(&argv) {
-        eprintln!(
-            "tapesctl: --tapes-url was replaced by --api-url for reads and --ingest-url for capture"
-        );
-        return ExitCode::FAILURE;
-    }
-
     // Destination before discovery: a command that hands the terminal to a
     // harness must never trace onto it (see `tapesctl::logging`), and
     // discovery's own tracing is the only account of why an expected cassette

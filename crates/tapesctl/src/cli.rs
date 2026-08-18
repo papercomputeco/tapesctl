@@ -53,10 +53,10 @@ pub struct Cli {
         help = "Base URL of the tapes read API. Falls back to TAPES_API_URL, then to the configured default",
         long_help = "Base URL of the tapes read API.\n\n\
                      Falls back to the TAPES_API_URL environment variable, then the default \
-                     configured with `tapesctl config set tapes-url <url>`, then \
+                     configured with `tapesctl config set api-url <url>`, then \
                      http://localhost:8081. Capture commands use --ingest-url instead."
     )]
-    pub tapes_url: Option<String>,
+    pub api_url: Option<String>,
 
     #[command(subcommand)]
     pub command: Command,
@@ -65,12 +65,12 @@ pub struct Cli {
 /// The argument id `--api-url` is known by, everywhere it is declared.
 ///
 /// The derive takes it from the field name, so the hand-built declarations —
-/// [`Cli::tapes_url`] here and the one decorated onto every generated cassette
+/// [`Cli::api_url`] here and the one decorated onto every generated cassette
 /// method — have to spell the same id, not merely the same `--api-url`. Two
 /// ids sharing one long name is a clap conflict the moment the global one
 /// propagates into a command that declares the other, and the global one now
 /// propagates everywhere.
-pub const API_URL_ARG: &str = "tapes_url";
+pub const API_URL_ARG: &str = "api_url";
 
 /// The flag, and the environment variable behind it, that name a server.
 const API_URL_FLAG: &str = "--api-url";
@@ -83,25 +83,6 @@ pub const TAPES_INGEST_URL_ENV: &str = "TAPES_INGEST_URL";
 pub const DEFAULT_API_URL: &str = "http://localhost:8081";
 pub const DEFAULT_INGEST_URL: &str = "http://localhost:8082";
 pub const INGEST_URL_ARG: &str = "ingest_url";
-
-/// Whether argv uses the retired ambiguous endpoint flag before a harness cutoff.
-#[must_use]
-pub fn uses_retired_tapes_url<I, S>(argv: I) -> bool
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<str>,
-{
-    for argument in argv.into_iter().skip(1) {
-        let argument = argument.as_ref();
-        if argument == "--" {
-            break;
-        }
-        if argument == "--tapes-url" || argument.starts_with("--tapes-url=") {
-            return true;
-        }
-    }
-    false
-}
 
 /// Find the server to discover cassettes from, before anything is parsed.
 ///
@@ -377,7 +358,7 @@ impl Command {
 pub struct ApiArgs {
     /// Base URL of the tapes read API. Falls back to `TAPES_API_URL`.
     #[arg(long = "api-url", env = "TAPES_API_URL", value_name = "URL")]
-    pub tapes_url: Option<String>,
+    pub api_url: Option<String>,
 }
 
 /// Arguments for `tapesctl start`.
@@ -760,7 +741,7 @@ pub struct PluginUninstallArgs {
 
 /// `tapesctl config` subcommands.
 ///
-/// Key/value rather than a flag per setting — `config set tapes-url <url>`,
+/// Key/value rather than a flag per setting — `config set api-url <url>`,
 /// not `config set --api-url <url>` — so the surface does not have to grow a
 /// verb, a flag, and a printer for every future key. `git config` and `gh
 /// config` are the same shape, which is most of why it is this one.
@@ -782,7 +763,7 @@ pub enum ConfigCommand {
 /// Arguments for `tapesctl config set`.
 #[derive(Debug, Args)]
 pub struct ConfigSetArgs {
-    /// The key to set. Today: `tapes-url`.
+    /// The key to set. Today: `api-url`.
     pub key: String,
 
     /// The value to store.
@@ -837,11 +818,11 @@ mod tests {
         // The point of the global: `--api-url` given once, at the front,
         // where a shell alias or a wrapper script would put it.
         let cli = parse(&["tapesctl", "--api-url", "http://x", "sessions", "list"]);
-        assert_eq!(cli.tapes_url.as_deref(), Some("http://x"));
+        assert_eq!(cli.api_url.as_deref(), Some("http://x"));
         match cli.command {
             Command::Sessions(SessionsCommand::List(args)) => {
                 assert_eq!(
-                    args.api.tapes_url.as_deref(),
+                    args.api.api_url.as_deref(),
                     Some("http://x"),
                     "a global value must reach the leaf that consumes it",
                 );
@@ -866,7 +847,7 @@ mod tests {
         ]);
         match cli.command {
             Command::Sessions(SessionsCommand::List(args)) => {
-                assert_eq!(args.api.tapes_url.as_deref(), Some("http://leaf"));
+                assert_eq!(args.api.api_url.as_deref(), Some("http://leaf"));
             }
             other => panic!("got: {other:?}"),
         }
@@ -907,10 +888,10 @@ mod tests {
 
     #[test]
     fn config_reads_and_writes_one_key_at_a_time() {
-        let cli = parse(&["tapesctl", "config", "set", "tapes-url", "http://x"]);
+        let cli = parse(&["tapesctl", "config", "set", "api-url", "http://x"]);
         match cli.command {
             Command::Config(ConfigCommand::Set(args)) => {
-                assert_eq!(args.key, "tapes-url");
+                assert_eq!(args.key, "api-url");
                 assert_eq!(args.value, "http://x");
             }
             other => panic!("got: {other:?}"),
@@ -923,7 +904,7 @@ mod tests {
             other => panic!("got: {other:?}"),
         }
         assert!(
-            Cli::try_parse_from(["tapesctl", "config", "set", "tapes-url"]).is_err(),
+            Cli::try_parse_from(["tapesctl", "config", "set", "api-url"]).is_err(),
             "a set with no value would have nothing to store",
         );
     }
@@ -1353,7 +1334,7 @@ mod tests {
         assert!(!gated(&argv(&["tapesctl", "sessions", "list"])));
         assert!(!gated(&argv(&["tapesctl", "start", "claude"])));
         assert!(!gated(&argv(&["tapesctl", "version"])));
-        assert!(!gated(&argv(&["tapesctl", "config", "get", "tapes-url"])));
+        assert!(!gated(&argv(&["tapesctl", "config", "get", "api-url"])));
     }
 
     #[test]

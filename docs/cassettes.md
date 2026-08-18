@@ -143,7 +143,7 @@ server onto the paths a client can actually call.
   generated surface auditable.
 
 Four flag names are reserved and can never be handed to a cassette parameter:
-`tapes-url`, `body`, `help`, and `verbose`.
+`api-url`, `body`, `help`, and `verbose`.
 
 One collision is resolved by skipping the cassette rather than failing: a
 cassette **named `help`** is silently skipped, because a duplicate would crash

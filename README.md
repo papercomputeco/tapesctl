@@ -126,7 +126,7 @@ order: flag, environment, config, local default.
 ```bash
 tapesctl --api-url http://localhost:8081 sessions list   # read API flag
 export TAPES_API_URL=http://localhost:8081                 # read API environment
-tapesctl config set tapes-url http://localhost:8081        # persist read API
+tapesctl config set api-url http://localhost:8081        # persist read API
 tapesctl start claude --ingest-url http://localhost:8082   # ingest flag
 export TAPES_INGEST_URL=http://localhost:8082              # ingest environment
 tapesctl config set ingest-url http://localhost:8082       # persist ingest
@@ -138,7 +138,7 @@ every new shell, without an export.
 
 ```bash
 tapesctl config get           # every key that is set
-tapesctl config get tapes-url # one of them, bare, for scripts
+tapesctl config get api-url # one of them, bare, for scripts
 tapesctl config path          # where the file is, whether or not it exists
 ```
 
@@ -285,7 +285,7 @@ instant and keeps working offline. Override the cache location with
 
 Because the listing comes from a server, `tapesctl cassettes` on a machine that
 names none lists nothing at all — which is the strongest reason to run
-`tapesctl config set tapes-url` once. Everything above this section is
+`tapesctl config set api-url` once. Everything above this section is
 unaffected. Deploying and configuring cassettes is an operator task and is not
 part of this surface.
 

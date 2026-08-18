@@ -15,7 +15,7 @@ Both endpoints have local defaults:
 
 | purpose | default | flag | environment | config key |
 |---|---|---|---|---|
-| read API | `http://localhost:8081` | `--api-url` | `TAPES_API_URL` | `tapes-url` |
+| read API | `http://localhost:8081` | `--api-url` | `TAPES_API_URL` | `api-url` |
 | ingest API | `http://localhost:8082` | `--ingest-url` | `TAPES_INGEST_URL` | `ingest-url` |
 
 For either endpoint, an explicit flag beats its environment variable, which
@@ -46,7 +46,7 @@ before arguments are parsed. See [Cassettes](./cassettes.md).
 Configure a remote deployment once when its ports differ from the defaults:
 
 ```bash
-tapesctl config set tapes-url https://tapes.example/api
+tapesctl config set api-url https://tapes.example/api
 tapesctl config set ingest-url https://tapes.example/ingest
 ```
 
@@ -72,13 +72,13 @@ The schema has one key per endpoint:
 
 ```toml
 # ~/.tapes/config.toml
-tapes-url = "http://localhost:8081"
+api-url = "http://localhost:8081"
 ingest-url = "http://localhost:8082"
 ```
 
 | key | type | meaning | validation |
 |---|---|---|---|
-| `tapes-url` | string | read API | must parse as a URL **and** use scheme `http` or `https` |
+| `api-url` | string | read API | must parse as a URL **and** use scheme `http` or `https` |
 | `ingest-url` | string | ingest API | must parse as a URL **and** use scheme `http` or `https` |
 
 Setting either:
@@ -91,9 +91,9 @@ Validation happens at write time rather than on every command afterwards, and a
 rejected value writes nothing:
 
 ```
-tapesctl: unknown config key "tapes-erl" (known keys: tapes-url)
+tapesctl: unknown config key "tapes-erl" (known keys: api-url)
 tapesctl: invalid tapes URL
-tapesctl: tapes-url must be an http or https URL; "ftp" is not a scheme this client can call
+tapesctl: api-url must be an http or https URL; "ftp" is not a scheme this client can call
 ```
 
 **The file is deliberately not under `$XDG_CONFIG_HOME`.** It sits beside
@@ -117,7 +117,7 @@ directory to inspect, back up, or delete.
   build has never heard of produces empty output — the forward-compatibility
   rule working as designed, and indistinguishable from an empty file.
 - **A known-but-unset key prints nothing and exits `0`**, so
-  `$(tapesctl config get tapes-url)` is empty rather than an error a script has
+  `$(tapesctl config get api-url)` is empty rather than an error a script has
   to special-case.
 
 ## Logging

@@ -56,7 +56,7 @@ Cassettes are API extensions your deployment serves under /v1/cassettes; their \
 commands are discovered from the server at runtime, so the set listed here is \
 whatever your deployment actually serves — not a list compiled into this \
 binary. A server has to be named for anything to be listed: pass --api-url, \
-set TAPES_API_URL, or configure one with `tapesctl config set tapes-url <url>`. \
+set TAPES_API_URL, or configure one with `tapesctl config set api-url <url>`. \
 Recently discovered commands keep working from a local cache while the server \
 is unreachable.";
 
@@ -146,7 +146,7 @@ pub fn epilogue(server: Option<&str>, surface: &Surface, provenance: Option<Prov
     let Some(server) = server else {
         return format!(
             "{CASSETTES_ARE_DISCOVERED}\nNo server is configured, so none are listed; \
-             pass --api-url, set TAPES_API_URL, or\nrun `tapesctl config set tapes-url <url>` \
+             pass --api-url, set TAPES_API_URL, or\nrun `tapesctl config set api-url <url>` \
              to see them from here on."
         );
     };

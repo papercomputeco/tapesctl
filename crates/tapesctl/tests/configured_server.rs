@@ -100,7 +100,7 @@ async fn a_configured_server_is_enough_to_list_and_call_what_it_serves() {
 
     // --- configure one, and the same help lists its cassettes -------------
     let config = Config {
-        tapes_url: Some(server.uri()),
+        api_url: Some(server.uri()),
         ..Config::default()
     };
     let (configured, surface) = tapesctl::build_parser(&bare, &config).await;
@@ -138,7 +138,7 @@ async fn a_configured_server_is_enough_to_list_and_call_what_it_serves() {
     let cli = <Cli as clap::FromArgMatches>::from_arg_matches(&matches).unwrap();
     match cli.command {
         Command::Sessions(SessionsCommand::List(args)) => {
-            assert_eq!(args.api.tapes_url.as_deref(), Some(server.uri().as_str()));
+            assert_eq!(args.api.api_url.as_deref(), Some(server.uri().as_str()));
         }
         other => panic!("got: {other:?}"),
     }

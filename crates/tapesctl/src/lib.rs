@@ -156,7 +156,7 @@ pub async fn build_parser(argv: &[String], config: &Config) -> (clap::Command, S
         // top-level help — the only place `after_help` shows — for the bare
         // and `help` shapes, and those are gated in.
         let command = with_ingest_default(
-            parser(&surface, None, config.tapes_url.as_deref(), None),
+            parser(&surface, None, config.api_url.as_deref(), None),
             config.ingest_url.as_deref(),
         );
         return (command, surface);
@@ -167,7 +167,7 @@ pub async fn build_parser(argv: &[String], config: &Config) -> (clap::Command, S
     // that needs a server. Discovery has to resolve them itself because it runs
     // before the parse that would otherwise do it.
     let server = cli::discovery_url(argv)
-        .or_else(|| config.tapes_url.clone())
+        .or_else(|| config.api_url.clone())
         .or_else(|| Some(cli::DEFAULT_API_URL.to_owned()));
     let (surface, provenance) = discover(server.as_deref()).await;
     (
@@ -175,7 +175,7 @@ pub async fn build_parser(argv: &[String], config: &Config) -> (clap::Command, S
             parser(
                 &surface,
                 server.as_deref(),
-                config.tapes_url.as_deref(),
+                config.api_url.as_deref(),
                 provenance,
             ),
             config.ingest_url.as_deref(),
@@ -367,7 +367,7 @@ mod tests {
         let cli = Cli::from_arg_matches(&matches).unwrap();
         match cli.command {
             Command::Sessions(SessionsCommand::List(args)) => {
-                assert_eq!(args.api.tapes_url.as_deref(), Some("http://configured"));
+                assert_eq!(args.api.api_url.as_deref(), Some("http://configured"));
             }
             other => panic!("got: {other:?}"),
         }
@@ -381,7 +381,7 @@ mod tests {
         let api = Cli::from_arg_matches(&api).unwrap();
         match api.command {
             Command::Sessions(SessionsCommand::List(args)) => {
-                assert_eq!(args.api.tapes_url.as_deref(), Some(cli::DEFAULT_API_URL));
+                assert_eq!(args.api.api_url.as_deref(), Some(cli::DEFAULT_API_URL));
             }
             other => panic!("got: {other:?}"),
         }
@@ -425,7 +425,7 @@ mod tests {
                 .unwrap();
             match Cli::from_arg_matches(&matches).unwrap().command {
                 Command::Sessions(SessionsCommand::List(args)) => {
-                    assert_eq!(args.api.tapes_url.as_deref(), Some("http://typed"));
+                    assert_eq!(args.api.api_url.as_deref(), Some("http://typed"));
                 }
                 other => panic!("got: {other:?}"),
             }
@@ -615,7 +615,7 @@ mod tests {
         let server = serve_hello_world().await;
 
         let configured = Config {
-            tapes_url: Some(server.uri()),
+            api_url: Some(server.uri()),
             ..Config::default()
         };
         let url_flag = format!("--api-url={}", server.uri());
@@ -727,7 +727,7 @@ mod tests {
     async fn version_is_ok() {
         let cli = Cli {
             verbose: 0,
-            tapes_url: None,
+            api_url: None,
             command: Command::Version,
         };
         assert!(run(cli).await.is_ok());
@@ -751,7 +751,7 @@ mod tests {
         // home.
         let cli = Cli {
             verbose: 0,
-            tapes_url: None,
+            api_url: None,
             command: Command::Plugin(PluginCommand::Install(PluginInstallArgs {
                 harness: "not-a-harness".to_owned(),
                 dry_run: false,
@@ -772,9 +772,9 @@ mod tests {
         // Not on a connection attempt: with no URL there is nowhere to connect.
         let cli = Cli {
             verbose: 0,
-            tapes_url: None,
+            api_url: None,
             command: Command::Sessions(SessionsCommand::Get(SessionIdArgs {
-                api: ApiArgs { tapes_url: None },
+                api: ApiArgs { api_url: None },
                 id: "s-1".to_owned(),
             })),
         };
@@ -785,9 +785,9 @@ mod tests {
     async fn seed_without_a_server_fails_on_the_missing_url() {
         let cli = Cli {
             verbose: 0,
-            tapes_url: None,
+            api_url: None,
             command: Command::Seed(SeedArgs {
-                api: ApiArgs { tapes_url: None },
+                api: ApiArgs { api_url: None },
             }),
         };
         assert!(matches!(run(cli).await, Err(Error::MissingTapesUrl)));
