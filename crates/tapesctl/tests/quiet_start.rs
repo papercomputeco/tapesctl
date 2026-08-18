@@ -52,7 +52,7 @@ fn run_tapesctl(home: &Path, args: &[&str]) -> Output {
         .env("HOME", home)
         .env("PATH", path)
         .env_remove("RUST_LOG")
-        .env_remove("TAPES_URL")
+        .env_remove("TAPES_INGEST_URL")
         .env_remove("TAPES_UPSTREAM")
         .env_remove("TAPES_WEB_URL")
         .env_remove("TAPES_ORG_ID")

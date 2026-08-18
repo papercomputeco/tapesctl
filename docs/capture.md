@@ -22,7 +22,7 @@ read examples further down use the read port. See
 `tapesctl start` launches the harness with its LLM endpoint pointed at a
 capture proxy on `127.0.0.1`, on an ephemeral port chosen per launch. Every
 eligible call the harness makes is forwarded to the real provider byte for
-byte, and a copy is posted to `POST {tapes-url}/v1/ingest`.
+byte, and a copy is posted to `POST {ingest-url}/v1/ingest`.
 
 This lane *is* `start`. It cannot be turned off, and it is what makes a
 session exist at all.
@@ -53,7 +53,7 @@ There is no retry. A turn the ingest server rejects is warned about and gone.
 
 Harnesses that keep their own on-disk transcript get a second lane: a tailer
 watches that tree while the session runs and posts settled records to
-`POST {tapes-url}/v1/ingest/transcript`.
+`POST {ingest-url}/v1/ingest/transcript`.
 
 Lane B carries the session's **causal skeleton** — which `Task` tool call
 forked which subagent. Lane A cannot: on the wire, a subagent's calls are
@@ -75,7 +75,7 @@ same tree, since two tailers on one tree is the problem it exists to solve.
 pushes them, for sessions no capture was running for.
 
 ```bash
-tapesctl sync --tapes-url http://localhost:8082
+tapesctl sync --ingest-url http://localhost:8082
 ```
 
 ```
@@ -143,7 +143,7 @@ Three consequences worth stating plainly:
 anything is bound or spawned:
 
 ```bash
-tapesctl start pi --tapes-url http://localhost:8082
+tapesctl start pi --ingest-url http://localhost:8082
 ```
 
 ```
@@ -154,7 +154,7 @@ So the order is fixed, once per machine:
 
 ```bash
 tapesctl plugin install pi
-tapesctl start pi --tapes-url http://localhost:8082 -- --provider anthropic --model <model-id>
+tapesctl start pi --ingest-url http://localhost:8082 -- --provider anthropic --model <model-id>
 ```
 
 `--provider` and `--model` are pi's own flags, which is why they follow `--`.
@@ -170,7 +170,7 @@ uses lifecycle hooks and a long-lived proxy instead. Install once, then run
 
 ```bash
 tapesctl plugin install codex-app
-tapesctl capture codex-app --tapes-url http://localhost:8082
+tapesctl capture codex-app --ingest-url http://localhost:8082
 ```
 
 ```

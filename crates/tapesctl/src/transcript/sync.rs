@@ -87,7 +87,7 @@ impl SyncConfig {
     /// Resolve CLI arguments and the environment into a config.
     pub fn resolve(args: SyncArgs) -> Result<Self> {
         let tapes_url = args
-            .tapes_url
+            .ingest_url
             .as_deref()
             .context(error::MissingTapesUrlSnafu)?;
         let projects_root = match args.projects_root {
@@ -191,7 +191,7 @@ mod tests {
 
     fn args() -> SyncArgs {
         SyncArgs {
-            tapes_url: Some("http://127.0.0.1:8090".to_owned()),
+            ingest_url: Some("http://127.0.0.1:8090".to_owned()),
             projects_root: Some(PathBuf::from("/tmp/nope")),
             auth_subject: None,
             since_days: None,
@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn a_missing_tapes_url_is_an_error_rather_than_a_silent_no_op() {
         let mut args = args();
-        args.tapes_url = None;
+        args.ingest_url = None;
         assert!(SyncConfig::resolve(args).is_err());
     }
 

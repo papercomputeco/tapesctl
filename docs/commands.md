@@ -10,8 +10,7 @@ serves. This page is the whole reference; [Capture](./capture.md) explains the
 concepts behind `start`, `capture`, and `sync`, and
 [Cassettes](./cassettes.md) covers the discovered surface.
 
-Which port a command wants is decided by what it does, not by which flag it
-takes — they all spell it `--tapes-url`. See
+Read commands use `--tapes-url`; capture commands use `--ingest-url`. See
 [The two ports](./introduction.md#the-two-ports).
 
 ## Global flags
@@ -22,7 +21,7 @@ subcommand and reach every leaf.
 | flag | type | default | notes |
 |---|---|---|---|
 | `-v`, `--verbose` | count | `0` | `-v` is `debug`, `-vv` is `trace`. `RUST_LOG` overrides both |
-| `--tapes-url <URL>` | string | the configured default, if any | falls back to `TAPES_URL`, then to `config.toml` |
+| `--tapes-url <URL>` | string | `http://localhost:8081` | falls back to `TAPES_API_URL`, then `config.toml` |
 | `-h`, `--help` | flag | — | |
 | `-V`, `--version` | flag | — | prints one line; see [`version`](#version) before trusting it |
 
@@ -64,7 +63,8 @@ Every variable `tapesctl` reads.
 
 | variable | read by |
 |---|---|
-| `TAPES_URL` | `start`, `capture`, `sync`, every read command, cassette discovery and every generated method |
+| `TAPES_API_URL` | every read command, cassette discovery, and generated methods |
+| `TAPES_INGEST_URL` | `start`, `capture`, `sync` |
 | `TAPES_UPSTREAM` | `start`, `capture` |
 | `TAPES_WEB_URL` | `start`, `capture` |
 | `TAPES_ORG_ID` | `start`, `capture` |
@@ -84,8 +84,8 @@ There is no telemetry variable, because there is no telemetry.
 Launch a harness under a capture proxy and ship its turns to the ingest server.
 
 ```bash
-tapesctl start claude --tapes-url http://localhost:8082
-tapesctl start claude --tapes-url http://localhost:8082 -- --model opus
+tapesctl start claude --ingest-url http://localhost:8082
+tapesctl start claude --ingest-url http://localhost:8082 -- --model opus
 ```
 
 Anything after `--` is passed to the harness verbatim.
@@ -94,7 +94,7 @@ Anything after `--` is passed to the harness verbatim.
 |---|---|---|
 | `<HARNESS>` | required — `claude`, `codex`, or `pi` | — |
 | `[HARNESS_ARGS]...` | — | — |
-| `--tapes-url <URL>` | configured default | `TAPES_URL` |
+| `--ingest-url <URL>` | `http://localhost:8082` | `TAPES_INGEST_URL` |
 | `--upstream <URL>` | the harness's own provider API | `TAPES_UPSTREAM` |
 | `--schema <SCHEMA>` | the harness's own | — |
 | `--web-url <URL>` | none | `TAPES_WEB_URL` |
@@ -108,12 +108,12 @@ is an error, not a no-op.
 
 `--web-url` is used only to build the printed console link.
 
-Endpoints: `POST {tapes-url}/v1/ingest` for the wire lane,
-`POST {tapes-url}/v1/ingest/transcript` for the transcript lane. Neither sends
+Endpoints: `POST {ingest-url}/v1/ingest` for the wire lane,
+`POST {ingest-url}/v1/ingest/transcript` for the transcript lane. Neither sends
 an authentication header. The proxy listens on `127.0.0.1:0` — an ephemeral
 port, per launch.
 
-**A base path in `--tapes-url` is discarded.** `--tapes-url http://host:8090/base/`
+**A base path in `--ingest-url` is discarded.** `--ingest-url http://host:8090/base/`
 posts to `http://host:8090/v1/ingest`, not `/base/v1/ingest`. Upstream
 forwarding is the opposite and concatenates, so an upstream route prefix
 survives.
@@ -162,7 +162,6 @@ All exit `1`.
 | `--schema does not apply to claude, which speaks anthropic only (it is for a harness that redirects several providers to one endpoint, such as pi)` | `--schema` on `claude` or `codex` |
 | `invalid --schema "X" (valid values: anthropic, openai)` | bad `--schema` value |
 | `pi cannot be captured until its capture plugin is installed: no plugin at <path>. Run `tapesctl plugin install pi` first.` | the pi extension is absent — checked before anything binds or spawns |
-| `no tapes server URL: pass --tapes-url, set TAPES_URL, or configure a default with `tapesctl config set tapes-url <url>`` | no server from any of the three sources |
 | `could not bind the capture proxy` / `could not start <harness>` | loopback bind or spawn failure |
 
 **Capture failures never appear here.** An oversize body, an ingest rejection, a
@@ -175,7 +174,7 @@ Bind the address a self-launching harness was installed against, and capture
 whichever sessions run in that window. Today the only harness is `codex-app`.
 
 ```bash
-tapesctl capture codex-app --tapes-url http://localhost:8082
+tapesctl capture codex-app --ingest-url http://localhost:8082
 ```
 
 A deliberate subset of `start`'s flags: there is no `--schema`, no
@@ -185,7 +184,7 @@ codex-app -- -p hi` is a parse error.
 | flag | default | env |
 |---|---|---|
 | `<HARNESS>` | required | — |
-| `--tapes-url <URL>` | configured default | `TAPES_URL` |
+| `--ingest-url <URL>` | `http://localhost:8082` | `TAPES_INGEST_URL` |
 | `--upstream <URL>` | the backend honouring the configured credential | `TAPES_UPSTREAM` |
 | `--web-url <URL>` | none | `TAPES_WEB_URL` |
 | `--org-id <UUID>` | `""` | `TAPES_ORG_ID` |
@@ -209,13 +208,13 @@ rather than warned about.
 Sweep completed Claude transcripts on disk into the ingest server.
 
 ```bash
-tapesctl sync --tapes-url http://localhost:8082
-tapesctl sync --tapes-url http://localhost:8082 --since-days 0
+tapesctl sync --ingest-url http://localhost:8082
+tapesctl sync --ingest-url http://localhost:8082 --since-days 0
 ```
 
 | flag | default | env |
 |---|---|---|
-| `--tapes-url <URL>` | configured default | `TAPES_URL` |
+| `--ingest-url <URL>` | `http://localhost:8082` | `TAPES_INGEST_URL` |
 | `--projects-root <PATH>` | `~/.claude/projects` | — |
 | `--auth-subject <S>` | `local:<username>` | `TAPES_AUTH_SUBJECT` |
 | `--since-days <N>` | **7** — see below | — |
@@ -561,7 +560,6 @@ Every runtime error is one line on stderr prefixed `tapesctl: `, and exits `1`.
 
 | family | shape |
 |---|---|
-| no server configured | `no tapes server URL: pass --tapes-url, set TAPES_URL, or configure a default with `tapesctl config set tapes-url <url>`` |
 | unreachable server | `could not reach the tapes API: could not reach the tapes API` |
 | non-success status | `tapes API returned <status> for <endpoint>: <body>` |
 | invalid flag value | `invalid --<flag> "<value>" (valid values: …)` — raised before any request |

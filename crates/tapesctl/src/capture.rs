@@ -66,11 +66,11 @@ pub async fn run(args: CaptureArgs) -> Result<()> {
     // rather than warned, because the fix is one non-destructive command.
     let auth = verify_config_at(machine.codex_config_path(), &handoff)?;
 
-    let tapes_url = args
-        .tapes_url
+    let ingest_url = args
+        .ingest_url
         .as_deref()
         .context(error::MissingTapesUrlSnafu)?;
-    let tapes_url = Url::parse(tapes_url).context(error::TapesUrlSnafu)?;
+    let ingest_url = Url::parse(ingest_url).context(error::TapesUrlSnafu)?;
     let upstream = match args.upstream.as_deref() {
         Some(upstream) => upstream,
         // The credential decides the host: plan OAuth tokens are honoured only
@@ -91,7 +91,7 @@ pub async fn run(args: CaptureArgs) -> Result<()> {
     let sessions = Arc::new(DesktopSessions::new(handoff.secret.clone()).with_web_url(web_url));
     let state = ProxyState {
         upstream: upstream.clone(),
-        ingest: IngestClient::new(&tapes_url)?,
+        ingest: IngestClient::new(&ingest_url)?,
         // `capture` serves a long-lived daemon rather than one launch, and
         // prints no exit summary — the tally is kept so the capture path has a
         // single shape, and nothing reads or drains it here. It stays bounded
@@ -155,7 +155,7 @@ pub async fn run(args: CaptureArgs) -> Result<()> {
         harness = harness.id(),
         proxy = %handoff.proxy_addr,
         upstream = %upstream,
-        ingest = %tapes_url,
+        ingest = %ingest_url,
         "capture proxy listening",
     );
     println!(
@@ -332,7 +332,7 @@ mod tests {
     fn args(harness: &str) -> CaptureArgs {
         CaptureArgs {
             harness: harness.to_owned(),
-            tapes_url: Some("http://127.0.0.1:8090".to_owned()),
+            ingest_url: Some("http://127.0.0.1:8090".to_owned()),
             upstream: None,
             web_url: None,
             org_id: None,

@@ -12,7 +12,7 @@
 //! a mock serving the shapes core actually serves.
 //!
 //! One long test on purpose, and one test in the binary: both the cache
-//! location and the absence of `TAPES_URL` are process-global, so separate
+//! location and the absence of `TAPES_API_URL` are process-global, so separate
 //! `#[test]`s would race for them.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -60,13 +60,13 @@ fn cassette_spec() -> serde_json::Value {
 async fn a_configured_server_is_enough_to_list_and_call_what_it_serves() {
     let cache_dir = tempfile::tempdir().unwrap();
     // SAFETY: this test binary touches the environment once, before anything
-    // reads it, and is the only test in it. `TAPES_URL` is removed rather than
+    // reads it, and is the only test in it. `TAPES_API_URL` is removed rather than
     // set because the whole question here is what happens with *no* flag and no
     // environment — a developer who happens to export it would otherwise be
     // testing their own server.
     unsafe {
         std::env::set_var(cache::CACHE_DIR_ENV, cache_dir.path());
-        std::env::remove_var("TAPES_URL");
+        std::env::remove_var("TAPES_API_URL");
     }
 
     let server = MockServer::start().await;
@@ -105,6 +105,7 @@ async fn a_configured_server_is_enough_to_list_and_call_what_it_serves() {
     // --- configure one, and the same help lists its cassettes -------------
     let config = Config {
         tapes_url: Some(server.uri()),
+        ..Config::default()
     };
     let (configured, surface) = tapesctl::build_parser(&bare, &config).await;
     assert_eq!(

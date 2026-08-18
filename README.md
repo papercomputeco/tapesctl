@@ -8,9 +8,9 @@ read, search, and export. `tapesctl` is the client. It launches a coding-agent
 harness under a just-in-time capture proxy, ships the captured turns to a tapes
 server, and gives you a command line over the data model that comes back.
 
-You bring your own tapes server; `tapesctl` never guesses one. Everything below
-that reads or writes data takes a `--tapes-url`, and
-[Naming your server](#naming-your-server) is the one-time way to stop typing it.
+You bring your own tapes server. Read commands use `--tapes-url`; capture
+commands use `--ingest-url`. [Naming your server](#naming-your-server) is the
+one-time way to stop typing either.
 
 This README is the tour. The reference — every command, its flags, the capture
 matrix, and what each failure mode means — is at
@@ -45,14 +45,14 @@ front of it. The harness behaves exactly as it would unproxied — traffic is
 forwarded to its own provider API by default — and the proxy dies with it.
 
 ```bash
-tapesctl start claude --tapes-url http://localhost:8082
+tapesctl start claude --ingest-url http://localhost:8082
 ```
 
 The supported harnesses are `claude`, `codex`, and `pi`. Anything after the
 harness name is passed through verbatim, so your usual flags still work:
 
 ```bash
-tapesctl start claude --tapes-url http://localhost:8082 -- --model opus
+tapesctl start claude --ingest-url http://localhost:8082 -- --model opus
 ```
 
 A capture records **two lanes**, and both matter:
@@ -81,7 +81,7 @@ again when it exits:
 to stderr instead of a file, accepting what that does to the display:
 
 ```bash
-tapesctl -v start claude --tapes-url http://localhost:8082
+tapesctl -v start claude --ingest-url http://localhost:8082
 ```
 
 Every other command logs to stderr as before.
@@ -101,7 +101,7 @@ hash, so re-offering an unchanged transcript is a cheap `deduped`. It sweeps
 
 ```bash
 tapesctl plugin install pi
-tapesctl start pi --tapes-url http://localhost:8082 -- --provider anthropic --model <model-id>
+tapesctl start pi --ingest-url http://localhost:8082 -- --provider anthropic --model <model-id>
 ```
 
 **Pass both `--provider` and `--model`, or neither.** Those are `pi`'s own
@@ -124,9 +124,10 @@ Every command that talks to a tapes deployment needs to know where it is. There
 are three ways to say so, and they are consulted in this order:
 
 ```bash
-tapesctl --tapes-url http://localhost:8081 sessions list   # 1. the flag
-export TAPES_URL=http://localhost:8081                     # 2. the environment
-tapesctl config set tapes-url http://localhost:8081        # 3. once, for good
+tapesctl --tapes-url http://localhost:8081 sessions list   # read API flag
+export TAPES_API_URL=http://localhost:8081                 # read API environment
+export TAPES_INGEST_URL=http://localhost:8082              # ingest environment
+tapesctl config set ingest-url http://localhost:8082       # persist ingest
 ```
 
 `--tapes-url` is global: give it before the subcommand, as above, or after it,
@@ -145,9 +146,8 @@ your ordering, and any keys this build does not know about — a key a newer
 tapesctl wrote, say — all survive. The server must be an `http` or `https` URL;
 anything else is refused when you set it rather than on every command afterwards.
 
-With none of the three, commands that need a server refuse to run and say so.
-They do not fall back to a guessed `localhost` port: a capture pointed at
-whatever happened to be listening is worse than one that did not start.
+Without configuration, read commands use `http://localhost:8081` and capture
+commands use `http://localhost:8082`.
 
 ## Your first read
 
@@ -182,7 +182,7 @@ the app captured.
 
 ```bash
 tapesctl plugin install codex-app --tapes-url http://localhost:8081
-tapesctl capture codex-app --tapes-url http://localhost:8082
+tapesctl capture codex-app --ingest-url http://localhost:8082
 ```
 
 `plugin install` packages a hook plugin under `~/.tapes/codex-app/`, points

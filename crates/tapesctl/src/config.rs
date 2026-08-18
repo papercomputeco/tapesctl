@@ -1,7 +1,7 @@
 //! The answers a user should only have to give once.
 //!
-//! Everything tapesctl talks to is named per invocation: `--tapes-url`, or
-//! `TAPES_URL` in the environment. Both are fine for a one-off and wrong for a
+//! The read API and ingest API are named independently: `--tapes-url` / `TAPES_API_URL`
+//! and `--ingest-url` / `TAPES_INGEST_URL`. Both are fine for a one-off and wrong for a
 //! habit — a shell without the export gets a tool that cannot list a session,
 //! and, worse, one whose `--help` quietly stops listing the cassette commands
 //! the deployment serves, because there is no server to discover them from.
@@ -10,9 +10,9 @@
 //! So there is a third source, consulted last: `~/.tapes/config.toml`, written
 //! by `tapesctl config set`. The precedence is the ordinary one —
 //!
-//! 1. `--tapes-url` on the command line,
-//! 2. `TAPES_URL` in the environment,
-//! 3. `tapes-url` in the config file.
+//! 1. its command-line flag,
+//! 2. its environment variable,
+//! 3. its config-file key.
 //!
 //! — and it is implemented by *being* that ordering rather than by
 //! re-implementing it: the configured value is installed as clap's default for
@@ -50,11 +50,13 @@ use crate::cli::ConfigCommand;
 use crate::error::{Result, error};
 use crate::machine::Machine;
 
-/// The configured default server. The one key today.
+/// The configured default read API.
 pub const TAPES_URL_KEY: &str = "tapes-url";
+/// The configured default ingest API.
+pub const INGEST_URL_KEY: &str = "ingest-url";
 
 /// Every key `tapesctl config` accepts, in the order help lists them.
-pub const KEYS: [&str; 1] = [TAPES_URL_KEY];
+pub const KEYS: [&str; 2] = [TAPES_URL_KEY, INGEST_URL_KEY];
 
 /// The contents of `~/.tapes/config.toml`.
 ///
@@ -63,11 +65,16 @@ pub const KEYS: [&str; 1] = [TAPES_URL_KEY];
 /// the file is a map of independent settings and not a versioned document.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
-    /// The server every command falls back to. TOML key `tapes-url`, spelled
-    /// exactly like the flag and the `config set` key so there is one name to
-    /// learn.
+    /// The read API every query falls back to.
     #[serde(rename = "tapes-url", default, skip_serializing_if = "Option::is_none")]
     pub tapes_url: Option<String>,
+    /// The ingest API every capture command falls back to.
+    #[serde(
+        rename = "ingest-url",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub ingest_url: Option<String>,
 }
 
 /// Refuse a key this build does not have.
@@ -93,13 +100,11 @@ impl Config {
     /// an error.
     pub fn get(&self, key: &str) -> Result<Option<&str>> {
         check_key(key)?;
-        // One key today, so this reads as an `if`; it becomes a `match` when
-        // there are two. `check_key` above is what makes the fallthrough safe —
-        // an unknown key has already been refused by the time it is reached.
-        if key == TAPES_URL_KEY {
-            return Ok(self.tapes_url.as_deref());
+        match key {
+            TAPES_URL_KEY => Ok(self.tapes_url.as_deref()),
+            INGEST_URL_KEY => Ok(self.ingest_url.as_deref()),
+            _ => Ok(None), // check_key above rejects unknown keys.
         }
-        Ok(None)
     }
 
     /// Set one key from its command-line spelling, in memory.
@@ -109,8 +114,10 @@ impl Config {
     /// that distinction is the whole point.
     pub fn set(&mut self, key: &str, value: String) -> Result<()> {
         check_key(key)?;
-        if key == TAPES_URL_KEY {
-            self.tapes_url = Some(value);
+        match key {
+            TAPES_URL_KEY => self.tapes_url = Some(value),
+            INGEST_URL_KEY => self.ingest_url = Some(value),
+            _ => {} // check_key above rejects unknown keys.
         }
         Ok(())
     }
@@ -124,6 +131,10 @@ impl Config {
                     .tapes_url
                     .as_deref()
                     .map(|value| (TAPES_URL_KEY, value)),
+                INGEST_URL_KEY => self
+                    .ingest_url
+                    .as_deref()
+                    .map(|value| (INGEST_URL_KEY, value)),
                 _ => None,
             })
             .collect()
@@ -269,9 +280,7 @@ pub fn run_in(command: &ConfigCommand, path: &Path) -> Result<()> {
             // now — not on every command afterwards, where a stored bad value
             // reads like the server being at fault.
             check_key(&args.key)?;
-            if args.key == TAPES_URL_KEY {
-                check_url(&args.key, &args.value)?;
-            }
+            check_url(&args.key, &args.value)?;
             // Deliberately not `read` first. The file is edited in place rather
             // than re-serialized (see `write_key`), which both preserves keys
             // this build does not know and lets `config set` repair a known key
@@ -325,8 +334,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
 
-        assert!(run_in(&set(TAPES_URL_KEY, "tapes.example"), &path).is_err());
-        assert!(!path.exists(), "nothing should have been written");
+        for key in [TAPES_URL_KEY, INGEST_URL_KEY] {
+            assert!(run_in(&set(key, "tapes.example"), &path).is_err());
+            assert!(!path.exists(), "nothing should have been written");
+        }
     }
 
     #[test]
@@ -517,7 +528,16 @@ mod tests {
     fn entries_lists_only_what_was_actually_set() {
         assert!(Config::default().entries().is_empty());
         let mut config = Config::default();
-        config.set(TAPES_URL_KEY, "http://x".to_owned()).unwrap();
-        assert_eq!(config.entries(), vec![(TAPES_URL_KEY, "http://x")]);
+        config.set(TAPES_URL_KEY, "http://api".to_owned()).unwrap();
+        config
+            .set(INGEST_URL_KEY, "http://ingest".to_owned())
+            .unwrap();
+        assert_eq!(
+            config.entries(),
+            vec![
+                (TAPES_URL_KEY, "http://api"),
+                (INGEST_URL_KEY, "http://ingest")
+            ]
+        );
     }
 }

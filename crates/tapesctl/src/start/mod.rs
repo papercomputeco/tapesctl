@@ -757,11 +757,11 @@ impl StartConfig {
         let harness = Harness::parse(&args.harness)?;
         let codex_auth = harness.codex_auth();
         let schema = resolve_schema(harness, args.schema.as_deref())?;
-        let tapes_url = args
-            .tapes_url
+        let ingest_url = args
+            .ingest_url
             .as_deref()
             .context(error::MissingTapesUrlSnafu)?;
-        let tapes_url = Url::parse(tapes_url).context(error::TapesUrlSnafu)?;
+        let ingest_url = Url::parse(ingest_url).context(error::TapesUrlSnafu)?;
         let upstream = match args.upstream.as_deref() {
             Some(upstream) => upstream,
             None => harness.default_upstream(codex_auth, schema),
@@ -778,7 +778,7 @@ impl StartConfig {
             harness_args: args.harness_args,
             provider_routes: harness.registers_several_providers() && args.upstream.is_none(),
             upstream: Url::parse(upstream).context(error::UpstreamUrlSnafu)?,
-            tapes_url,
+            tapes_url: ingest_url,
             web_url,
             org_id: args.org_id.unwrap_or_default(),
             // A standalone client has no gateway to stamp validated claims, so
@@ -1218,7 +1218,7 @@ mod tests {
         StartArgs {
             harness: harness.to_owned(),
             harness_args: Vec::new(),
-            tapes_url: Some("http://127.0.0.1:8090".to_owned()),
+            ingest_url: Some("http://127.0.0.1:8090".to_owned()),
             upstream: None,
             schema: None,
             web_url: None,
@@ -1361,7 +1361,7 @@ mod tests {
     #[test]
     fn a_missing_tapes_url_is_an_error_rather_than_a_silent_no_capture() {
         let mut args = args("claude");
-        args.tapes_url = None;
+        args.ingest_url = None;
         assert!(StartConfig::resolve(args).is_err());
     }
 

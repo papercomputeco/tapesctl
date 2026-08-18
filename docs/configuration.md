@@ -5,29 +5,21 @@ sidebar:
   order: 4
 ---
 
-`tapesctl` has one configurable setting today — the server it talks to — and
-one file to hold it. This page covers how that value is resolved, what else
-lives beside it, and where diagnostics go.
+`tapesctl` has separate read-API and ingest-API settings in one file. This
+page covers how they resolve, what else lives beside them, and where diagnostics
+go.
 
-## Resolving the server URL
+## Resolving server URLs
 
-Four sources, consulted in this order:
+Both endpoints have local defaults:
 
-```
-1. --tapes-url on the command line   (leaf position beats global position)
-2. TAPES_URL in the environment
-3. tapes-url in ~/.tapes/config.toml
-4. nothing → an error, never a guessed host
-```
+| purpose | default | flag | environment | config key |
+|---|---|---|---|---|
+| read API | `http://localhost:8081` | `--tapes-url` | `TAPES_API_URL` | `tapes-url` |
+| ingest API | `http://localhost:8082` | `--ingest-url` | `TAPES_INGEST_URL` | `ingest-url` |
 
-With none of them:
-
-```
-tapesctl: no tapes server URL: pass --tapes-url, set TAPES_URL, or configure a default with `tapesctl config set tapes-url <url>`
-```
-
-That refusal is deliberate. A capture pointed at whatever happened to be
-listening on a guessed port is worse than one that did not start.
+For either endpoint, an explicit flag beats its environment variable, which
+beats its configured value, which beats the localhost default.
 
 **There is no project-local layer.** No `.tapesrc`, no directory walk, no
 per-repository override. One user-level file, one variable, one flag.
@@ -43,7 +35,7 @@ Three mechanics that are easy to get wrong:
   missing subcommand.
 - **The global `--tapes-url` deliberately carries no environment binding.**
   The parser counts an environment-sourced value as user-supplied, so binding
-  `TAPES_URL` at the top level would make a bare `tapesctl` answer `error:
+  `TAPES_API_URL` at the top level would make a bare `tapesctl` answer `error:
   requires a subcommand` on any machine with the variable exported. The
   per-command declarations carry the binding instead, so the fallback still
   works everywhere it matters.
@@ -51,17 +43,11 @@ Three mechanics that are easy to get wrong:
 Cassette discovery resolves the same three sources itself, because it runs
 before arguments are parsed. See [Cassettes](./cassettes.md).
 
-### One default, two ports
-
-A tapes deployment serves reads and ingest on separate listeners, and the
-configured default holds a single URL. On a machine that both captures and
-reads a local server, configuration alone cannot name both.
-
-Configure the one you type least often, and pass the other explicitly:
+Configure a remote deployment once when its ports differ from the defaults:
 
 ```bash
-tapesctl config set tapes-url http://localhost:8081     # reads, the common case
-tapesctl start claude --tapes-url http://localhost:8082 # ingest, when capturing
+tapesctl config set tapes-url https://tapes.example/api
+tapesctl config set ingest-url https://tapes.example/ingest
 ```
 
 See [The two ports](./introduction.md#the-two-ports) for which command is on
@@ -82,21 +68,23 @@ tapesctl config path
 
 `config path` prints the path whether or not the file exists.
 
-The schema is one key:
+The schema has one key per endpoint:
 
 ```toml
 # ~/.tapes/config.toml
 tapes-url = "http://localhost:8081"
+ingest-url = "http://localhost:8082"
 ```
 
 | key | type | meaning | validation |
 |---|---|---|---|
-| `tapes-url` | string | the server every command falls back to | must parse as a URL **and** use scheme `http` or `https` |
+| `tapes-url` | string | read API | must parse as a URL **and** use scheme `http` or `https` |
+| `ingest-url` | string | ingest API | must parse as a URL **and** use scheme `http` or `https` |
 
-Setting it:
+Setting either:
 
 ```bash
-tapesctl config set tapes-url http://localhost:8081
+tapesctl config set ingest-url http://localhost:8082
 ```
 
 Validation happens at write time rather than on every command afterwards, and a
@@ -192,7 +180,8 @@ What it reads but never writes:
 
 | variable | read by |
 |---|---|
-| `TAPES_URL` | `start`, `capture`, `sync`, every read command, cassette discovery |
+| `TAPES_API_URL` | read commands and cassette discovery |
+| `TAPES_INGEST_URL` | `start`, `capture`, `sync` |
 | `TAPES_UPSTREAM` | `start`, `capture` |
 | `TAPES_WEB_URL` | `start`, `capture` |
 | `TAPES_ORG_ID` | `start`, `capture` |

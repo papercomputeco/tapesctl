@@ -256,12 +256,11 @@ per server. Never add a hard-coded cassette list — it would freeze one
 deployment's extensions into everyone's binary. Point the cache elsewhere with
 `TAPESCTL_CACHE_DIR`.
 
-### Commands refuse rather than guess a server
+### Local endpoint defaults
 
-With no `--tapes-url`, no `TAPES_URL`, and no configured default, a command that
-needs a server exits with an error instead of trying `localhost`. Preserve that:
-a capture pointed at whatever happened to be listening is worse than one that
-never started.
+Read commands default to `http://localhost:8081`; capture commands default to
+`http://localhost:8082`. Keep their configuration separate: `--tapes-url` /
+`TAPES_API_URL` for reads and `--ingest-url` / `TAPES_INGEST_URL` for capture.
 
 ## Pull requests
 

@@ -2,7 +2,7 @@
 //!
 //! The synthesis itself lives in [`tapes_client::cli`], behind that crate's
 //! `cli` feature. What stays here is what makes a generated command a
-//! *tapesctl* command: the `--tapes-url` flag (with its `TAPES_URL` fallback)
+//! *tapesctl* command: the `--tapes-url` flag (with its `TAPES_API_URL` fallback)
 //! decorated onto every generated method — mirroring [`crate::cli::ApiArgs`]
 //! — and the dispatch that builds this CLI's client from it, executes the
 //! resolved call, and prints the server's JSON verbatim, so a cassette
@@ -37,7 +37,7 @@ pub(crate) fn with_tapes_url(command: Command) -> Command {
     command.arg(
         Arg::new(crate::cli::TAPES_URL_ARG)
             .long(TAPES_URL_FLAG)
-            .env(crate::cli::TAPES_URL_ENV)
+            .env(crate::cli::TAPES_API_URL_ENV)
             .action(ArgAction::Set)
             .value_name("URL")
             .help("Base URL of the tapes server"),
@@ -56,7 +56,7 @@ Cassettes are API extensions your deployment serves under /v1/cassettes; their \
 commands are discovered from the server at runtime, so the set listed here is \
 whatever your deployment actually serves — not a list compiled into this \
 binary. A server has to be named for anything to be listed: pass --tapes-url, \
-set TAPES_URL, or configure one with `tapesctl config set tapes-url <url>`. \
+set TAPES_API_URL, or configure one with `tapesctl config set tapes-url <url>`. \
 Recently discovered commands keep working from a local cache while the server \
 is unreachable.";
 
@@ -146,7 +146,7 @@ pub fn epilogue(server: Option<&str>, surface: &Surface, provenance: Option<Prov
     let Some(server) = server else {
         return format!(
             "{CASSETTES_ARE_DISCOVERED}\nNo server is configured, so none are listed; \
-             pass --tapes-url, set TAPES_URL, or\nrun `tapesctl config set tapes-url <url>` \
+             pass --tapes-url, set TAPES_API_URL, or\nrun `tapesctl config set tapes-url <url>` \
              to see them from here on."
         );
     };
@@ -250,7 +250,10 @@ mod tests {
         // Two different next moves — configure a server, versus find out what
         // the configured one did — so the help must not blur them together.
         let unconfigured = epilogue(None, &Surface::default(), None);
-        assert!(unconfigured.contains("TAPES_URL"), "got: {unconfigured}");
+        assert!(
+            unconfigured.contains("TAPES_API_URL"),
+            "got: {unconfigured}"
+        );
 
         let empty = epilogue(Some("http://tapes.example"), &Surface::default(), None);
         assert!(

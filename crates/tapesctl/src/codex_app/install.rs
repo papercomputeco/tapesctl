@@ -772,7 +772,7 @@ fn report_next_steps(plan: &Plan, harness_id: &str) {
     );
     println!();
     println!("Then capture:");
-    println!("  tapesctl capture {harness_id} --tapes-url <url>");
+    println!("  tapesctl capture {harness_id} --ingest-url <url>");
 }
 
 #[cfg(test)]

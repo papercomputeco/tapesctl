@@ -226,7 +226,7 @@ help itself distinguishes "no server" from "no cassettes":
 ```
 Cassette commands are served by your tapes deployment, not built into this binary: they
 are discovered from the server and mounted under `tapesctl cassettes`.
-No server is configured, so none are listed; pass --tapes-url, set TAPES_URL, or
+No server is configured, so none are listed; pass --tapes-url, set TAPES_API_URL, or
 run `tapesctl config set tapes-url <url>` to see them from here on.
 ```
 

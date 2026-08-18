@@ -34,12 +34,12 @@ pub struct Cli {
     /// Global so it can be given once, before the subcommand, and so it is
     /// documented in the top-level help rather than only in each leaf's.
     ///
-    /// # Why no `env = "TAPES_URL"` here
+    /// # Why no `env = "TAPES_API_URL"` here
     ///
     /// Deliberate, and the leaf declarations still carry it — this is not the
     /// flag losing its environment fallback. clap counts an environment-sourced
     /// value as an argument the user supplied, and `arg_required_else_help`
-    /// only prints help when *no* argument was supplied. Binding `TAPES_URL` at
+    /// only prints help when *no* argument was supplied. Binding `TAPES_API_URL` at
     /// the top level would therefore mean that anyone with the variable
     /// exported got `error: requires a subcommand` from a bare `tapesctl`
     /// instead of the help it now prints — a regression triggered by the
@@ -50,11 +50,11 @@ pub struct Cli {
         long,
         global = true,
         value_name = "URL",
-        help = "Base URL of the tapes server. Falls back to TAPES_URL, then to the configured default",
-        long_help = "Base URL of the tapes server.\n\n\
-                     Falls back to the TAPES_URL environment variable, and then to the default \
-                     configured with `tapesctl config set tapes-url <url>`. With none of the three, \
-                     commands that need a server refuse to run rather than guess a host."
+        help = "Base URL of the tapes read API. Falls back to TAPES_API_URL, then to the configured default",
+        long_help = "Base URL of the tapes read API.\n\n\
+                     Falls back to the TAPES_API_URL environment variable, then the default \
+                     configured with `tapesctl config set tapes-url <url>`, then \
+                     http://localhost:8081. Capture commands use --ingest-url instead."
     )]
     pub tapes_url: Option<String>,
 
@@ -76,7 +76,13 @@ pub const TAPES_URL_ARG: &str = "tapes_url";
 const TAPES_URL_FLAG: &str = "--tapes-url";
 
 /// The environment variable `--tapes-url` falls back to.
-pub const TAPES_URL_ENV: &str = "TAPES_URL";
+pub const TAPES_API_URL_ENV: &str = "TAPES_API_URL";
+/// The environment variable `--ingest-url` falls back to.
+pub const TAPES_INGEST_URL_ENV: &str = "TAPES_INGEST_URL";
+
+pub const DEFAULT_API_URL: &str = "http://localhost:8081";
+pub const DEFAULT_INGEST_URL: &str = "http://localhost:8082";
+pub const INGEST_URL_ARG: &str = "ingest_url";
 
 /// Find the server to discover cassettes from, before anything is parsed.
 ///
@@ -121,7 +127,7 @@ where
         }
     }
 
-    std::env::var(TAPES_URL_ENV)
+    std::env::var(TAPES_API_URL_ENV)
         .ok()
         .filter(|value| !value.trim().is_empty())
 }
@@ -344,11 +350,11 @@ impl Command {
     }
 }
 
-/// Where the tapes server is, shared by every command that talks to one.
+/// Where the tapes read API is, shared by query commands.
 #[derive(Debug, Clone, Args)]
 pub struct ApiArgs {
-    /// Base URL of the tapes server. Falls back to `TAPES_URL`.
-    #[arg(long, env = "TAPES_URL")]
+    /// Base URL of the tapes read API. Falls back to `TAPES_API_URL`.
+    #[arg(long, env = "TAPES_API_URL")]
     pub tapes_url: Option<String>,
 }
 
@@ -362,9 +368,9 @@ pub struct StartArgs {
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub harness_args: Vec<String>,
 
-    /// Base URL of the tapes ingest server. Falls back to `TAPES_URL`.
-    #[arg(long, env = "TAPES_URL")]
-    pub tapes_url: Option<String>,
+    /// Base URL of the tapes ingest server. Falls back to `TAPES_INGEST_URL`.
+    #[arg(long, env = "TAPES_INGEST_URL")]
+    pub ingest_url: Option<String>,
 
     /// Where to forward the harness's LLM traffic. Defaults to the harness's
     /// own provider API, so the harness behaves exactly as it would unproxied.
@@ -418,9 +424,9 @@ pub struct CaptureArgs {
     /// The harness to capture (today: `codex-app`).
     pub harness: String,
 
-    /// Base URL of the tapes ingest server. Falls back to `TAPES_URL`.
-    #[arg(long, env = "TAPES_URL")]
-    pub tapes_url: Option<String>,
+    /// Base URL of the tapes ingest server. Falls back to `TAPES_INGEST_URL`.
+    #[arg(long, env = "TAPES_INGEST_URL")]
+    pub ingest_url: Option<String>,
 
     /// Where to forward the harness's LLM traffic. Defaults to the backend
     /// that honours the credential the harness was configured with.
@@ -445,9 +451,9 @@ pub struct CaptureArgs {
 /// Arguments for `tapesctl sync`.
 #[derive(Debug, Args)]
 pub struct SyncArgs {
-    /// Base URL of the tapes ingest server. Falls back to `TAPES_URL`.
-    #[arg(long, env = "TAPES_URL")]
-    pub tapes_url: Option<String>,
+    /// Base URL of the tapes ingest server. Falls back to `TAPES_INGEST_URL`.
+    #[arg(long, env = "TAPES_INGEST_URL")]
+    pub ingest_url: Option<String>,
 
     /// Transcript tree to sweep. Defaults to `~/.claude/projects`.
     #[arg(long)]
@@ -844,7 +850,7 @@ mod tests {
         }
     }
 
-    /// The global flag deliberately does not bind `TAPES_URL`, and this is the
+    /// The global flag deliberately does not bind `TAPES_API_URL`, and this is the
     /// guard on that: clap treats an environment-sourced value as an argument
     /// the user supplied, so a top-level `env` binding would make a bare
     /// `tapesctl` answer "requires a subcommand" instead of help on every
@@ -860,7 +866,7 @@ mod tests {
         assert!(global.is_global_set());
         assert!(
             global.get_env().is_none(),
-            "binding TAPES_URL here would cost the bare invocation its help",
+            "binding TAPES_API_URL here would cost the bare invocation its help",
         );
 
         let leaf = command
@@ -871,7 +877,10 @@ mod tests {
                     .cloned()
             })
             .expect("a leaf should declare the flag itself");
-        assert_eq!(leaf.get_env(), Some(std::ffi::OsStr::new(TAPES_URL_ENV)));
+        assert_eq!(
+            leaf.get_env(),
+            Some(std::ffi::OsStr::new(TAPES_API_URL_ENV))
+        );
     }
 
     #[test]
@@ -941,7 +950,7 @@ mod tests {
             "tapesctl",
             "start",
             "claude",
-            "--tapes-url",
+            "--ingest-url",
             "http://x",
             "--",
             "--verbose",
@@ -951,6 +960,7 @@ mod tests {
         match cli.command {
             Command::Start(args) => {
                 assert_eq!(args.harness, "claude");
+                assert_eq!(args.ingest_url.as_deref(), Some("http://x"));
                 assert_eq!(args.harness_args, vec!["--verbose", "-p", "hi"]);
             }
             other => panic!("got: {other:?}"),
@@ -965,7 +975,7 @@ mod tests {
             "tapesctl",
             "start",
             "pi",
-            "--tapes-url",
+            "--ingest-url",
             "http://x",
             "--schema",
             "openai",
@@ -985,7 +995,7 @@ mod tests {
 
     #[test]
     fn sync_defaults_to_the_bounded_window_and_the_home_tree() {
-        let cli = parse(&["tapesctl", "sync", "--tapes-url", "http://x"]);
+        let cli = parse(&["tapesctl", "sync", "--ingest-url", "http://x"]);
         match cli.command {
             Command::Sync(args) => {
                 assert_eq!(args.since_days, None);
@@ -1065,13 +1075,13 @@ mod tests {
             "tapesctl",
             "capture",
             "codex-app",
-            "--tapes-url",
+            "--ingest-url",
             "http://x",
         ]);
         match cli.command {
             Command::Capture(args) => {
                 assert_eq!(args.harness, "codex-app");
-                assert_eq!(args.tapes_url.as_deref(), Some("http://x"));
+                assert_eq!(args.ingest_url.as_deref(), Some("http://x"));
             }
             other => panic!("got: {other:?}"),
         }
@@ -1088,7 +1098,7 @@ mod tests {
             "tapesctl",
             "capture",
             "codex-app",
-            "--tapes-url",
+            "--ingest-url",
             "http://x",
         ]);
         assert!(!cli.command.hands_over_terminal());
@@ -1213,7 +1223,9 @@ mod tests {
                 "--tapes-url",
                 "http://evil"
             ]),
-            std::env::var(TAPES_URL_ENV).ok().filter(|v| !v.is_empty()),
+            std::env::var(TAPES_API_URL_ENV)
+                .ok()
+                .filter(|v| !v.is_empty()),
         );
     }
 
@@ -1221,7 +1233,9 @@ mod tests {
     fn a_dangling_server_flag_is_not_read_as_a_value() {
         assert_eq!(
             discovery_url(["tapesctl", "sessions", "list", "--tapes-url"]),
-            std::env::var(TAPES_URL_ENV).ok().filter(|v| !v.is_empty()),
+            std::env::var(TAPES_API_URL_ENV)
+                .ok()
+                .filter(|v| !v.is_empty()),
         );
     }
 
