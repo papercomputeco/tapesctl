@@ -8,7 +8,7 @@ read, search, and export. `tapesctl` is the client. It launches a coding-agent
 harness under a just-in-time capture proxy, ships the captured turns to a tapes
 server, and gives you a command line over the data model that comes back.
 
-You bring your own tapes server. Read commands use `--tapes-url`; capture
+You bring your own tapes server. Read commands use `--api-url`; capture
 commands use `--ingest-url`. [Naming your server](#naming-your-server) is the
 one-time way to stop typing either.
 
@@ -120,20 +120,21 @@ there is an error rather than a silent no-op.
 
 ## Naming your server
 
-Every command that talks to a tapes deployment needs to know where it is. There
-are three ways to say so, and they are consulted in this order:
+Every command that talks to a tapes deployment resolves its endpoint in this
+order: flag, environment, config, local default.
 
 ```bash
-tapesctl --tapes-url http://localhost:8081 sessions list   # read API flag
+tapesctl --api-url http://localhost:8081 sessions list   # read API flag
 export TAPES_API_URL=http://localhost:8081                 # read API environment
+tapesctl config set tapes-url http://localhost:8081        # persist read API
+tapesctl start claude --ingest-url http://localhost:8082   # ingest flag
 export TAPES_INGEST_URL=http://localhost:8082              # ingest environment
 tapesctl config set ingest-url http://localhost:8082       # persist ingest
 ```
 
-`--tapes-url` is global: give it before the subcommand, as above, or after it,
-where it has always worked. The third form writes `~/.tapes/config.toml` and is
-the one worth doing — a configured server is what makes `tapesctl cassettes`
-list what your deployment serves, in every new shell, without an export.
+`--api-url` is global: give it before the subcommand, as above, or after it.
+Config writes `~/.tapes/config.toml` and is useful for non-local deployments in
+every new shell, without an export.
 
 ```bash
 tapesctl config get           # every key that is set
@@ -181,7 +182,7 @@ An app you launch from the dock starts itself, so there is no process for
 the app captured.
 
 ```bash
-tapesctl plugin install codex-app --tapes-url http://localhost:8081
+tapesctl plugin install codex-app --api-url http://localhost:8081
 tapesctl capture codex-app --ingest-url http://localhost:8082
 ```
 

@@ -240,7 +240,7 @@ different value — the tapes session id — and carries the harness one alongsi
 it as `harness_session_id`. Feeding the printed id to a read command fails:
 
 ```bash
-tapesctl sessions get f47ac10b-58cc-4372-a567-0e02b2c3d479 --tapes-url http://localhost:8081
+tapesctl sessions get f47ac10b-58cc-4372-a567-0e02b2c3d479 --api-url http://localhost:8081
 ```
 
 ```
@@ -254,7 +254,7 @@ launched — and read the `id` on the result:
 ```bash
 tapesctl sessions list --harness-id claude \
   --harness-session-id f47ac10b-58cc-4372-a567-0e02b2c3d479 \
-  --tapes-url http://localhost:8081 | jq -r '.items[].id'
+  --api-url http://localhost:8081 | jq -r '.items[].id'
 ```
 
 ```

@@ -67,7 +67,7 @@ fn start_args() -> Vec<&'static str> {
     vec![
         "start",
         "claude",
-        "--tapes-url",
+        "--ingest-url",
         "http://127.0.0.1:1",
         "--no-transcripts",
     ]

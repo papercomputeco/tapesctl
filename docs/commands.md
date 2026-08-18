@@ -10,7 +10,7 @@ serves. This page is the whole reference; [Capture](./capture.md) explains the
 concepts behind `start`, `capture`, and `sync`, and
 [Cassettes](./cassettes.md) covers the discovered surface.
 
-Read commands use `--tapes-url`; capture commands use `--ingest-url`. See
+Read commands use `--api-url`; capture commands use `--ingest-url`. See
 [The two ports](./introduction.md#the-two-ports).
 
 ## Global flags
@@ -21,22 +21,22 @@ subcommand and reach every leaf.
 | flag | type | default | notes |
 |---|---|---|---|
 | `-v`, `--verbose` | count | `0` | `-v` is `debug`, `-vv` is `trace`. `RUST_LOG` overrides both |
-| `--tapes-url <URL>` | string | `http://localhost:8081` | falls back to `TAPES_API_URL`, then `config.toml` |
+| `--api-url <URL>` | string | `http://localhost:8081` | falls back to `TAPES_API_URL`, then `config.toml` |
 | `-h`, `--help` | flag | — | |
 | `-V`, `--version` | flag | — | prints one line; see [`version`](#version) before trusting it |
 
 Both are also read straight off the argument list before parsing, and both stop
-at a bare `--`. A harness's own `-v` or `--tapes-url` after the separator
+at a bare `--`. A harness's own `-v` or `--api-url` after the separator
 cannot steer `tapesctl`.
 
 **Leaf position beats global position.** Given both,
-`tapesctl --tapes-url A sessions list --tapes-url B` uses `B`.
+`tapesctl --api-url A sessions list --api-url B` uses `B`.
 
-**`--tapes-url` appears in the help of commands that never make an HTTP
+**`--api-url` appears in the help of commands that never make an HTTP
 call** — `config set`, `config get`, `config path`,
 `version`, and `plugin uninstall` — because the global flag propagates into
 every leaf's help. It is inert there. Its presence in `config`'s help is
-actively misleading, since the point of `config set tapes-url` is that you do
+actively misleading, since the point of `config set api-url` is that you do
 not have a server configured yet.
 
 ## Exit codes
@@ -253,8 +253,8 @@ reach you without a client upgrade.
 | `raw-turns <ID>` | `GET /v1/sessions/{id}/raw_turns` | — |
 
 ```bash
-tapesctl sessions list --limit 20 --tapes-url http://localhost:8081
-tapesctl sessions get 01JDQ8F3K2M4N6P8R0T2V4X6Z8 --tapes-url http://localhost:8081
+tapesctl sessions list --limit 20 --api-url http://localhost:8081
+tapesctl sessions get 01JDQ8F3K2M4N6P8R0T2V4X6Z8 --api-url http://localhost:8081
 ```
 
 `sessions list` flags are all optional and all omitted from the query when
@@ -284,7 +284,7 @@ tapesctl: invalid --payload "bogus" (valid values: full, preview)
 turns behind that derivation.
 
 The read API carries **no authentication**, and redirects are refused rather
-than followed. A base path in `--tapes-url` is discarded here too.
+than followed. A base path in `--api-url` is discarded here too.
 
 ## traces
 
@@ -313,8 +313,8 @@ Semantic search over captured spans. Hits are individual main-conversation LLM
 spans with their trace and turn context.
 
 ```bash
-tapesctl search "how to configure logging" --tapes-url http://localhost:8081
-tapesctl search "error handling patterns" --top 10 --tapes-url http://localhost:8081
+tapesctl search "how to configure logging" --api-url http://localhost:8081
+tapesctl search "error handling patterns" --top 10 --api-url http://localhost:8081
 ```
 
 | flag | default | notes |
@@ -353,7 +353,7 @@ Write a session's export bundle — JSONL, one line per trace — to a file or
 stdout.
 
 ```bash
-tapesctl export 01JDQ8F3K2M4N6P8R0T2V4X6Z8 -o bundle.jsonl --tapes-url http://localhost:8081
+tapesctl export 01JDQ8F3K2M4N6P8R0T2V4X6Z8 -o bundle.jsonl --api-url http://localhost:8081
 ```
 
 | flag | default |
@@ -385,7 +385,7 @@ render. `POST /v1/admin/seed/demo` — an **admin route on the read API**, not o
 ingest.
 
 ```bash
-tapesctl seed --tapes-url http://localhost:8081
+tapesctl seed --api-url http://localhost:8081
 ```
 
 ```
@@ -485,7 +485,7 @@ identifies it, not so that you run it.
 ## config
 
 Key and value, following `git config` and `gh config` rather than a flag per
-setting. Needs no server — requiring `--tapes-url` to configure `--tapes-url`
+setting. Needs no server — requiring `--api-url` to configure `--api-url`
 would be a circle.
 
 | leaf | args | behaviour |

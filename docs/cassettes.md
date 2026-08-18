@@ -20,7 +20,7 @@ configuring cassettes is an operator task, documented with the server at
 The noun's help *is* the listing:
 
 ```bash
-tapesctl cassettes --help --tapes-url http://127.0.0.1:8899
+tapesctl cassettes --help --api-url http://127.0.0.1:8899
 ```
 
 ```
@@ -49,7 +49,7 @@ error: 'tapesctl cassettes' requires a subcommand but one was not provided
 Then one cassette's methods:
 
 ```bash
-tapesctl cassettes hello-world --help --tapes-url http://127.0.0.1:8899
+tapesctl cassettes hello-world --help --api-url http://127.0.0.1:8899
 ```
 
 ```
@@ -65,7 +65,7 @@ Commands:
 And one method:
 
 ```bash
-tapesctl cassettes hello-world get-hello --help --tapes-url http://127.0.0.1:8899
+tapesctl cassettes hello-world get-hello --help --api-url http://127.0.0.1:8899
 ```
 
 ```
@@ -89,7 +89,7 @@ form everywhere.
 ## Calling a method
 
 ```bash
-tapesctl cassettes hello-world get-hello world --tapes-url http://127.0.0.1:8899
+tapesctl cassettes hello-world get-hello world --api-url http://127.0.0.1:8899
 ```
 
 ```json
@@ -102,7 +102,7 @@ tapesctl cassettes hello-world get-hello world --tapes-url http://127.0.0.1:8899
 Query parameters are flags:
 
 ```bash
-tapesctl cassettes hello-world get-hello world --loud yes --tapes-url http://127.0.0.1:8899
+tapesctl cassettes hello-world get-hello world --loud yes --api-url http://127.0.0.1:8899
 ```
 
 ```json
@@ -115,8 +115,8 @@ tapesctl cassettes hello-world get-hello world --loud yes --tapes-url http://127
 A request body is `--body`, inline or from a file with `@`:
 
 ```bash
-tapesctl cassettes hello-world create-hello --body '{"hello":"hi"}' --tapes-url http://127.0.0.1:8899
-tapesctl cassettes hello-world create-hello --body @row.json --tapes-url http://127.0.0.1:8899
+tapesctl cassettes hello-world create-hello --body '{"hello":"hi"}' --api-url http://127.0.0.1:8899
+tapesctl cassettes hello-world create-hello --body @row.json --api-url http://127.0.0.1:8899
 ```
 
 Both send the same request. The body is validated before anything is sent:
@@ -181,7 +181,7 @@ Each costs the cassette nouns and nothing else. The hand-written surface keeps
 working on a machine that cannot reach any tapes server at all:
 
 ```bash
-tapesctl version --tapes-url http://127.0.0.1:9
+tapesctl version --api-url http://127.0.0.1:9
 ```
 
 ```
@@ -218,19 +218,10 @@ useful for pinning the location in CI.
 
 ## What the top-level help tells you
 
-The epilogue on `tapesctl --help` changes with what discovery found, so the
-help itself distinguishes "no server" from "no cassettes":
+The epilogue on `tapesctl --help` changes with what discovery found. With no
+override, discovery uses the local API default.
 
-**No server configured:**
-
-```
-Cassette commands are served by your tapes deployment, not built into this binary: they
-are discovered from the server and mounted under `tapesctl cassettes`.
-No server is configured, so none are listed; pass --tapes-url, set TAPES_API_URL, or
-run `tapesctl config set tapes-url <url>` to see them from here on.
-```
-
-**A server, serving no cassettes:**
+**The API serves no cassettes (or is unreachable):**
 
 ```
 Cassette commands are served by your tapes deployment, not built into this binary: they
@@ -251,9 +242,9 @@ The "re-run with `-v` for why" is literal: an operator's typo in a cassette URL
 is otherwise indistinguishable from the cassette not existing, so the discovery
 document carries the problems and `-v` prints them.
 
-Because the listing comes from a server, `tapesctl cassettes` on a machine that
-names none lists nothing at all. That is the strongest reason to run
-[`tapesctl config set tapes-url`](./configuration.md) once.
+Because the listing comes from a server, `tapesctl cassettes` lists nothing when
+the selected API serves none or cannot be reached. Use [`--api-url` or the API
+configuration](./configuration.md) for a non-local deployment.
 
 ## The older spelling
 

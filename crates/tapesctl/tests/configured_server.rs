@@ -81,19 +81,15 @@ async fn a_configured_server_is_enough_to_list_and_call_what_it_serves() {
         .mount(&server)
         .await;
 
-    // --- with nothing configured, help says so and lists nothing ----------
+    // --- with nothing configured, help reports the local default ----------
     let bare = ["tapesctl".to_owned()];
     let (unconfigured, surface) = tapesctl::build_parser(&bare, &Config::default()).await;
     assert!(surface.cassettes.is_empty());
     let mut unconfigured = unconfigured;
     let help = unconfigured.render_long_help().to_string();
     assert!(
-        help.contains("No server is configured"),
-        "the epilogue must explain the empty list: {help}",
-    );
-    assert!(
-        help.contains("config set tapes-url"),
-        "and it must teach the durable fix, not only the per-run ones: {help}",
+        help.contains("discovery against http://localhost:8081 failed"),
+        "the epilogue must name the local default: {help}",
     );
     let listing = unconfigured
         .find_subcommand_mut(tapesctl::cassette::command::NOUN)

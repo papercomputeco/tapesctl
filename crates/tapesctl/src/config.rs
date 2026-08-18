@@ -1,6 +1,6 @@
 //! The answers a user should only have to give once.
 //!
-//! The read API and ingest API are named independently: `--tapes-url` / `TAPES_API_URL`
+//! The read API and ingest API are named independently: `--api-url` / `TAPES_API_URL`
 //! and `--ingest-url` / `TAPES_INGEST_URL`. Both are fine for a one-off and wrong for a
 //! habit — a shell without the export gets a tool that cannot list a session,
 //! and, worse, one whose `--help` quietly stops listing the cassette commands

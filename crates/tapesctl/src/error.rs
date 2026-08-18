@@ -156,7 +156,7 @@ pub enum Error {
         source: std::io::Error,
     },
 
-    /// `--tapes-url` was not a URL.
+    /// `--api-url` was not a URL.
     #[snafu(display("invalid tapes URL"))]
     TapesUrl {
         /// Underlying parse failure.

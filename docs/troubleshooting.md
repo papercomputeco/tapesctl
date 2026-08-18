@@ -75,7 +75,7 @@ the `id` on the result:
 ```bash
 tapesctl sessions list --harness-id claude \
   --harness-session-id f47ac10b-58cc-4372-a567-0e02b2c3d479 \
-  --tapes-url http://localhost:8081 | jq -r '.items[].id'
+  --api-url http://localhost:8081 | jq -r '.items[].id'
 ```
 
 ```
@@ -101,7 +101,7 @@ Read commands default to `http://localhost:8081`; capture commands default to
 corresponding flags) when your deployment uses other addresses.
 
 **If you set it and still get this**, check which endpoint the command wants:
-`--tapes-url` / `tapes-url` is read-only; `--ingest-url` / `ingest-url` is for
+`--api-url` / `tapes-url` is read-only; `--ingest-url` / `ingest-url` is for
 capture.
 
 **If `config get` prints nothing but the file is not empty**, that is expected:
@@ -118,7 +118,7 @@ a host that does not route. Check the server is up and that you named the
 listener you meant.
 
 Note that a **path prefix in the URL is discarded**:
-`--tapes-url http://host/base/` reads from `http://host/v1/sessions`, not
+`--api-url http://host/base/` reads from `http://host/v1/sessions`, not
 `/base/v1/sessions`. If your deployment is mounted under a path, that is a
 server-side routing question, not something the flag can express.
 
@@ -266,9 +266,9 @@ bug report as version-less, and record where you got the binary instead.
 ## Turning on more detail
 
 ```bash
-tapesctl -v sessions list --tapes-url http://localhost:8081   # debug
-tapesctl -vv sessions list --tapes-url http://localhost:8081  # trace
-RUST_LOG=debug tapesctl sessions list --tapes-url http://localhost:8081
+tapesctl -v sessions list --api-url http://localhost:8081   # debug
+tapesctl -vv sessions list --api-url http://localhost:8081  # trace
+RUST_LOG=debug tapesctl sessions list --api-url http://localhost:8081
 ```
 
 `RUST_LOG` overrides the `-v` count. A set-but-empty `RUST_LOG` is treated as

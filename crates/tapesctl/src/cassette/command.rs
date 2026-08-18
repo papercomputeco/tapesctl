@@ -2,7 +2,7 @@
 //!
 //! The synthesis itself lives in [`tapes_client::cli`], behind that crate's
 //! `cli` feature. What stays here is what makes a generated command a
-//! *tapesctl* command: the `--tapes-url` flag (with its `TAPES_API_URL` fallback)
+//! *tapesctl* command: the `--api-url` flag (with its `TAPES_API_URL` fallback)
 //! decorated onto every generated method — mirroring [`crate::cli::ApiArgs`]
 //! — and the dispatch that builds this CLI's client from it, executes the
 //! resolved call, and prints the server's JSON verbatim, so a cassette
@@ -20,23 +20,23 @@ use tapes_client::DirectHttp;
 use tapes_client::cli::resolve_invocation;
 
 /// The flag every generated method carries, mirroring [`crate::cli::ApiArgs`].
-const TAPES_URL_FLAG: &str = "tapes-url";
+const API_URL_FLAG: &str = "api-url";
 
 /// The decorator applied to every generated method command: tapesctl's server
 /// flag, exactly as the pre-extraction synthesis hard-coded it.
 ///
-/// The id is [`crate::cli::TAPES_URL_ARG`] rather than the flag's own spelling,
+/// The id is [`crate::cli::API_URL_ARG`] rather than the flag's own spelling,
 /// which is the difference between this declaration and the global one being
 /// *the same argument* and being two arguments that happen to share a long
 /// name. Under the second reading clap propagates the global into this command,
-/// finds no id like it, and mounts a second `--tapes-url` — a duplicate that
+/// finds no id like it, and mounts a second `--api-url` — a duplicate that
 /// panics the parser build. Under the first it skips the propagation, and the
 /// value the user gave at either position, or the configured default, reaches
 /// here.
-pub(crate) fn with_tapes_url(command: Command) -> Command {
+pub(crate) fn with_api_url(command: Command) -> Command {
     command.arg(
-        Arg::new(crate::cli::TAPES_URL_ARG)
-            .long(TAPES_URL_FLAG)
+        Arg::new(crate::cli::API_URL_ARG)
+            .long(API_URL_FLAG)
             .env(crate::cli::TAPES_API_URL_ENV)
             .action(ArgAction::Set)
             .value_name("URL")
@@ -55,7 +55,7 @@ Call cassette methods served by your tapes deployment.
 Cassettes are API extensions your deployment serves under /v1/cassettes; their \
 commands are discovered from the server at runtime, so the set listed here is \
 whatever your deployment actually serves — not a list compiled into this \
-binary. A server has to be named for anything to be listed: pass --tapes-url, \
+binary. A server has to be named for anything to be listed: pass --api-url, \
 set TAPES_API_URL, or configure one with `tapesctl config set tapes-url <url>`. \
 Recently discovered commands keep working from a local cache while the server \
 is unreachable.";
@@ -81,7 +81,7 @@ pub fn mount(base: Command, surface: &Surface) -> Command {
         // explanation of why it is empty — is a better answer than an error.
         .arg_required_else_help(true)
         .subcommand_required(true);
-    let noun = tapes_client::cli::augment(noun, &admissible(surface), with_tapes_url);
+    let noun = tapes_client::cli::augment(noun, &admissible(surface), with_api_url);
     base.subcommand(noun)
 }
 
@@ -146,7 +146,7 @@ pub fn epilogue(server: Option<&str>, surface: &Surface, provenance: Option<Prov
     let Some(server) = server else {
         return format!(
             "{CASSETTES_ARE_DISCOVERED}\nNo server is configured, so none are listed; \
-             pass --tapes-url, set TAPES_API_URL, or\nrun `tapesctl config set tapes-url <url>` \
+             pass --api-url, set TAPES_API_URL, or\nrun `tapesctl config set tapes-url <url>` \
              to see them from here on."
         );
     };
@@ -185,16 +185,16 @@ pub fn epilogue(server: Option<&str>, surface: &Surface, provenance: Option<Prov
 ///
 /// `matches` is the cassette-level match; its own subcommand names the method.
 /// The crate resolves the invocation back to a call; executing it against the
-/// server `--tapes-url` names, and printing the response, happen here.
+/// server `--api-url` names, and printing the response, happen here.
 pub async fn dispatch(surface: &Surface, name: &str, matches: &ArgMatches) -> Result<()> {
     let (_method, call) = resolve_invocation(surface, name, matches)?;
 
     // `resolve_invocation` only succeeds when the method subcommand parsed,
-    // so the matches carry it; `--tapes-url` is this module's own flag,
+    // so the matches carry it; `--api-url` is this module's own flag,
     // added through the decorator, and is read back off the method's matches.
     let raw = matches
         .subcommand()
-        .and_then(|(_, method_matches)| method_matches.get_one::<String>(crate::cli::TAPES_URL_ARG))
+        .and_then(|(_, method_matches)| method_matches.get_one::<String>(crate::cli::API_URL_ARG))
         .context(error::MissingTapesUrlSnafu)?;
     let transport = DirectHttp::new(Url::parse(raw).context(error::TapesUrlSnafu)?);
 
@@ -375,7 +375,7 @@ mod tests {
                 "tapesctl",
                 "hello-world",
                 "get-hello",
-                "--tapes-url",
+                "--api-url",
                 "http://x",
             ])
             .expect_err("the retired spelling must not parse");
@@ -477,7 +477,7 @@ mod tests {
                 "r-1",
                 "--since",
                 "yesterday",
-                "--tapes-url",
+                "--api-url",
                 "http://x",
             ])
             .unwrap();
@@ -505,7 +505,7 @@ mod tests {
                     NOUN,
                     "summary",
                     "get-report",
-                    "--tapes-url",
+                    "--api-url",
                     "http://x"
                 ])
                 .is_err(),
@@ -523,7 +523,7 @@ mod tests {
                     NOUN,
                     "hello-world",
                     "create-hello",
-                    "--tapes-url",
+                    "--api-url",
                     "http://x"
                 ])
                 .is_err(),
@@ -539,7 +539,7 @@ mod tests {
                     "get-hello",
                     "--body",
                     "{}",
-                    "--tapes-url",
+                    "--api-url",
                     "http://x",
                 ])
                 .is_err(),
@@ -563,7 +563,7 @@ mod tests {
                 NOUN,
                 "summary",
                 "list-reports",
-                "--tapes-url",
+                "--api-url",
                 "http://x",
             ])
             .unwrap();
@@ -617,7 +617,7 @@ mod tests {
                 "local:me",
                 "--x-report-kind",
                 "daily",
-                "--tapes-url",
+                "--api-url",
                 "http://x",
             ])
             .unwrap();
@@ -669,7 +669,7 @@ mod tests {
                 "r-1",
                 "--since",
                 "yesterday",
-                "--tapes-url",
+                "--api-url",
                 &server.uri(),
             ])
             .unwrap();
@@ -706,7 +706,7 @@ mod tests {
                 NOUN,
                 "summary",
                 "list-reports",
-                "--tapes-url",
+                "--api-url",
                 &server.uri(),
             ])
             .unwrap();

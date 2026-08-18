@@ -207,7 +207,7 @@ fn parser(
     let command = tapes_client::cli::augment(
         cassette::command::mount(Cli::command(), surface),
         surface,
-        cassette::command::with_tapes_url,
+        cassette::command::with_api_url,
     )
     .after_help(cassette::command::epilogue(server, surface, provenance));
 
@@ -218,7 +218,7 @@ fn parser(
     // including the generated cassette methods. A default also does not count
     // as an argument the user supplied, so a bare `tapesctl` still answers with
     // help on a machine that has one configured.
-    command.mut_arg(cli::TAPES_URL_ARG, |arg| {
+    command.mut_arg(cli::API_URL_ARG, |arg| {
         arg.default_value(configured.unwrap_or(cli::DEFAULT_API_URL).to_owned())
     })
 }
@@ -356,7 +356,7 @@ mod tests {
         );
     }
 
-    /// The configured server is not a fourth way of saying `--tapes-url`; it is
+    /// The configured server is not a fourth way of saying `--api-url`; it is
     /// the way that survives a new shell. This is the whole of what the config
     /// file buys, at the seam where it is applied.
     #[test]
@@ -417,20 +417,8 @@ mod tests {
         // The precedence is clap's own — a default loses to an argument — which
         // is why it is expressed as a default rather than resolved by hand.
         for argv in [
-            [
-                "tapesctl",
-                "--tapes-url",
-                "http://typed",
-                "sessions",
-                "list",
-            ],
-            [
-                "tapesctl",
-                "sessions",
-                "list",
-                "--tapes-url",
-                "http://typed",
-            ],
+            ["tapesctl", "--api-url", "http://typed", "sessions", "list"],
+            ["tapesctl", "sessions", "list", "--api-url", "http://typed"],
         ] {
             let matches = parser(&Surface::default(), None, Some("http://configured"), None)
                 .try_get_matches_from(argv)
@@ -474,7 +462,7 @@ mod tests {
                 cassette::command::NOUN,
                 "hello-world",
                 "get-hello",
-                "--tapes-url",
+                "--api-url",
                 "http://x",
             ])
             .unwrap();
@@ -494,7 +482,7 @@ mod tests {
                 "tapesctl",
                 "hello-world",
                 "get-hello",
-                "--tapes-url",
+                "--api-url",
                 "http://x",
             ])
             .expect("a cassette's name is a top-level command");
@@ -530,7 +518,7 @@ mod tests {
                 cassette::command::NOUN,
                 "sessions",
                 "get-hello",
-                "--tapes-url",
+                "--api-url",
                 "http://x",
             ])
             .expect("the colliding cassette stays reachable under the noun");
@@ -630,7 +618,7 @@ mod tests {
             tapes_url: Some(server.uri()),
             ..Config::default()
         };
-        let url_flag = format!("--tapes-url={}", server.uri());
+        let url_flag = format!("--api-url={}", server.uri());
         for shape in [
             vec!["tapesctl", "sessions", "list"],
             vec!["tapesctl", url_flag.as_str(), "sessions", "list"],
@@ -666,7 +654,7 @@ mod tests {
             cassette::command::NOUN,
             "hello-world",
             "get-hello",
-            "--tapes-url",
+            "--api-url",
             &server.uri(),
         ]
         .iter()
@@ -694,7 +682,7 @@ mod tests {
 
     #[test]
     fn the_generated_surface_and_the_global_flag_are_one_argument_not_two() {
-        // Two ids sharing `--tapes-url` is a duplicate the moment the global
+        // Two ids sharing `--api-url` is a duplicate the moment the global
         // propagates into a generated method, and clap answers a duplicate by
         // panicking — a crash a user would trigger just by pointing tapesctl at
         // their own server.
@@ -720,7 +708,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             method
-                .get_one::<String>(cli::TAPES_URL_ARG)
+                .get_one::<String>(cli::API_URL_ARG)
                 .map(String::as_str),
             Some("http://configured"),
         );

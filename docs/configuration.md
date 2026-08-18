@@ -15,7 +15,7 @@ Both endpoints have local defaults:
 
 | purpose | default | flag | environment | config key |
 |---|---|---|---|---|
-| read API | `http://localhost:8081` | `--tapes-url` | `TAPES_API_URL` | `tapes-url` |
+| read API | `http://localhost:8081` | `--api-url` | `TAPES_API_URL` | `tapes-url` |
 | ingest API | `http://localhost:8082` | `--ingest-url` | `TAPES_INGEST_URL` | `ingest-url` |
 
 For either endpoint, an explicit flag beats its environment variable, which
@@ -26,14 +26,14 @@ per-repository override. One user-level file, one variable, one flag.
 
 Three mechanics that are easy to get wrong:
 
-- **Leaf position beats global position.** `tapesctl --tapes-url A sessions
-  list --tapes-url B` uses `B`.
+- **Leaf position beats global position.** `tapesctl --api-url A sessions
+  list --api-url B` uses `B`.
 - **The configured value is installed as the flag's default**, rather than
   resolved by hand. So precedence is the argument parser's own, and a default
   does not count as a user-supplied argument — which is why a bare `tapesctl`
   still prints help on a configured machine instead of complaining about a
   missing subcommand.
-- **The global `--tapes-url` deliberately carries no environment binding.**
+- **The global `--api-url` deliberately carries no environment binding.**
   The parser counts an environment-sourced value as user-supplied, so binding
   `TAPES_API_URL` at the top level would make a bare `tapesctl` answer `error:
   requires a subcommand` on any machine with the variable exported. The
@@ -199,9 +199,9 @@ reports nothing about you anywhere.
 `start` clears nothing, so a variable set in your shell reaches the harness
 unchanged.
 
-## Commands that ignore `--tapes-url`
+## Commands that ignore `--api-url`
 
-Because the global flag propagates into every leaf's help, `--tapes-url` is
+Because the global flag propagates into every leaf's help, `--api-url` is
 rendered for commands that never make an HTTP call: `config set`, `config get`,
 `config path`, `version`, and `plugin uninstall`.
 It is inert in all of them.
