@@ -190,7 +190,7 @@ libc = "0.2"
 netsock = "0.7"
 
 # --- misc ---
-dirs = "5"
+dirs = "6"
 time = { version = "0.3", features = ["formatting", "parsing", "serde", "macros"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 

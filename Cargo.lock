@@ -409,7 +409,16 @@ version = "5.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "44c45a9d03d6676652bcb5e724c7e988de1acad23a711b5217ab9cbecbec2225"
 dependencies = [
- "dirs-sys",
+ "dirs-sys 0.4.1",
+]
+
+[[package]]
+name = "dirs"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3e8aa94d75141228480295a7d0e7feb620b1a5ad9f12bc40be62411e38cce4e"
+dependencies = [
+ "dirs-sys 0.5.0",
 ]
 
 [[package]]
@@ -420,8 +429,20 @@ checksum = "520f05a5cbd335fae5a99ff7a6ab8627577660ee5cfd6a94a6a929b52ff0321c"
 dependencies = [
  "libc",
  "option-ext",
- "redox_users",
+ "redox_users 0.4.6",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "dirs-sys"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e01a3366d27ee9890022452ee61b2b63a67e6f13f58900b651ff5665f0bb1fab"
+dependencies = [
+ "libc",
+ "option-ext",
+ "redox_users 0.5.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1387,6 +1408,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "redox_users"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4e608c6638b9c18977b00b475ac1f28d14e84b27d8d42f70e0bf1e3dec127ac"
+dependencies = [
+ "getrandom 0.2.17",
+ "libredox",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "regex"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1796,7 +1828,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bd1bf95f204069f3282e09f47e290eb9e3b06612147bc7b9c811f0581d094334"
 dependencies = [
  "clap",
- "dirs",
+ "dirs 5.0.1",
  "http",
  "reqwest",
  "serde",
@@ -1815,7 +1847,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6f46e7d9bab89f4ae94f30aca4fc12bfdf25b6fdc4d1df670d312fee8bb43211"
 dependencies = [
  "arc-swap",
- "dirs",
+ "dirs 5.0.1",
  "http",
  "libc",
  "serde",
@@ -1837,7 +1869,7 @@ dependencies = [
  "base64",
  "bytes",
  "clap",
- "dirs",
+ "dirs 6.0.0",
  "flate2",
  "futures-util",
  "http",
