@@ -168,7 +168,7 @@ mod tests {
     fn args(server: &MockServer, quiet: bool) -> SearchArgs {
         SearchArgs {
             api: ApiArgs {
-                tapes_url: Some(server.uri()),
+                api_url: Some(server.uri()),
             },
             query: "charm CLI".to_owned(),
             top: 5,
@@ -291,7 +291,7 @@ mod tests {
     #[tokio::test]
     async fn a_search_without_a_server_fails_on_the_missing_url() {
         let result = run(SearchArgs {
-            api: ApiArgs { tapes_url: None },
+            api: ApiArgs { api_url: None },
             query: "x".to_owned(),
             top: 5,
             quiet: false,

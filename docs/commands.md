@@ -10,8 +10,7 @@ serves. This page is the whole reference; [Capture](./capture.md) explains the
 concepts behind `start`, `capture`, and `sync`, and
 [Cassettes](./cassettes.md) covers the discovered surface.
 
-Which port a command wants is decided by what it does, not by which flag it
-takes — they all spell it `--tapes-url`. See
+Read commands use `--api-url`; capture commands use `--ingest-url`. See
 [The two ports](./introduction.md#the-two-ports).
 
 ## Global flags
@@ -22,22 +21,22 @@ subcommand and reach every leaf.
 | flag | type | default | notes |
 |---|---|---|---|
 | `-v`, `--verbose` | count | `0` | `-v` is `debug`, `-vv` is `trace`. `RUST_LOG` overrides both |
-| `--tapes-url <URL>` | string | the configured default, if any | falls back to `TAPES_URL`, then to `config.toml` |
+| `--api-url <URL>` | string | `http://localhost:8081` | falls back to `TAPES_API_URL`, then `config.toml` |
 | `-h`, `--help` | flag | — | |
 | `-V`, `--version` | flag | — | prints one line; see [`version`](#version) before trusting it |
 
 Both are also read straight off the argument list before parsing, and both stop
-at a bare `--`. A harness's own `-v` or `--tapes-url` after the separator
+at a bare `--`. A harness's own `-v` or `--api-url` after the separator
 cannot steer `tapesctl`.
 
 **Leaf position beats global position.** Given both,
-`tapesctl --tapes-url A sessions list --tapes-url B` uses `B`.
+`tapesctl --api-url A sessions list --api-url B` uses `B`.
 
-**`--tapes-url` appears in the help of commands that never make an HTTP
+**`--api-url` appears in the help of commands that never make an HTTP
 call** — `config set`, `config get`, `config path`,
 `version`, and `plugin uninstall` — because the global flag propagates into
 every leaf's help. It is inert there. Its presence in `config`'s help is
-actively misleading, since the point of `config set tapes-url` is that you do
+actively misleading, since the point of `config set api-url` is that you do
 not have a server configured yet.
 
 ## Exit codes
@@ -64,7 +63,8 @@ Every variable `tapesctl` reads.
 
 | variable | read by |
 |---|---|
-| `TAPES_URL` | `start`, `capture`, `sync`, every read command, cassette discovery and every generated method |
+| `TAPES_API_URL` | every read command, cassette discovery, and generated methods |
+| `TAPES_INGEST_URL` | `start`, `capture`, `sync` |
 | `TAPES_UPSTREAM` | `start`, `capture` |
 | `TAPES_WEB_URL` | `start`, `capture` |
 | `TAPES_ORG_ID` | `start`, `capture` |
@@ -84,8 +84,8 @@ There is no telemetry variable, because there is no telemetry.
 Launch a harness under a capture proxy and ship its turns to the ingest server.
 
 ```bash
-tapesctl start claude --tapes-url http://localhost:8082
-tapesctl start claude --tapes-url http://localhost:8082 -- --model opus
+tapesctl start claude --ingest-url http://localhost:8082
+tapesctl start claude --ingest-url http://localhost:8082 -- --model opus
 ```
 
 Anything after `--` is passed to the harness verbatim.
@@ -94,7 +94,7 @@ Anything after `--` is passed to the harness verbatim.
 |---|---|---|
 | `<HARNESS>` | required — `claude`, `codex`, or `pi` | — |
 | `[HARNESS_ARGS]...` | — | — |
-| `--tapes-url <URL>` | configured default | `TAPES_URL` |
+| `--ingest-url <URL>` | `http://localhost:8082` | `TAPES_INGEST_URL` |
 | `--upstream <URL>` | the harness's own provider API | `TAPES_UPSTREAM` |
 | `--schema <SCHEMA>` | the harness's own | — |
 | `--web-url <URL>` | none | `TAPES_WEB_URL` |
@@ -108,12 +108,12 @@ is an error, not a no-op.
 
 `--web-url` is used only to build the printed console link.
 
-Endpoints: `POST {tapes-url}/v1/ingest` for the wire lane,
-`POST {tapes-url}/v1/ingest/transcript` for the transcript lane. Neither sends
+Endpoints: `POST {ingest-url}/v1/ingest` for the wire lane,
+`POST {ingest-url}/v1/ingest/transcript` for the transcript lane. Neither sends
 an authentication header. The proxy listens on `127.0.0.1:0` — an ephemeral
 port, per launch.
 
-**A base path in `--tapes-url` is discarded.** `--tapes-url http://host:8090/base/`
+**A base path in `--ingest-url` is discarded.** `--ingest-url http://host:8090/base/`
 posts to `http://host:8090/v1/ingest`, not `/base/v1/ingest`. Upstream
 forwarding is the opposite and concatenates, so an upstream route prefix
 survives.
@@ -162,7 +162,6 @@ All exit `1`.
 | `--schema does not apply to claude, which speaks anthropic only (it is for a harness that redirects several providers to one endpoint, such as pi)` | `--schema` on `claude` or `codex` |
 | `invalid --schema "X" (valid values: anthropic, openai)` | bad `--schema` value |
 | `pi cannot be captured until its capture plugin is installed: no plugin at <path>. Run `tapesctl plugin install pi` first.` | the pi extension is absent — checked before anything binds or spawns |
-| `no tapes server URL: pass --tapes-url, set TAPES_URL, or configure a default with `tapesctl config set tapes-url <url>`` | no server from any of the three sources |
 | `could not bind the capture proxy` / `could not start <harness>` | loopback bind or spawn failure |
 
 **Capture failures never appear here.** An oversize body, an ingest rejection, a
@@ -175,7 +174,7 @@ Bind the address a self-launching harness was installed against, and capture
 whichever sessions run in that window. Today the only harness is `codex-app`.
 
 ```bash
-tapesctl capture codex-app --tapes-url http://localhost:8082
+tapesctl capture codex-app --ingest-url http://localhost:8082
 ```
 
 A deliberate subset of `start`'s flags: there is no `--schema`, no
@@ -185,7 +184,7 @@ codex-app -- -p hi` is a parse error.
 | flag | default | env |
 |---|---|---|
 | `<HARNESS>` | required | — |
-| `--tapes-url <URL>` | configured default | `TAPES_URL` |
+| `--ingest-url <URL>` | `http://localhost:8082` | `TAPES_INGEST_URL` |
 | `--upstream <URL>` | the backend honouring the configured credential | `TAPES_UPSTREAM` |
 | `--web-url <URL>` | none | `TAPES_WEB_URL` |
 | `--org-id <UUID>` | `""` | `TAPES_ORG_ID` |
@@ -209,13 +208,13 @@ rather than warned about.
 Sweep completed Claude transcripts on disk into the ingest server.
 
 ```bash
-tapesctl sync --tapes-url http://localhost:8082
-tapesctl sync --tapes-url http://localhost:8082 --since-days 0
+tapesctl sync --ingest-url http://localhost:8082
+tapesctl sync --ingest-url http://localhost:8082 --since-days 0
 ```
 
 | flag | default | env |
 |---|---|---|
-| `--tapes-url <URL>` | configured default | `TAPES_URL` |
+| `--ingest-url <URL>` | `http://localhost:8082` | `TAPES_INGEST_URL` |
 | `--projects-root <PATH>` | `~/.claude/projects` | — |
 | `--auth-subject <S>` | `local:<username>` | `TAPES_AUTH_SUBJECT` |
 | `--since-days <N>` | **7** — see below | — |
@@ -254,8 +253,8 @@ reach you without a client upgrade.
 | `raw-turns <ID>` | `GET /v1/sessions/{id}/raw_turns` | — |
 
 ```bash
-tapesctl sessions list --limit 20 --tapes-url http://localhost:8081
-tapesctl sessions get 01JDQ8F3K2M4N6P8R0T2V4X6Z8 --tapes-url http://localhost:8081
+tapesctl sessions list --limit 20 --api-url http://localhost:8081
+tapesctl sessions get 01JDQ8F3K2M4N6P8R0T2V4X6Z8 --api-url http://localhost:8081
 ```
 
 `sessions list` flags are all optional and all omitted from the query when
@@ -285,7 +284,7 @@ tapesctl: invalid --payload "bogus" (valid values: full, preview)
 turns behind that derivation.
 
 The read API carries **no authentication**, and redirects are refused rather
-than followed. A base path in `--tapes-url` is discarded here too.
+than followed. A base path in `--api-url` is discarded here too.
 
 ## traces
 
@@ -314,8 +313,8 @@ Semantic search over captured spans. Hits are individual main-conversation LLM
 spans with their trace and turn context.
 
 ```bash
-tapesctl search "how to configure logging" --tapes-url http://localhost:8081
-tapesctl search "error handling patterns" --top 10 --tapes-url http://localhost:8081
+tapesctl search "how to configure logging" --api-url http://localhost:8081
+tapesctl search "error handling patterns" --top 10 --api-url http://localhost:8081
 ```
 
 | flag | default | notes |
@@ -354,7 +353,7 @@ Write a session's export bundle — JSONL, one line per trace — to a file or
 stdout.
 
 ```bash
-tapesctl export 01JDQ8F3K2M4N6P8R0T2V4X6Z8 -o bundle.jsonl --tapes-url http://localhost:8081
+tapesctl export 01JDQ8F3K2M4N6P8R0T2V4X6Z8 -o bundle.jsonl --api-url http://localhost:8081
 ```
 
 | flag | default |
@@ -386,7 +385,7 @@ render. `POST /v1/admin/seed/demo` — an **admin route on the read API**, not o
 ingest.
 
 ```bash
-tapesctl seed --tapes-url http://localhost:8081
+tapesctl seed --api-url http://localhost:8081
 ```
 
 ```
@@ -486,7 +485,7 @@ identifies it, not so that you run it.
 ## config
 
 Key and value, following `git config` and `gh config` rather than a flag per
-setting. Needs no server — requiring `--tapes-url` to configure `--tapes-url`
+setting. Needs no server — requiring `--api-url` to configure `--api-url`
 would be a circle.
 
 | leaf | args | behaviour |
@@ -496,8 +495,8 @@ would be a circle.
 | `path` | none | prints the path whether or not the file exists |
 
 ```bash
-tapesctl config set tapes-url http://localhost:8081
-tapesctl config get tapes-url
+tapesctl config set api-url http://localhost:8081
+tapesctl config get api-url
 tapesctl config path
 ```
 
@@ -508,13 +507,13 @@ tapesctl config path
 Validation, all exiting `1` and writing nothing:
 
 ```
-tapesctl: unknown config key "tapes-erl" (known keys: tapes-url)
+tapesctl: unknown config key "tapes-erl" (known keys: api-url)
 tapesctl: invalid tapes URL
-tapesctl: tapes-url must be an http or https URL; "ftp" is not a scheme this client can call
+tapesctl: api-url must be an http or https URL; "ftp" is not a scheme this client can call
 ```
 
 **A known-but-unset key prints nothing and exits `0`**, so
-`$(tapesctl config get tapes-url)` is empty rather than an error a script has
+`$(tapesctl config get api-url)` is empty rather than an error a script has
 to special-case. That also means `config get` can print nothing from a file
 that is not empty — only known and set keys are listed. See
 [Configuration](./configuration.md).
@@ -561,7 +560,6 @@ Every runtime error is one line on stderr prefixed `tapesctl: `, and exits `1`.
 
 | family | shape |
 |---|---|
-| no server configured | `no tapes server URL: pass --tapes-url, set TAPES_URL, or configure a default with `tapesctl config set tapes-url <url>`` |
 | unreachable server | `could not reach the tapes API: could not reach the tapes API` |
 | non-success status | `tapes API returned <status> for <endpoint>: <body>` |
 | invalid flag value | `invalid --<flag> "<value>" (valid values: …)` — raised before any request |

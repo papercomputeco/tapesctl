@@ -15,7 +15,7 @@ pub use tapes_client::cassettes::spec::{Cassette, Location, Method, Param, Surfa
 
 /// Flag names the generated surface cannot hand to a cassette parameter,
 /// because the cassette subcommand defines them itself.
-const RESERVED_FLAGS: [&str; 4] = ["tapes-url", "body", "help", "verbose"];
+const RESERVED_FLAGS: [&str; 4] = ["api-url", "body", "help", "verbose"];
 
 /// tapesctl's reducer parameterization: exactly the reserved list the
 /// in-tree reducer hard-coded before the extraction.

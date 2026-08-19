@@ -168,7 +168,7 @@ async fn a_server_s_cassettes_become_commands_and_survive_it_going_away() {
             "row-7",
             "--verbose-rows",
             "true",
-            "--tapes-url",
+            "--api-url",
             &server.uri(),
         ])
         .expect("the generated command should parse");
@@ -184,7 +184,7 @@ async fn a_server_s_cassettes_become_commands_and_survive_it_going_away() {
             "hello-world",
             "get-hello-row",
             "row-7",
-            "--tapes-url",
+            "--api-url",
             &server.uri(),
         ])
         .expect_err("the retired top-level spelling must not parse");
@@ -209,7 +209,7 @@ async fn a_server_s_cassettes_become_commands_and_survive_it_going_away() {
                 command::NOUN,
                 "hello-world",
                 "create-hello",
-                "--tapes-url",
+                "--api-url",
                 &server.uri(),
             ])
             .is_err(),

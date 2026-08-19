@@ -108,7 +108,7 @@ mod tests {
 
         let result = run(SeedArgs {
             api: ApiArgs {
-                tapes_url: Some(server.uri()),
+                api_url: Some(server.uri()),
             },
         })
         .await;
@@ -132,7 +132,7 @@ mod tests {
 
         let err = run(SeedArgs {
             api: ApiArgs {
-                tapes_url: Some(server.uri()),
+                api_url: Some(server.uri()),
             },
         })
         .await

@@ -38,7 +38,7 @@ That message is logged at warning level, so it is present at default
 verbosity. Then re-run against ingest:
 
 ```bash
-tapesctl start claude --tapes-url http://localhost:8082
+tapesctl start claude --ingest-url http://localhost:8082
 ```
 
 **Other causes, in the order worth checking:**
@@ -50,9 +50,9 @@ tapesctl start claude --tapes-url http://localhost:8082
   `debug`, so they are invisible until you re-run with `-v`.
 - **The harness never called a model.** Launched and quit produces exactly the
   same line, honestly.
-- **You are reading a different server than you wrote to.** With `TAPES_URL`
-  exported, a `--tapes-url` on the read command overrides it, and vice versa —
-  check both. `tapesctl config get tapes-url` shows the configured fallback.
+- **You are reading a different server than you wrote to.** Check
+  `TAPES_API_URL` / `api-url` for reads and `TAPES_INGEST_URL` / `ingest-url`
+  for capture.
 
 ## `sessions get` 404s the id that `start` printed
 
@@ -75,7 +75,7 @@ the `id` on the result:
 ```bash
 tapesctl sessions list --harness-id claude \
   --harness-session-id f47ac10b-58cc-4372-a567-0e02b2c3d479 \
-  --tapes-url http://localhost:8081 | jq -r '.items[].id'
+  --api-url http://localhost:8081 | jq -r '.items[].id'
 ```
 
 ```
@@ -94,28 +94,15 @@ subagent's turn landing ahead of the main thread's names the sub-thread.
 Listing is reliable where the printed line is not. See
 [Session ids](./capture.md#session-ids).
 
-## `no tapes server URL`
+## Local server is unreachable
 
-**Symptom.**
+Read commands default to `http://localhost:8081`; capture commands default to
+`http://localhost:8082`. Set `TAPES_API_URL` or `TAPES_INGEST_URL` (or their
+corresponding flags) when your deployment uses other addresses.
 
-```
-tapesctl: no tapes server URL: pass --tapes-url, set TAPES_URL, or configure a default with `tapesctl config set tapes-url <url>`
-```
-
-**Cause.** None of the three sources named a server. `tapesctl` never guesses a
-host — a capture pointed at whatever happened to be listening is worse than one
-that did not start.
-
-**Fix.** Any of the three. The third is the one worth doing:
-
-```bash
-tapesctl config set tapes-url http://localhost:8081
-```
-
-**If you set it and still get this**, check which one you set and which one the
-command wants. Remember a configured default holds one URL while the deployment
-has two ports; capture commands may still need an explicit
-`--tapes-url http://localhost:8082`.
+**If you set it and still get this**, check which endpoint the command wants:
+`--api-url` / `api-url` is read-only; `--ingest-url` / `ingest-url` is for
+capture.
 
 **If `config get` prints nothing but the file is not empty**, that is expected:
 only keys that are both known and set are listed. A file containing only keys
@@ -131,7 +118,7 @@ a host that does not route. Check the server is up and that you named the
 listener you meant.
 
 Note that a **path prefix in the URL is discarded**:
-`--tapes-url http://host/base/` reads from `http://host/v1/sessions`, not
+`--api-url http://host/base/` reads from `http://host/v1/sessions`, not
 `/base/v1/sessions`. If your deployment is mounted under a path, that is a
 server-side routing question, not something the flag can express.
 
@@ -156,7 +143,7 @@ they follow `--`. Given only one, pi ignores it and falls back to a saved
 default that may be a provider this capture does not front.
 
 ```bash
-tapesctl start pi --tapes-url http://localhost:8082 -- --provider anthropic --model <model-id>
+tapesctl start pi --ingest-url http://localhost:8082 -- --provider anthropic --model <model-id>
 ```
 
 ## Plugin and extension conflicts
@@ -223,7 +210,7 @@ or `--no-transcripts` was passed, or nothing was tailing when the session ran.
 **For a Claude session that already ended**, sweep it up:
 
 ```bash
-tapesctl sync --tapes-url http://localhost:8082 --since-days 0
+tapesctl sync --ingest-url http://localhost:8082 --since-days 0
 ```
 
 `sync` is safe to repeat — the server dedups on a content hash.
@@ -279,9 +266,9 @@ bug report as version-less, and record where you got the binary instead.
 ## Turning on more detail
 
 ```bash
-tapesctl -v sessions list --tapes-url http://localhost:8081   # debug
-tapesctl -vv sessions list --tapes-url http://localhost:8081  # trace
-RUST_LOG=debug tapesctl sessions list --tapes-url http://localhost:8081
+tapesctl -v sessions list --api-url http://localhost:8081   # debug
+tapesctl -vv sessions list --api-url http://localhost:8081  # trace
+RUST_LOG=debug tapesctl sessions list --api-url http://localhost:8081
 ```
 
 `RUST_LOG` overrides the `-v` count. A set-but-empty `RUST_LOG` is treated as

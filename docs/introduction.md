@@ -40,10 +40,9 @@ Those are the defaults of a local `tapes serve`. A deployment that fronts both
 behind one hostname gives you one URL for everything; check with whoever runs
 it. What does not vary is which side of the split a command is on.
 
-Because a configured default holds one URL, a machine that both captures and
-reads a local server cannot name both with configuration alone. Configure the
-one you type least often and pass the other explicitly. See
-[Configuration](./configuration.md).
+Read and ingest have independent configuration and local defaults. Use
+`--api-url` / `TAPES_API_URL` for reads and `--ingest-url` /
+`TAPES_INGEST_URL` for capture. See [Configuration](./configuration.md).
 
 ## Install
 
@@ -79,7 +78,7 @@ traffic is forwarded to its own provider API — and the capture proxy dies with
 it. The URL is the **ingest** port:
 
 ```bash
-tapesctl start claude --tapes-url http://localhost:8082
+tapesctl start claude --ingest-url http://localhost:8082
 ```
 
 Before the harness launches, and again when it exits, `tapesctl` prints to
@@ -94,7 +93,7 @@ tapesctl: logs at ~/.tapes/logs/start-20260813-180411-54233.log
 Now read it back, against the **read** port:
 
 ```bash
-tapesctl sessions list --limit 20 --tapes-url http://localhost:8081
+tapesctl sessions list --limit 20 --api-url http://localhost:8081
 ```
 
 ```json
@@ -128,7 +127,7 @@ why the filter comes as a pair.
 Read the session with the `id` from the listing:
 
 ```bash
-tapesctl sessions get 01JDQ8F3K2M4N6P8R0T2V4X6Z8 --tapes-url http://localhost:8081
+tapesctl sessions get 01JDQ8F3K2M4N6P8R0T2V4X6Z8 --api-url http://localhost:8081
 ```
 
 Every read command prints the server's JSON pretty-printed and nothing else, so

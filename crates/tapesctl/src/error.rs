@@ -79,18 +79,9 @@ pub enum Error {
         path: PathBuf,
     },
 
-    /// No server was named. On the capture side there would be nowhere to send
-    /// turns, and failing loudly beats running a session that captures nothing;
-    /// on the read side there is nothing to query.
-    ///
-    /// The message names all three sources rather than only the flag, because
-    /// the answer a user most often wants is the one they only have to give
-    /// once. A guessed `http://localhost:8080` is still refused: guessing is
-    /// how a capture ends up pointed at whatever happens to be listening.
-    #[snafu(display(
-        "no tapes server URL: pass --tapes-url, set TAPES_URL, or configure a \
-         default with `tapesctl config set tapes-url <url>`"
-    ))]
+    /// No server was named. This is only reachable by callers that bypass the
+    /// CLI parser, which supplies the localhost API or ingest default.
+    #[snafu(display("no tapes server URL"))]
     MissingTapesUrl,
 
     /// `tapesctl config` was given a key it does not have.
@@ -165,7 +156,7 @@ pub enum Error {
         source: std::io::Error,
     },
 
-    /// `--tapes-url` was not a URL.
+    /// `--api-url` was not a URL.
     #[snafu(display("invalid tapes URL"))]
     TapesUrl {
         /// Underlying parse failure.

@@ -53,7 +53,7 @@ use contract::ops;
 /// Resolve the API base URL from arguments and the environment.
 pub fn resolve_client(args: &ApiArgs) -> Result<ApiClient> {
     let raw = args
-        .tapes_url
+        .api_url
         .as_deref()
         .context(error::MissingTapesUrlSnafu)?;
     Ok(connect(Url::parse(raw).context(error::TapesUrlSnafu)?))
@@ -193,7 +193,7 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn api_args(url: Option<String>) -> ApiArgs {
-        ApiArgs { tapes_url: url }
+        ApiArgs { api_url: url }
     }
 
     fn sessions_list_args(url: String) -> SessionsListArgs {
@@ -212,21 +212,10 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_tapes_url_is_an_error_rather_than_a_guessed_host() {
-        // Still an error, and still for the original reason: a guessed
-        // `http://localhost:8080` is how a capture ends up pointed at whatever
-        // happens to be listening. What changed is that there is now a third
-        // place a server can come from, so the refusal has to name all three —
-        // a user who has been retyping the flag every time should learn from
-        // this message that they never have to again.
-        let err = resolve_client(&api_args(None)).unwrap_err();
-        let rendered = format!("{err}");
-        for taught in ["--tapes-url", "TAPES_URL", "config set tapes-url"] {
-            assert!(
-                rendered.contains(taught),
-                "{taught:?} missing from: {rendered}"
-            );
-        }
+    fn a_manually_constructed_missing_url_is_an_error() {
+        // Normal CLI parsing supplies the localhost default. This covers the
+        // direct library call, which intentionally still refuses an omission.
+        assert!(resolve_client(&api_args(None)).is_err());
     }
 
     #[test]

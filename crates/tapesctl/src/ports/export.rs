@@ -85,7 +85,7 @@ mod tests {
     fn args(server: &MockServer, output: Option<std::path::PathBuf>) -> ExportArgs {
         ExportArgs {
             api: ApiArgs {
-                tapes_url: Some(server.uri()),
+                api_url: Some(server.uri()),
             },
             session_id: "s-1".to_owned(),
             detail: None,

@@ -155,7 +155,10 @@ pub async fn build_parser(argv: &[String], config: &Config) -> (clap::Command, S
         // No epilogue text is ever rendered from here: clap only prints the
         // top-level help — the only place `after_help` shows — for the bare
         // and `help` shapes, and those are gated in.
-        let command = parser(&surface, None, config.tapes_url.as_deref(), None);
+        let command = with_ingest_default(
+            parser(&surface, None, config.api_url.as_deref(), None),
+            config.ingest_url.as_deref(),
+        );
         return (command, surface);
     }
 
@@ -163,14 +166,19 @@ pub async fn build_parser(argv: &[String], config: &Config) -> (clap::Command, S
     // sources, in the same order, that the parse below applies to every command
     // that needs a server. Discovery has to resolve them itself because it runs
     // before the parse that would otherwise do it.
-    let server = cli::discovery_url(argv).or_else(|| config.tapes_url.clone());
+    let server = cli::discovery_url(argv)
+        .or_else(|| config.api_url.clone())
+        .or_else(|| Some(cli::DEFAULT_API_URL.to_owned()));
     let (surface, provenance) = discover(server.as_deref()).await;
     (
-        parser(
-            &surface,
-            server.as_deref(),
-            config.tapes_url.as_deref(),
-            provenance,
+        with_ingest_default(
+            parser(
+                &surface,
+                server.as_deref(),
+                config.api_url.as_deref(),
+                provenance,
+            ),
+            config.ingest_url.as_deref(),
         ),
         surface,
     )
@@ -199,7 +207,7 @@ fn parser(
     let command = tapes_client::cli::augment(
         cassette::command::mount(Cli::command(), surface),
         surface,
-        cassette::command::with_tapes_url,
+        cassette::command::with_api_url,
     )
     .after_help(cassette::command::epilogue(server, surface, provenance));
 
@@ -210,12 +218,23 @@ fn parser(
     // including the generated cassette methods. A default also does not count
     // as an argument the user supplied, so a bare `tapesctl` still answers with
     // help on a machine that has one configured.
-    match configured {
-        Some(configured) => command.mut_arg(cli::TAPES_URL_ARG, |arg| {
-            arg.default_value(configured.to_owned())
-        }),
-        None => command,
-    }
+    command.mut_arg(cli::API_URL_ARG, |arg| {
+        arg.default_value(configured.unwrap_or(cli::DEFAULT_API_URL).to_owned())
+    })
+}
+
+/// Install one ingest default on the three write commands. Read commands never
+/// see it, so an API URL cannot accidentally become an ingest target.
+fn with_ingest_default(command: clap::Command, configured: Option<&str>) -> clap::Command {
+    let ingest_url = configured.unwrap_or(cli::DEFAULT_INGEST_URL).to_owned();
+    ["start", "capture", "sync"]
+        .into_iter()
+        .fold(command, |command, name| {
+            let ingest_url = ingest_url.clone();
+            command.mut_subcommand(name, |command| {
+                command.mut_arg(cli::INGEST_URL_ARG, |arg| arg.default_value(ingest_url))
+            })
+        })
 }
 
 /// The cassette surface for the server this command line names, if any.
@@ -337,7 +356,7 @@ mod tests {
         );
     }
 
-    /// The configured server is not a fourth way of saying `--tapes-url`; it is
+    /// The configured server is not a fourth way of saying `--api-url`; it is
     /// the way that survives a new shell. This is the whole of what the config
     /// file buys, at the seam where it is applied.
     #[test]
@@ -348,7 +367,46 @@ mod tests {
         let cli = Cli::from_arg_matches(&matches).unwrap();
         match cli.command {
             Command::Sessions(SessionsCommand::List(args)) => {
-                assert_eq!(args.api.tapes_url.as_deref(), Some("http://configured"));
+                assert_eq!(args.api.api_url.as_deref(), Some("http://configured"));
+            }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn api_and_ingest_defaults_are_independent() {
+        let api = parser(&Surface::default(), None, None, None)
+            .try_get_matches_from(["tapesctl", "sessions", "list"])
+            .unwrap();
+        let api = Cli::from_arg_matches(&api).unwrap();
+        match api.command {
+            Command::Sessions(SessionsCommand::List(args)) => {
+                assert_eq!(args.api.api_url.as_deref(), Some(cli::DEFAULT_API_URL));
+            }
+            other => panic!("got: {other:?}"),
+        }
+
+        let ingest = with_ingest_default(parser(&Surface::default(), None, None, None), None)
+            .try_get_matches_from(["tapesctl", "start", "claude"])
+            .unwrap();
+        let ingest = Cli::from_arg_matches(&ingest).unwrap();
+        match ingest.command {
+            Command::Start(args) => {
+                assert_eq!(args.ingest_url.as_deref(), Some(cli::DEFAULT_INGEST_URL));
+            }
+            other => panic!("got: {other:?}"),
+        }
+
+        let configured = with_ingest_default(
+            parser(&Surface::default(), None, None, None),
+            Some("http://configured-ingest"),
+        )
+        .try_get_matches_from(["tapesctl", "sync"])
+        .unwrap();
+        let configured = Cli::from_arg_matches(&configured).unwrap();
+        match configured.command {
+            Command::Sync(args) => {
+                assert_eq!(args.ingest_url.as_deref(), Some("http://configured-ingest"));
             }
             other => panic!("got: {other:?}"),
         }
@@ -359,27 +417,15 @@ mod tests {
         // The precedence is clap's own — a default loses to an argument — which
         // is why it is expressed as a default rather than resolved by hand.
         for argv in [
-            [
-                "tapesctl",
-                "--tapes-url",
-                "http://typed",
-                "sessions",
-                "list",
-            ],
-            [
-                "tapesctl",
-                "sessions",
-                "list",
-                "--tapes-url",
-                "http://typed",
-            ],
+            ["tapesctl", "--api-url", "http://typed", "sessions", "list"],
+            ["tapesctl", "sessions", "list", "--api-url", "http://typed"],
         ] {
             let matches = parser(&Surface::default(), None, Some("http://configured"), None)
                 .try_get_matches_from(argv)
                 .unwrap();
             match Cli::from_arg_matches(&matches).unwrap().command {
                 Command::Sessions(SessionsCommand::List(args)) => {
-                    assert_eq!(args.api.tapes_url.as_deref(), Some("http://typed"));
+                    assert_eq!(args.api.api_url.as_deref(), Some("http://typed"));
                 }
                 other => panic!("got: {other:?}"),
             }
@@ -416,7 +462,7 @@ mod tests {
                 cassette::command::NOUN,
                 "hello-world",
                 "get-hello",
-                "--tapes-url",
+                "--api-url",
                 "http://x",
             ])
             .unwrap();
@@ -436,7 +482,7 @@ mod tests {
                 "tapesctl",
                 "hello-world",
                 "get-hello",
-                "--tapes-url",
+                "--api-url",
                 "http://x",
             ])
             .expect("a cassette's name is a top-level command");
@@ -472,7 +518,7 @@ mod tests {
                 cassette::command::NOUN,
                 "sessions",
                 "get-hello",
-                "--tapes-url",
+                "--api-url",
                 "http://x",
             ])
             .expect("the colliding cassette stays reachable under the noun");
@@ -569,9 +615,10 @@ mod tests {
         let server = serve_hello_world().await;
 
         let configured = Config {
-            tapes_url: Some(server.uri()),
+            api_url: Some(server.uri()),
+            ..Config::default()
         };
-        let url_flag = format!("--tapes-url={}", server.uri());
+        let url_flag = format!("--api-url={}", server.uri());
         for shape in [
             vec!["tapesctl", "sessions", "list"],
             vec!["tapesctl", url_flag.as_str(), "sessions", "list"],
@@ -607,7 +654,7 @@ mod tests {
             cassette::command::NOUN,
             "hello-world",
             "get-hello",
-            "--tapes-url",
+            "--api-url",
             &server.uri(),
         ]
         .iter()
@@ -635,7 +682,7 @@ mod tests {
 
     #[test]
     fn the_generated_surface_and_the_global_flag_are_one_argument_not_two() {
-        // Two ids sharing `--tapes-url` is a duplicate the moment the global
+        // Two ids sharing `--api-url` is a duplicate the moment the global
         // propagates into a generated method, and clap answers a duplicate by
         // panicking — a crash a user would trigger just by pointing tapesctl at
         // their own server.
@@ -661,7 +708,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             method
-                .get_one::<String>(cli::TAPES_URL_ARG)
+                .get_one::<String>(cli::API_URL_ARG)
                 .map(String::as_str),
             Some("http://configured"),
         );
@@ -680,7 +727,7 @@ mod tests {
     async fn version_is_ok() {
         let cli = Cli {
             verbose: 0,
-            tapes_url: None,
+            api_url: None,
             command: Command::Version,
         };
         assert!(run(cli).await.is_ok());
@@ -704,7 +751,7 @@ mod tests {
         // home.
         let cli = Cli {
             verbose: 0,
-            tapes_url: None,
+            api_url: None,
             command: Command::Plugin(PluginCommand::Install(PluginInstallArgs {
                 harness: "not-a-harness".to_owned(),
                 dry_run: false,
@@ -725,9 +772,9 @@ mod tests {
         // Not on a connection attempt: with no URL there is nowhere to connect.
         let cli = Cli {
             verbose: 0,
-            tapes_url: None,
+            api_url: None,
             command: Command::Sessions(SessionsCommand::Get(SessionIdArgs {
-                api: ApiArgs { tapes_url: None },
+                api: ApiArgs { api_url: None },
                 id: "s-1".to_owned(),
             })),
         };
@@ -738,9 +785,9 @@ mod tests {
     async fn seed_without_a_server_fails_on_the_missing_url() {
         let cli = Cli {
             verbose: 0,
-            tapes_url: None,
+            api_url: None,
             command: Command::Seed(SeedArgs {
-                api: ApiArgs { tapes_url: None },
+                api: ApiArgs { api_url: None },
             }),
         };
         assert!(matches!(run(cli).await, Err(Error::MissingTapesUrl)));

@@ -1,7 +1,7 @@
 //! The answers a user should only have to give once.
 //!
-//! Everything tapesctl talks to is named per invocation: `--tapes-url`, or
-//! `TAPES_URL` in the environment. Both are fine for a one-off and wrong for a
+//! The read API and ingest API are named independently: `--api-url` / `TAPES_API_URL`
+//! and `--ingest-url` / `TAPES_INGEST_URL`. Both are fine for a one-off and wrong for a
 //! habit — a shell without the export gets a tool that cannot list a session,
 //! and, worse, one whose `--help` quietly stops listing the cassette commands
 //! the deployment serves, because there is no server to discover them from.
@@ -10,9 +10,9 @@
 //! So there is a third source, consulted last: `~/.tapes/config.toml`, written
 //! by `tapesctl config set`. The precedence is the ordinary one —
 //!
-//! 1. `--tapes-url` on the command line,
-//! 2. `TAPES_URL` in the environment,
-//! 3. `tapes-url` in the config file.
+//! 1. its command-line flag,
+//! 2. its environment variable,
+//! 3. its config-file key.
 //!
 //! — and it is implemented by *being* that ordering rather than by
 //! re-implementing it: the configured value is installed as clap's default for
@@ -50,11 +50,13 @@ use crate::cli::ConfigCommand;
 use crate::error::{Result, error};
 use crate::machine::Machine;
 
-/// The configured default server. The one key today.
-pub const TAPES_URL_KEY: &str = "tapes-url";
+/// The configured default read API.
+pub const API_URL_KEY: &str = "api-url";
+/// The configured default ingest API.
+pub const INGEST_URL_KEY: &str = "ingest-url";
 
 /// Every key `tapesctl config` accepts, in the order help lists them.
-pub const KEYS: [&str; 1] = [TAPES_URL_KEY];
+pub const KEYS: [&str; 2] = [API_URL_KEY, INGEST_URL_KEY];
 
 /// The contents of `~/.tapes/config.toml`.
 ///
@@ -63,11 +65,16 @@ pub const KEYS: [&str; 1] = [TAPES_URL_KEY];
 /// the file is a map of independent settings and not a versioned document.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
-    /// The server every command falls back to. TOML key `tapes-url`, spelled
-    /// exactly like the flag and the `config set` key so there is one name to
-    /// learn.
-    #[serde(rename = "tapes-url", default, skip_serializing_if = "Option::is_none")]
-    pub tapes_url: Option<String>,
+    /// The read API every query falls back to.
+    #[serde(rename = "api-url", default, skip_serializing_if = "Option::is_none")]
+    pub api_url: Option<String>,
+    /// The ingest API every capture command falls back to.
+    #[serde(
+        rename = "ingest-url",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub ingest_url: Option<String>,
 }
 
 /// Refuse a key this build does not have.
@@ -93,13 +100,11 @@ impl Config {
     /// an error.
     pub fn get(&self, key: &str) -> Result<Option<&str>> {
         check_key(key)?;
-        // One key today, so this reads as an `if`; it becomes a `match` when
-        // there are two. `check_key` above is what makes the fallthrough safe —
-        // an unknown key has already been refused by the time it is reached.
-        if key == TAPES_URL_KEY {
-            return Ok(self.tapes_url.as_deref());
+        match key {
+            API_URL_KEY => Ok(self.api_url.as_deref()),
+            INGEST_URL_KEY => Ok(self.ingest_url.as_deref()),
+            _ => Ok(None), // check_key above rejects unknown keys.
         }
-        Ok(None)
     }
 
     /// Set one key from its command-line spelling, in memory.
@@ -109,8 +114,10 @@ impl Config {
     /// that distinction is the whole point.
     pub fn set(&mut self, key: &str, value: String) -> Result<()> {
         check_key(key)?;
-        if key == TAPES_URL_KEY {
-            self.tapes_url = Some(value);
+        match key {
+            API_URL_KEY => self.api_url = Some(value),
+            INGEST_URL_KEY => self.ingest_url = Some(value),
+            _ => {} // check_key above rejects unknown keys.
         }
         Ok(())
     }
@@ -120,10 +127,11 @@ impl Config {
     pub fn entries(&self) -> Vec<(&'static str, &str)> {
         KEYS.iter()
             .filter_map(|key| match *key {
-                TAPES_URL_KEY => self
-                    .tapes_url
+                API_URL_KEY => self.api_url.as_deref().map(|value| (API_URL_KEY, value)),
+                INGEST_URL_KEY => self
+                    .ingest_url
                     .as_deref()
-                    .map(|value| (TAPES_URL_KEY, value)),
+                    .map(|value| (INGEST_URL_KEY, value)),
                 _ => None,
             })
             .collect()
@@ -249,7 +257,7 @@ pub fn run_in(command: &ConfigCommand, path: &Path) -> Result<()> {
             match args.key.as_deref() {
                 Some(key) => {
                     // A key that is known but unset prints nothing and
-                    // succeeds, so `$(tapesctl config get tapes-url)` is empty
+                    // succeeds, so `$(tapesctl config get api-url)` is empty
                     // rather than an error a script has to special-case.
                     if let Some(value) = config.get(key)? {
                         println!("{value}");
@@ -269,9 +277,7 @@ pub fn run_in(command: &ConfigCommand, path: &Path) -> Result<()> {
             // now — not on every command afterwards, where a stored bad value
             // reads like the server being at fault.
             check_key(&args.key)?;
-            if args.key == TAPES_URL_KEY {
-                check_url(&args.key, &args.value)?;
-            }
+            check_url(&args.key, &args.value)?;
             // Deliberately not `read` first. The file is edited in place rather
             // than re-serialized (see `write_key`), which both preserves keys
             // this build does not know and lets `config set` repair a known key
@@ -303,15 +309,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".tapes").join("config.toml");
 
-        run_in(&set(TAPES_URL_KEY, "http://tapes.example"), &path).unwrap();
+        run_in(&set(API_URL_KEY, "http://tapes.example"), &path).unwrap();
 
         assert_eq!(
-            read(&path).unwrap().tapes_url.as_deref(),
+            read(&path).unwrap().api_url.as_deref(),
             Some("http://tapes.example"),
         );
         run_in(
             &ConfigCommand::Get(ConfigGetArgs {
-                key: Some(TAPES_URL_KEY.to_owned()),
+                key: Some(API_URL_KEY.to_owned()),
             }),
             &path,
         )
@@ -325,8 +331,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
 
-        assert!(run_in(&set(TAPES_URL_KEY, "tapes.example"), &path).is_err());
-        assert!(!path.exists(), "nothing should have been written");
+        for key in [API_URL_KEY, INGEST_URL_KEY] {
+            assert!(run_in(&set(key, "tapes.example"), &path).is_err());
+            assert!(!path.exists(), "nothing should have been written");
+        }
     }
 
     #[test]
@@ -343,7 +351,7 @@ mod tests {
             ("file:///etc/passwd", "file"),
             ("ws://tapes.example", "ws"),
         ] {
-            let err = run_in(&set(TAPES_URL_KEY, value), &path).unwrap_err();
+            let err = run_in(&set(API_URL_KEY, value), &path).unwrap_err();
             let rendered = format!("{err}");
             assert!(rendered.contains(scheme), "got: {rendered}");
             assert!(rendered.contains("http"), "got: {rendered}");
@@ -352,7 +360,7 @@ mod tests {
 
         // And the two that work still do.
         for value in ["http://tapes.example", "https://tapes.example"] {
-            assert!(run_in(&set(TAPES_URL_KEY, value), &path).is_ok());
+            assert!(run_in(&set(API_URL_KEY, value), &path).is_ok());
         }
     }
 
@@ -368,7 +376,7 @@ mod tests {
         std::fs::write(
             &path,
             "# a comment the user wrote\n\
-             tapes-url = \"http://old.example\"\n\
+             api-url = \"http://old.example\"\n\
              something-later = 3\n\
              \n\
              [a-table-from-the-future]\n\
@@ -376,7 +384,7 @@ mod tests {
         )
         .unwrap();
 
-        run_in(&set(TAPES_URL_KEY, "http://new.example"), &path).unwrap();
+        run_in(&set(API_URL_KEY, "http://new.example"), &path).unwrap();
 
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("something-later = 3"), "got: {text}");
@@ -387,7 +395,7 @@ mod tests {
             "editing in place keeps the user's own text too: {text}",
         );
         assert_eq!(
-            read(&path).unwrap().tapes_url.as_deref(),
+            read(&path).unwrap().api_url.as_deref(),
             Some("http://new.example"),
             "and the key that was set is the one that changed",
         );
@@ -400,12 +408,12 @@ mod tests {
         // disable the only command that fixes it.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        std::fs::write(&path, "tapes-url = 3\n").unwrap();
+        std::fs::write(&path, "api-url = 3\n").unwrap();
         assert!(read(&path).is_err());
 
-        run_in(&set(TAPES_URL_KEY, "http://tapes.example"), &path).unwrap();
+        run_in(&set(API_URL_KEY, "http://tapes.example"), &path).unwrap();
         assert_eq!(
-            read(&path).unwrap().tapes_url.as_deref(),
+            read(&path).unwrap().api_url.as_deref(),
             Some("http://tapes.example"),
         );
     }
@@ -417,10 +425,10 @@ mod tests {
         // recovered afterwards.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        std::fs::write(&path, "tapes-url = ").unwrap();
+        std::fs::write(&path, "api-url = ").unwrap();
 
-        assert!(run_in(&set(TAPES_URL_KEY, "http://tapes.example"), &path).is_err());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "tapes-url = ");
+        assert!(run_in(&set(API_URL_KEY, "http://tapes.example"), &path).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "api-url = ");
     }
 
     #[test]
@@ -443,7 +451,7 @@ mod tests {
                 &path,
             )
         };
-        assert!(get(Some(TAPES_URL_KEY)).is_ok());
+        assert!(get(Some(API_URL_KEY)).is_ok());
         assert!(get(None).is_ok());
         assert!(get(Some("tapes-erl")).is_err());
     }
@@ -462,14 +470,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nested").join("config.toml");
 
-        write_key(&path, TAPES_URL_KEY, "http://tapes.example").unwrap();
+        write_key(&path, API_URL_KEY, "http://tapes.example").unwrap();
 
         // The flag, the `config set` key, and the TOML key are one spelling.
         let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.contains("tapes-url"), "got: {text}");
+        assert!(text.contains("api-url"), "got: {text}");
 
         assert_eq!(
-            read(&path).unwrap().tapes_url.as_deref(),
+            read(&path).unwrap().api_url.as_deref(),
             Some("http://tapes.example"),
         );
     }
@@ -480,7 +488,7 @@ mod tests {
         let err = config.set("tapes-erl", "http://x".to_owned()).unwrap_err();
         let rendered = format!("{err}");
         assert!(rendered.contains("tapes-erl"), "got: {rendered}");
-        assert!(rendered.contains(TAPES_URL_KEY), "got: {rendered}");
+        assert!(rendered.contains(API_URL_KEY), "got: {rendered}");
         assert!(config.get("tapes-erl").is_err());
     }
 
@@ -492,12 +500,12 @@ mod tests {
         let path = dir.path().join("config.toml");
         std::fs::write(
             &path,
-            "tapes-url = \"http://tapes.example\"\nsomething-later = 3\n",
+            "api-url = \"http://tapes.example\"\nsomething-later = 3\n",
         )
         .unwrap();
 
         let config = read(&path).unwrap();
-        assert_eq!(config.tapes_url.as_deref(), Some("http://tapes.example"));
+        assert_eq!(config.api_url.as_deref(), Some("http://tapes.example"));
     }
 
     #[test]
@@ -507,7 +515,7 @@ mod tests {
         // list` must still run and still be able to take its server from a flag.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        std::fs::write(&path, "tapes-url = ").unwrap();
+        std::fs::write(&path, "api-url = ").unwrap();
 
         assert!(read(&path).is_err());
         assert_eq!(load_or_default(&path), Config::default());
@@ -517,7 +525,16 @@ mod tests {
     fn entries_lists_only_what_was_actually_set() {
         assert!(Config::default().entries().is_empty());
         let mut config = Config::default();
-        config.set(TAPES_URL_KEY, "http://x".to_owned()).unwrap();
-        assert_eq!(config.entries(), vec![(TAPES_URL_KEY, "http://x")]);
+        config.set(API_URL_KEY, "http://api".to_owned()).unwrap();
+        config
+            .set(INGEST_URL_KEY, "http://ingest".to_owned())
+            .unwrap();
+        assert_eq!(
+            config.entries(),
+            vec![
+                (API_URL_KEY, "http://api"),
+                (INGEST_URL_KEY, "http://ingest")
+            ]
+        );
     }
 }
