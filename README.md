@@ -163,12 +163,13 @@ tapesctl spans list <trace-id>
 tapesctl spans get <trace-id> <span-id>
 ```
 
-Each prints the server's JSON verbatim, so it composes with `jq`. `sessions
-list` pages with `--limit`/`--cursor` and narrows with `--sort`,
-`--direction`, `--since`, `--until`, and `--auth-subject`; a cursor is only
-valid with the `--sort` and `--direction` it was minted under. `sessions
-traces` and `spans list` take `--payload preview` to truncate payload strings
-server-side.
+`sessions list` renders its listing as a table by default; `--json` restores the
+raw document so it still composes with `jq`. The other commands print the
+server's JSON verbatim. `sessions list` pages with `--limit`/`--cursor` and
+narrows with `--sort`, `--direction`, `--since`, `--until`, and
+`--auth-subject`; a cursor is only valid with the `--sort` and `--direction` it
+was minted under. `sessions traces` and `spans list` take `--payload preview`
+to truncate payload strings server-side.
 
 ```bash
 tapesctl export <session-id> -o bundle.jsonl   # --detail spans (default) or traces
