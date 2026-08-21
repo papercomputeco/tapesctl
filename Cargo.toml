@@ -199,12 +199,24 @@ dirs = "5"
 time = { version = "0.3", features = ["formatting", "parsing", "serde", "macros"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
-# --- test ---
-# Recomputing the vendored fixture corpora's DIGEST seals, which is how a stale
-# or hand-edited vendored copy fails in this repo's CI rather than silently
-# testing cases nobody upstream still has. Test-only: nothing shipped hashes.
+# Two callers, one of them shipped: recomputing the vendored fixture corpora's
+# DIGEST seals (how a stale or hand-edited vendored copy fails in this repo's CI
+# rather than silently testing cases nobody upstream still has), and verifying a
+# downloaded artifact against its published `.sha256` in `tapesctl upgrade`.
 sha2 = "0.10"
+# Also shipped: `upgrade` and `uninstall` probe install-directory writability by
+# creating a file there, which respects ACLs and read-only mounts where a
+# mode-bit inspection would not.
 tempfile = "3"
+
+# Version comparison for `tapesctl upgrade`, and deliberately not `semver`:
+# release labels here are compared, not validated, and `versions` accepts the
+# version-like-but-not-SemVer forms a release process can produce while still
+# ordering them sensibly. It also ignores build metadata for equality, which is
+# what lets a stamped `v0.7.0+3f2a1b9` compare equal to the bucket's `v0.7.0`.
+versions = "7"
+
+# --- test ---
 test-case = "3"
 wiremock = "0.6"
 

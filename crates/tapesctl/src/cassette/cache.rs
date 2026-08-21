@@ -33,14 +33,50 @@ pub const REVALIDATE_AFTER: Duration = Duration::from_secs(600);
 /// location in CI.
 pub const CACHE_DIR_ENV: &str = "TAPESCTL_CACHE_DIR";
 
+/// Directory name under the platform cache dir, when no override is set.
+const APP_DIR_NAME: &str = "tapesctl/cassettes";
+
 /// tapesctl's cache parameterization for one base URL.
 fn config(key: &str) -> CacheConfig<'_> {
     CacheConfig {
-        app_dir_name: "tapesctl/cassettes",
+        app_dir_name: APP_DIR_NAME,
         env_override_var: CACHE_DIR_ENV,
         revalidate_after: REVALIDATE_AFTER,
         key,
     }
+}
+
+/// The directory this crate *chose* for cached surfaces — the platform cache
+/// directory plus [`APP_DIR_NAME`] — ignoring [`CACHE_DIR_ENV`] entirely.
+/// `None` when the platform names no cache directory.
+///
+/// The override is deliberately not honored here, and this is the only reason
+/// the function exists separately from the resolution
+/// [`tapes_client::cassettes::cache`] performs internally: the one caller is
+/// `uninstall`, which passes what it gets to `remove_dir_all`. An override
+/// names a directory the *user* picked, which may hold anything —
+/// `TAPESCTL_CACHE_DIR=$HOME` would turn an uninstall into a recursive delete
+/// of the home directory. A path this crate derived itself is one it owns and
+/// may remove; a path the environment supplied is not.
+///
+/// Callers that want the location actually in use want
+/// [`tapes_client::cassettes::cache`] via [`read`]/[`write`], not this.
+#[must_use]
+pub fn owned_cache_dir() -> Option<std::path::PathBuf> {
+    Some(dirs::cache_dir()?.join(APP_DIR_NAME))
+}
+
+/// The override's value, when it is set to something non-empty.
+///
+/// `uninstall` names it in its report rather than deleting it: leaving a cache
+/// behind is a nuisance, deleting a directory the user pointed us at is not
+/// recoverable.
+#[must_use]
+pub fn cache_dir_override() -> Option<std::path::PathBuf> {
+    std::env::var(CACHE_DIR_ENV)
+        .ok()
+        .filter(|raw| !raw.trim().is_empty())
+        .map(std::path::PathBuf::from)
 }
 
 /// Read the cached surface for a base URL, if there is a usable one.

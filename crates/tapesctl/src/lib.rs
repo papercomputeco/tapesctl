@@ -9,14 +9,18 @@ pub mod cli;
 pub mod codex_app;
 pub mod config;
 pub mod error;
+pub mod install_layout;
 pub mod logging;
 pub mod machine;
 pub mod plugin;
 pub mod ports;
+pub mod rc_block;
 pub mod start;
 pub mod transcript;
+pub mod uninstall;
 
 use clap::{ArgMatches, CommandFactory, FromArgMatches};
+use snafu::ResultExt;
 use tapes_client::DirectHttp;
 use url::Url;
 
@@ -303,6 +307,9 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Plugin(PluginCommand::Uninstall(args)) => plugin::uninstall(args),
         Command::Plugin(PluginCommand::Hook(args)) => codex_app::hook::run(&args).await,
         Command::Config(command) => config::run(&command),
+        Command::Uninstall { assume_yes } => {
+            uninstall::run(assume_yes).context(error::error::UninstallSnafu)
+        }
     }
 }
 

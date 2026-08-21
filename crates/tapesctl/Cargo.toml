@@ -36,7 +36,9 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+sha2 = { workspace = true }
 snafu = { workspace = true }
+tempfile = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 toml = { workspace = true }
@@ -45,12 +47,11 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+versions = { workspace = true }
 zstd = { workspace = true }
 
 [dev-dependencies]
-sha2 = { workspace = true }
 test-case = { workspace = true }
-tempfile = { workspace = true }
 wiremock = { workspace = true }
 
 [lints]

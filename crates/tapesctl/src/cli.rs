@@ -337,6 +337,18 @@ pub enum Command {
     #[command(subcommand)]
     Config(ConfigCommand),
 
+    /// Remove tapesctl: the binary, this tool's local state, and the PATH
+    /// block the installer wrote into your shell's rc file.
+    ///
+    /// Harness-side capture plugins are left alone — a plugin registration
+    /// lives in the harness's own config file, and `tapesctl plugin uninstall`
+    /// is the command that speaks that contract.
+    Uninstall {
+        /// Skip the interactive confirmation prompt.
+        #[arg(short = 'y', long = "yes")]
+        assume_yes: bool,
+    },
+
     /// Print version information.
     Version,
 }
