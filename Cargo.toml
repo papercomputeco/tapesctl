@@ -176,7 +176,7 @@ toml = "0.8"
 toml_edit = "0.22"
 
 # --- errors ---
-snafu = "0.8"
+snafu = "0.9"
 
 # --- logging ---
 tracing = "0.1"
