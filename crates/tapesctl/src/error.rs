@@ -775,6 +775,17 @@ pub enum Error {
         /// Underlying IO failure.
         source: std::io::Error,
     },
+
+    /// `tapesctl uninstall` could not run.
+    ///
+    /// Only the steps that make the command impossible to start reach here;
+    /// every individual removal warns and continues, so a partial teardown is
+    /// a report, not an error.
+    #[snafu(display("uninstall failed"))]
+    Uninstall {
+        /// Underlying uninstall failure.
+        source: crate::uninstall::UninstallError,
+    },
 }
 
 /// Map the shared client's errors onto the variants this CLI surfaced when the
