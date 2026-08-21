@@ -17,6 +17,7 @@ name = "tapesctl"
 path = "src/main.rs"
 
 [dependencies]
+libc = { workspace = true }
 tapes-harnesses = { workspace = true }
 tapes-capture = { workspace = true }
 tapes-client = { workspace = true }

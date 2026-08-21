@@ -776,6 +776,17 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    /// `tapesctl upgrade` could not replace the binary.
+    ///
+    /// Every variant beneath this one means the installed binary is still the
+    /// pre-upgrade file: nothing destructive happens before the final atomic
+    /// rename.
+    #[snafu(display("upgrade failed"))]
+    Upgrade {
+        /// Underlying upgrade failure.
+        source: crate::upgrade::UpgradeCliError,
+    },
+
     /// `tapesctl uninstall` could not run.
     ///
     /// Only the steps that make the command impossible to start reach here;

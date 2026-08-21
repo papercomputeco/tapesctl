@@ -38,9 +38,19 @@ async fn main() -> ExitCode {
     match tapesctl::dispatch(invocation).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            // The daemon/proxy work will grow structured error reporting; for
-            // now a single line to stderr is enough and keeps `main` panic-free.
+            // The whole chain, not just the outermost message. Every error in
+            // this crate is a typed wrapper around the one beneath it, and the
+            // outermost is deliberately the least specific — "upgrade failed"
+            // is a category, while the cause a user acts on ("sha256 mismatch",
+            // "install directory is not writable; re-run the installer") lives
+            // one or two links down. Printing only the top discards exactly the
+            // half that says what to do about it.
             eprintln!("tapesctl: {err}");
+            let mut source = std::error::Error::source(&err);
+            while let Some(cause) = source {
+                eprintln!("  caused by: {cause}");
+                source = cause.source();
+            }
             ExitCode::FAILURE
         }
     }
