@@ -21,11 +21,14 @@
 //!
 //! # Output
 //!
-//! Every command prints the server's JSON, pretty-printed, and nothing else. See
-//! [`client`] for why these particular responses are not decoded through the
-//! shared models on the way through: in short, a model can only carry the
-//! fields the build it shipped in knew about, and these commands exist to show
-//! what the server said.
+//! `sessions list` renders its listing as a table by default; `--json` restores
+//! the raw document. Every other command prints the server's JSON,
+//! pretty-printed, and nothing else. See [`client`] for why these particular
+//! responses are not decoded through the shared models on the way through: in
+//! short, a model can only carry the fields the build it shipped in knew about,
+//! and these commands exist to show what the server said. The table view keeps
+//! that spirit by reading its columns off the undecoded document — see
+//! [`table`].
 //!
 //! # Requests
 //!
@@ -36,6 +39,7 @@
 
 pub mod client;
 pub mod contract;
+pub mod table;
 
 use serde_json::Value;
 use snafu::{OptionExt, ResultExt};
@@ -107,7 +111,12 @@ pub async fn sessions(command: SessionsCommand) -> Result<()> {
                 values.push(("direction", direction));
             }
             let value: Value = client.call(ops::LIST_SESSIONS, values).await?;
-            print_json(&value)
+            if args.json {
+                print_json(&value)
+            } else {
+                print!("{}", table::render_sessions(&value));
+                Ok(())
+            }
         }
         SessionsCommand::Get(args) => {
             let client = resolve_client(&args.api)?;
@@ -208,6 +217,7 @@ mod tests {
             harness_session_id: None,
             harness_id: None,
             auth_subject: None,
+            json: false,
         }
     }
 

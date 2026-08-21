@@ -532,6 +532,14 @@ pub struct SessionsListArgs {
     /// Only sessions stamped with this acting subject.
     #[arg(long)]
     pub auth_subject: Option<String>,
+
+    /// Print the raw JSON response instead of the table.
+    ///
+    /// `sessions list` renders a table by default; this restores the
+    /// pretty-printed JSON the read commands printed before, so the output still
+    /// composes with `jq`.
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// A session id and where to find its server.
