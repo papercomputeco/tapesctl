@@ -25,10 +25,25 @@ curl -sSfL https://download.tapes.dev/tapesctl/install | bash
 Every published artifact carries a `.sha256` sidecar. Where `sha256sum` or
 `shasum` is available, the installer verifies the download against that sidecar
 before installing, and a missing sidecar is a hard failure rather than a skipped
-check; with neither tool present it warns and installs unverified. Binaries land
-in `/usr/local/bin` (via `sudo` only if that directory is not writable). Set
-`TAPESCTL_VERSION` to install a specific release or nightly, and
+check; with neither tool present it warns and installs unverified.
+
+The binary lands in `$HOME/.local/bin` — a directory you own, so a normal
+install never asks for `sudo`. That directory is not on every default `PATH`,
+so the installer also writes a guarded `PATH` export into your shell's rc file
+(`.bashrc`, `.zshrc`, or `config.fish`), inside a sentinel-marked block it
+rewrites in place rather than duplicating on re-install. If your rc file is
+read-only — managed by nix or a dotfiles manager — the install still succeeds
+and prints the line to add yourself.
+
+Set `TAPESCTL_VERSION` to install a specific release or nightly, and
 `TAPESCTL_INSTALL_DIR` to install somewhere else.
+
+Installs predating this layout put the binary in `/usr/local/bin`. Re-running
+the installer migrates them: it removes the old root-owned binary with a single
+announced `sudo` — the last one tapesctl will ever ask for — because a binary
+left there would shadow the new one in every context that still has the default
+`PATH` order. Declining is fine; the install still succeeds and prints the
+removal command.
 
 Confirm it landed:
 
