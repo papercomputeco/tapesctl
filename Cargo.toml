@@ -161,7 +161,7 @@ serde_json = "1"
 # here: the vendored tapes contract documents, which are compile-time constants
 # embedded with `include_str!` — never untrusted data.
 serde_yaml = "0.9"
-toml = "0.8"
+toml = "1.1"
 # The *writer* for `~/.tapes/config.toml`, where `toml` above is the reader.
 #
 # Two crates for one file needs a reason, and it is that they answer different
