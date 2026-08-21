@@ -337,6 +337,32 @@ pub enum Command {
     #[command(subcommand)]
     Config(ConfigCommand),
 
+    /// Upgrade tapesctl in place: download the requested build, verify its
+    /// published checksum, and atomically replace this binary.
+    ///
+    /// With no flags, installs the newest release; exits successfully without
+    /// downloading when already up to date. Nothing touches the installed
+    /// binary until the download's sha256 matches the published one and the
+    /// staged file has answered `version` sensibly, so every failure leaves the
+    /// binary you had still working.
+    ///
+    /// Deliberately named `upgrade` with no `update` alias: `upgrade` means
+    /// "replace the binary with another build", and `update` is reserved for
+    /// possible future semantics such as refreshing configuration or a
+    /// discovered cassette surface.
+    Upgrade {
+        /// Release version to install (e.g. `v0.7.0` or `0.7.0`).
+        ///
+        /// Defaults to the newest published release; older versions are
+        /// allowed, because a bad release needs an escape hatch.
+        #[arg(long, conflicts_with = "nightly")]
+        version: Option<String>,
+
+        /// Install the rolling nightly build instead of a release.
+        #[arg(long)]
+        nightly: bool,
+    },
+
     /// Remove tapesctl: the binary, this tool's local state, and the PATH
     /// block the installer wrote into your shell's rc file.
     ///

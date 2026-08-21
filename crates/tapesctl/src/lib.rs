@@ -18,6 +18,7 @@ pub mod rc_block;
 pub mod start;
 pub mod transcript;
 pub mod uninstall;
+pub mod upgrade;
 
 use clap::{ArgMatches, CommandFactory, FromArgMatches};
 use snafu::ResultExt;
@@ -310,6 +311,9 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Uninstall { assume_yes } => {
             uninstall::run(assume_yes).context(error::error::UninstallSnafu)
         }
+        Command::Upgrade { version, nightly } => upgrade::run(version, nightly)
+            .await
+            .context(error::error::UpgradeSnafu),
     }
 }
 
