@@ -40,7 +40,7 @@
 //! by every capture client, alongside the sealed core contract it shares a
 //! transport and an error taxonomy with. The submodules here are tapesctl's
 //! parameterization of it: the reserved flag names, the cache's on-disk
-//! identity, and the `--tapes-url` decoration and dispatch that make a
+//! identity, and the `--api-url` decoration and dispatch that make a
 //! generated command a tapesctl command.
 //!
 //! # What the server hands us

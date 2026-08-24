@@ -170,7 +170,7 @@ impl Machine {
 
     /// tapesctl's own configuration file: `~/.tapes/config.toml`.
     ///
-    /// It sits beside the logs, the authored skills, and the codex-app state
+    /// It sits beside the logs and the codex-app state
     /// this client already keeps under `~/.tapes`, so a user has one directory
     /// to look in, back up, or delete.
     #[must_use]

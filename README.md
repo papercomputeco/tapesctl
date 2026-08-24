@@ -8,9 +8,13 @@ read, search, and export. `tapesctl` is the client. It launches a coding-agent
 harness under a just-in-time capture proxy, ships the captured turns to a tapes
 server, and gives you a command line over the data model that comes back.
 
-You bring your own tapes server; `tapesctl` never guesses one. Everything below
-that reads or writes data takes a `--tapes-url`, and
-[Naming your server](#naming-your-server) is the one-time way to stop typing it.
+You bring your own tapes server. Read commands use `--api-url`; capture
+commands use `--ingest-url`. [Naming your server](#naming-your-server) is the
+one-time way to stop typing either.
+
+This README is the tour. The reference — every command, its flags, the capture
+matrix, and what each failure mode means — is at
+[tapes.dev/docs/tapesctl](https://tapes.dev/docs/tapesctl/).
 
 ## Install
 
@@ -41,14 +45,14 @@ front of it. The harness behaves exactly as it would unproxied — traffic is
 forwarded to its own provider API by default — and the proxy dies with it.
 
 ```bash
-tapesctl start claude --tapes-url http://localhost:8081
+tapesctl start claude --ingest-url http://localhost:8082
 ```
 
 The supported harnesses are `claude`, `codex`, and `pi`. Anything after the
 harness name is passed through verbatim, so your usual flags still work:
 
 ```bash
-tapesctl start claude --tapes-url http://localhost:8081 -- --model opus
+tapesctl start claude --ingest-url http://localhost:8082 -- --model opus
 ```
 
 A capture records **two lanes**, and both matter:
@@ -77,7 +81,7 @@ again when it exits:
 to stderr instead of a file, accepting what that does to the display:
 
 ```bash
-tapesctl -v start claude --tapes-url http://localhost:8081
+tapesctl -v start claude --ingest-url http://localhost:8082
 ```
 
 Every other command logs to stderr as before.
@@ -97,7 +101,7 @@ hash, so re-offering an unchanged transcript is a cheap `deduped`. It sweeps
 
 ```bash
 tapesctl plugin install pi
-tapesctl start pi --tapes-url http://localhost:8081 -- --provider anthropic --model <model-id>
+tapesctl start pi --ingest-url http://localhost:8082 -- --provider anthropic --model <model-id>
 ```
 
 **Pass both `--provider` and `--model`, or neither.** Those are `pi`'s own
@@ -116,23 +120,25 @@ there is an error rather than a silent no-op.
 
 ## Naming your server
 
-Every command that talks to a tapes deployment needs to know where it is. There
-are three ways to say so, and they are consulted in this order:
+Every command that talks to a tapes deployment resolves its endpoint in this
+order: flag, environment, config, local default.
 
 ```bash
-tapesctl --tapes-url http://localhost:8081 sessions list   # 1. the flag
-export TAPES_URL=http://localhost:8081                     # 2. the environment
-tapesctl config set tapes-url http://localhost:8081        # 3. once, for good
+tapesctl --api-url http://localhost:8081 sessions list   # read API flag
+export TAPES_API_URL=http://localhost:8081                 # read API environment
+tapesctl config set api-url http://localhost:8081        # persist read API
+tapesctl start claude --ingest-url http://localhost:8082   # ingest flag
+export TAPES_INGEST_URL=http://localhost:8082              # ingest environment
+tapesctl config set ingest-url http://localhost:8082       # persist ingest
 ```
 
-`--tapes-url` is global: give it before the subcommand, as above, or after it,
-where it has always worked. The third form writes `~/.tapes/config.toml` and is
-the one worth doing — a configured server is what makes `tapesctl cassettes`
-list what your deployment serves, in every new shell, without an export.
+`--api-url` is global: give it before the subcommand, as above, or after it.
+Config writes `~/.tapes/config.toml` and is useful for non-local deployments in
+every new shell, without an export.
 
 ```bash
 tapesctl config get           # every key that is set
-tapesctl config get tapes-url # one of them, bare, for scripts
+tapesctl config get api-url # one of them, bare, for scripts
 tapesctl config path          # where the file is, whether or not it exists
 ```
 
@@ -141,9 +147,8 @@ your ordering, and any keys this build does not know about — a key a newer
 tapesctl wrote, say — all survive. The server must be an `http` or `https` URL;
 anything else is refused when you set it rather than on every command afterwards.
 
-With none of the three, commands that need a server refuse to run and say so.
-They do not fall back to a guessed `localhost` port: a capture pointed at
-whatever happened to be listening is worse than one that did not start.
+Without configuration, read commands use `http://localhost:8081` and capture
+commands use `http://localhost:8082`.
 
 ## Your first read
 
@@ -158,12 +163,13 @@ tapesctl spans list <trace-id>
 tapesctl spans get <trace-id> <span-id>
 ```
 
-Each prints the server's JSON verbatim, so it composes with `jq`. `sessions
-list` pages with `--limit`/`--cursor` and narrows with `--sort`,
-`--direction`, `--since`, `--until`, and `--auth-subject`; a cursor is only
-valid with the `--sort` and `--direction` it was minted under. `sessions
-traces` and `spans list` take `--payload preview` to truncate payload strings
-server-side.
+`sessions list` renders its listing as a table by default; `--json` restores the
+raw document so it still composes with `jq`. The other commands print the
+server's JSON verbatim. `sessions list` pages with `--limit`/`--cursor` and
+narrows with `--sort`, `--direction`, `--since`, `--until`, and
+`--auth-subject`; a cursor is only valid with the `--sort` and `--direction` it
+was minted under. `sessions traces` and `spans list` take `--payload preview`
+to truncate payload strings server-side.
 
 ```bash
 tapesctl export <session-id> -o bundle.jsonl   # --detail spans (default) or traces
@@ -177,8 +183,8 @@ An app you launch from the dock starts itself, so there is no process for
 the app captured.
 
 ```bash
-tapesctl plugin install codex-app --tapes-url http://localhost:8081
-tapesctl capture codex-app --tapes-url http://localhost:8081
+tapesctl plugin install codex-app --api-url http://localhost:8081
+tapesctl capture codex-app --ingest-url http://localhost:8082
 ```
 
 `plugin install` packages a hook plugin under `~/.tapes/codex-app/`, points
@@ -227,36 +233,29 @@ context — "find the turn where X happened". This needs a server with span
 embeddings written; a deployment without them answers `503` rather than an
 empty result set.
 
-`--quiet` prints bare session ids in score order, which is what `skill generate`
-takes as arguments:
-
-```bash
-tapesctl skill generate $(tapesctl search "charm CLI" --quiet --top 1) --name charm-patterns
-```
+`--quiet` prints bare session ids in score order, ready to compose into other
+commands through a shell substitution.
 
 ## Skills
 
-A skill is a markdown file with frontmatter under `~/.tapes/skills/`. Generate
-one from captured sessions, list what you have, and install it where an agent
-will look:
+Skills are served by the **skills cassette** — a tapes API extension that
+stores, versions, and generates skills server-side. When a deployment serves
+it, `tapesctl` discovers it like any other cassette and the whole surface
+appears as generated commands, always in step with what the server actually
+runs:
 
 ```bash
-tapesctl skill generate <session-id> --name debug-react-hooks
-tapesctl skill generate --search "react hooks" --search-top 3 --name react-debug
-tapesctl skill generate <session-id> --name morning-work --since 2026-02-17
-tapesctl skill list --type workflow
-tapesctl skill sync debug-react-hooks --claude   # copy it into place
+tapesctl cassettes skills list-skills
+tapesctl cassettes skills generate-skill \
+  --body '{"sessionIds": ["<session-id>"], "hint": {"name": "debug-react-hooks"}}'
+tapesctl cassettes skills get-skill-markdown <id>
 ```
 
-`generate` talks to two servers, and they are not the same one: `--tapes-url`
-for the session transcript, and an LLM provider for the extraction. The provider
-is `--provider` (`openai`, `anthropic`, or `ollama`), keyed from `--api-key` or
-the provider's own environment variable — prefer the variable, since an argument
-is visible in the process list. `--model` overrides that provider's default, and
-`--preview` renders the skill without writing it.
-
-Skill files are written `0600`, and a skills path that resolves outside the
-directory you selected is refused rather than followed.
+Generation runs on the server, against the LLM the deployment configured — no
+client-side provider keys. A deployment without the skills cassette has no
+skills surface; there is no local fallback. (Earlier tapesctl versions
+authored skills locally under `~/.tapes/skills/`; that second implementation
+is gone, and any files there are yours to keep or delete.)
 
 ## Cassettes
 
@@ -287,13 +286,15 @@ instant and keeps working offline. Override the cache location with
 
 Because the listing comes from a server, `tapesctl cassettes` on a machine that
 names none lists nothing at all — which is the strongest reason to run
-`tapesctl config set tapes-url` once. Everything above this section is
+`tapesctl config set api-url` once. Everything above this section is
 unaffected. Deploying and configuring cassettes is an operator task and is not
 part of this surface.
 
 Cassettes used to mount as top-level nouns (`tapesctl hello-world get-hello`).
-That spelling still parses and will keep working through the next release; it is
-simply no longer listed, and everything here names the `cassettes` form.
+That spelling shipped one release as a hidden alias and has been removed: it
+now fails like any other unknown command. Write `tapesctl cassettes <name>
+<method>`. Retiring it is also what makes every non-cassette command start
+without touching the discovery cache or the network at all.
 
 ## Develop
 
@@ -328,6 +329,10 @@ Release binaries are cross-compiled from Linux with `cargo-zigbuild` — a pure
 CLI with no Apple frameworks needs no macOS SDK. Targets: `linux/{amd64,arm64}`
 (static musl) and `darwin/{amd64,arm64}` (Mach-O). Tagged releases and nightlies
 publish to `download.tapes.dev` via the `release` / `nightly` Dagger functions.
+A release publishes `install.sh` in the same pipeline call as the binaries,
+after them. The object-store syncs are still separate — a late failure can
+leave new binaries public with a stale installer — but that failure fails the
+release, so a cut never reports success while the served installer is stale.
 
 ## Layout
 

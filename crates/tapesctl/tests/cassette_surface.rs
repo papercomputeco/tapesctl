@@ -132,7 +132,7 @@ async fn a_server_s_cassettes_become_commands_and_survive_it_going_away() {
     );
 
     // --- the `cassettes` noun and its help are the cassette listing -------
-    let mut command = command::augment(command::mount(Cli::command(), &surface), &surface);
+    let mut command = command::mount(Cli::command(), &surface);
     let help = command.render_long_help().to_string();
     assert!(
         help.contains(command::NOUN),
@@ -168,7 +168,7 @@ async fn a_server_s_cassettes_become_commands_and_survive_it_going_away() {
             "row-7",
             "--verbose-rows",
             "true",
-            "--tapes-url",
+            "--api-url",
             &server.uri(),
         ])
         .expect("the generated command should parse");
@@ -176,19 +176,19 @@ async fn a_server_s_cassettes_become_commands_and_survive_it_going_away() {
     let (name, cassette_matches) = noun_matches.subcommand().unwrap();
     assert_eq!(name, "hello-world");
 
-    // --- and the spelling it replaced still works, unlisted ---------------
-    let legacy = command
+    // --- and the spelling it replaced is gone -----------------------------
+    let retired = command
         .clone()
         .try_get_matches_from([
             "tapesctl",
             "hello-world",
             "get-hello-row",
             "row-7",
-            "--tapes-url",
+            "--api-url",
             &server.uri(),
         ])
-        .expect("the top-level spelling must keep parsing for one release");
-    assert_eq!(legacy.subcommand().unwrap().0, "hello-world");
+        .expect_err("the retired top-level spelling must not parse");
+    assert_eq!(retired.kind(), clap::error::ErrorKind::InvalidSubcommand);
 
     // --- and it calls the route the spec named ----------------------------
     Mock::given(method("GET"))
@@ -209,7 +209,7 @@ async fn a_server_s_cassettes_become_commands_and_survive_it_going_away() {
                 command::NOUN,
                 "hello-world",
                 "create-hello",
-                "--tapes-url",
+                "--api-url",
                 &server.uri(),
             ])
             .is_err(),

@@ -21,11 +21,14 @@
 //!
 //! # Output
 //!
-//! Every command prints the server's JSON, pretty-printed, and nothing else. See
-//! [`client`] for why these particular responses are not decoded through the
-//! shared models on the way through: in short, a model can only carry the
-//! fields the build it shipped in knew about, and these commands exist to show
-//! what the server said.
+//! `sessions list` renders its listing as a table by default; `--json` restores
+//! the raw document. Every other command prints the server's JSON,
+//! pretty-printed, and nothing else. See [`client`] for why these particular
+//! responses are not decoded through the shared models on the way through: in
+//! short, a model can only carry the fields the build it shipped in knew about,
+//! and these commands exist to show what the server said. The table view keeps
+//! that spirit by reading its columns off the undecoded document — see
+//! [`table`].
 //!
 //! # Requests
 //!
@@ -36,6 +39,7 @@
 
 pub mod client;
 pub mod contract;
+pub mod table;
 
 use serde_json::Value;
 use snafu::{OptionExt, ResultExt};
@@ -53,7 +57,7 @@ use contract::ops;
 /// Resolve the API base URL from arguments and the environment.
 pub fn resolve_client(args: &ApiArgs) -> Result<ApiClient> {
     let raw = args
-        .tapes_url
+        .api_url
         .as_deref()
         .context(error::MissingTapesUrlSnafu)?;
     Ok(connect(Url::parse(raw).context(error::TapesUrlSnafu)?))
@@ -92,6 +96,8 @@ pub async fn sessions(command: SessionsCommand) -> Result<()> {
                 sort: args.sort,
                 since: args.since,
                 until: args.until,
+                harness_id: args.harness_id,
+                harness_session_id: args.harness_session_id,
                 auth_subject: args.auth_subject,
                 ..Default::default()
             }
@@ -105,7 +111,12 @@ pub async fn sessions(command: SessionsCommand) -> Result<()> {
                 values.push(("direction", direction));
             }
             let value: Value = client.call(ops::LIST_SESSIONS, values).await?;
-            print_json(&value)
+            if args.json {
+                print_json(&value)
+            } else {
+                print!("{}", table::render_sessions(&value));
+                Ok(())
+            }
         }
         SessionsCommand::Get(args) => {
             let client = resolve_client(&args.api)?;
@@ -186,35 +197,87 @@ pub async fn spans(command: SpansCommand) -> Result<()> {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use crate::cli::SpansListArgs;
-    use wiremock::matchers::{method, path};
+    use crate::cli::{SessionsListArgs, SpansListArgs};
+    use wiremock::matchers::{method, path, query_param, query_param_is_missing};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn api_args(url: Option<String>) -> ApiArgs {
-        ApiArgs { tapes_url: url }
+        ApiArgs { api_url: url }
+    }
+
+    fn sessions_list_args(url: String) -> SessionsListArgs {
+        SessionsListArgs {
+            api: api_args(Some(url)),
+            limit: None,
+            cursor: None,
+            sort: None,
+            direction: None,
+            since: None,
+            until: None,
+            harness_session_id: None,
+            harness_id: None,
+            auth_subject: None,
+            json: false,
+        }
     }
 
     #[test]
-    fn a_missing_tapes_url_is_an_error_rather_than_a_guessed_host() {
-        // Still an error, and still for the original reason: a guessed
-        // `http://localhost:8080` is how a capture ends up pointed at whatever
-        // happens to be listening. What changed is that there is now a third
-        // place a server can come from, so the refusal has to name all three —
-        // a user who has been retyping the flag every time should learn from
-        // this message that they never have to again.
-        let err = resolve_client(&api_args(None)).unwrap_err();
-        let rendered = format!("{err}");
-        for taught in ["--tapes-url", "TAPES_URL", "config set tapes-url"] {
-            assert!(
-                rendered.contains(taught),
-                "{taught:?} missing from: {rendered}"
-            );
-        }
+    fn a_manually_constructed_missing_url_is_an_error() {
+        // Normal CLI parsing supplies the localhost default. This covers the
+        // direct library call, which intentionally still refuses an omission.
+        assert!(resolve_client(&api_args(None)).is_err());
     }
 
     #[test]
     fn a_malformed_tapes_url_is_rejected() {
         assert!(resolve_client(&api_args(Some("not a url".to_owned()))).is_err());
+    }
+
+    #[tokio::test]
+    async fn the_harness_filter_pair_lands_on_the_wire() {
+        // The mock only answers when both halves of the pair reach the
+        // wire: the server 400s a lone harness param, so a flag that
+        // stopped shipping its partner would fail here rather than
+        // silently listing everything.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/sessions"))
+            .and(query_param(
+                "harness_session_id",
+                "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+            ))
+            .and(query_param("harness_id", "claude"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(r#"{"items":[{"id":"s-1"}],"next_cursor":""}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let mut args = sessions_list_args(server.uri());
+        args.harness_session_id = Some("f47ac10b-58cc-4372-a567-0e02b2c3d479".to_owned());
+        args.harness_id = Some("claude".to_owned());
+        let result = sessions(SessionsCommand::List(args)).await;
+
+        assert!(result.is_ok(), "got: {result:?}");
+    }
+
+    #[tokio::test]
+    async fn an_unset_harness_filter_stays_out_of_the_query() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/sessions"))
+            .and(query_param_is_missing("harness_session_id"))
+            .and(query_param_is_missing("harness_id"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(r#"{"items":[],"next_cursor":""}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let result = sessions(SessionsCommand::List(sessions_list_args(server.uri()))).await;
+
+        assert!(result.is_ok(), "got: {result:?}");
     }
 
     #[tokio::test]

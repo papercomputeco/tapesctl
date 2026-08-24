@@ -6,7 +6,7 @@
 //! rather than reproduced.
 //!
 //! What *is* reproduced is the layout, because `--quiet` is a pipe format:
-//! `tapesctl skill generate $(tapesctl search "charm CLI" -q -k 1)` depends on
+//! piping `tapesctl search "charm CLI" -q -k 1` into another command depends on
 //! one bare session id per line, deduplicated in score order.
 //!
 //! Two other drops. The Go renderer coloured each field through the CLI's
@@ -168,7 +168,7 @@ mod tests {
     fn args(server: &MockServer, quiet: bool) -> SearchArgs {
         SearchArgs {
             api: ApiArgs {
-                tapes_url: Some(server.uri()),
+                api_url: Some(server.uri()),
             },
             query: "charm CLI".to_owned(),
             top: 5,
@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn quiet_output_is_deduplicated_in_score_order() {
-        // This is the pipe contract `skill generate` consumes.
+        // This is the pipe contract shell substitutions consume.
         // Decoded rather than constructed: a response model is
         // `#[non_exhaustive]`, which is the shipped shape saying the server
         // owns it.
@@ -238,7 +238,7 @@ mod tests {
     async fn search_server(body: Value) -> MockServer {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/v1/search/spans"))
+            .and(path("/v1/cassettes/search/spans"))
             .and(query_param("query", "charm CLI"))
             .respond_with(ResponseTemplate::new(200).set_body_json(body))
             .mount(&server)
@@ -277,7 +277,7 @@ mod tests {
     async fn the_result_count_reaches_the_server_as_top_k() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/v1/search/spans"))
+            .and(path("/v1/cassettes/search/spans"))
             .and(query_param("top_k", "3"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"results": []})))
             .mount(&server)
@@ -291,7 +291,7 @@ mod tests {
     #[tokio::test]
     async fn a_search_without_a_server_fails_on_the_missing_url() {
         let result = run(SearchArgs {
-            api: ApiArgs { tapes_url: None },
+            api: ApiArgs { api_url: None },
             query: "x".to_owned(),
             top: 5,
             quiet: false,

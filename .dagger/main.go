@@ -24,10 +24,12 @@ import (
 )
 
 // Pinned cross-compile toolchain. Bumped intentionally.
+//
+// cargo-zigbuild 0.23.0 needs rustc 1.88+, so rustImage can't stay at 1.85.
 const (
-	rustImage            = "rust:1.85-bookworm"
+	rustImage            = "rust:1.88-bookworm"
 	zigVersion           = "0.13.0"
-	cargoZigbuildVersion = "0.19.8"
+	cargoZigbuildVersion = "0.23.0"
 )
 
 // Tapesctl is the main module for the tapesctl CI/CD pipeline.
@@ -101,7 +103,7 @@ rm /tmp/zig.tar.xz`
 		WithMountedCache("/src/target", cargoTarget).
 		// Materialize the toolchain declared in rust-toolchain.toml (channel =
 		// stable) BEFORE adding targets — otherwise `rustup target add` targets
-		// the image's default 1.85 toolchain while cargo builds under stable,
+		// the image's default 1.88 toolchain while cargo builds under stable,
 		// and the cross-target std is missing ("can't find crate for std").
 		WithExec([]string{"rustup", "show"}).
 		WithExec([]string{"rustup", "target", "add",

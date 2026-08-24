@@ -104,7 +104,7 @@ pub fn active_log_file() -> Option<&'static Path> {
 
 /// Where capture logs live: `~/.tapes/logs`.
 ///
-/// Beside `~/.tapes/skills`, which this client already owns, rather than a
+/// Beside the rest of `~/.tapes`, which this client already owns, rather than a
 /// second user-level home invented for one file.
 #[must_use]
 pub fn default_log_dir() -> Option<PathBuf> {

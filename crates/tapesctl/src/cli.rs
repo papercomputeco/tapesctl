@@ -16,7 +16,10 @@ use clap::{Args, Parser, Subcommand};
 #[derive(Debug, Parser)]
 #[command(
     name = "tapesctl",
-    version,
+    // Not clap's bare `version`, which would print the manifest's placeholder.
+    // This is the stamped identity — the same block `tapesctl version` prints
+    // above its canary, so the flag and the command agree by construction.
+    version = crate::build_info::long_version(),
     about = "The Tapes client CLI",
     subcommand_required = true,
     arg_required_else_help = true
@@ -31,12 +34,12 @@ pub struct Cli {
     /// Global so it can be given once, before the subcommand, and so it is
     /// documented in the top-level help rather than only in each leaf's.
     ///
-    /// # Why no `env = "TAPES_URL"` here
+    /// # Why no `env = "TAPES_API_URL"` here
     ///
     /// Deliberate, and the leaf declarations still carry it — this is not the
     /// flag losing its environment fallback. clap counts an environment-sourced
     /// value as an argument the user supplied, and `arg_required_else_help`
-    /// only prints help when *no* argument was supplied. Binding `TAPES_URL` at
+    /// only prints help when *no* argument was supplied. Binding `TAPES_API_URL` at
     /// the top level would therefore mean that anyone with the variable
     /// exported got `error: requires a subcommand` from a bare `tapesctl`
     /// instead of the help it now prints — a regression triggered by the
@@ -44,36 +47,42 @@ pub struct Cli {
     /// weight (clap ranks it as non-explicit), which is why the configured
     /// server can be installed here as one; see [`crate::parser`].
     #[arg(
-        long,
+        long = "api-url",
         global = true,
         value_name = "URL",
-        help = "Base URL of the tapes server. Falls back to TAPES_URL, then to the configured default",
-        long_help = "Base URL of the tapes server.\n\n\
-                     Falls back to the TAPES_URL environment variable, and then to the default \
-                     configured with `tapesctl config set tapes-url <url>`. With none of the three, \
-                     commands that need a server refuse to run rather than guess a host."
+        help = "Base URL of the tapes read API. Falls back to TAPES_API_URL, then to the configured default",
+        long_help = "Base URL of the tapes read API.\n\n\
+                     Falls back to the TAPES_API_URL environment variable, then the default \
+                     configured with `tapesctl config set api-url <url>`, then \
+                     http://localhost:8081. Capture commands use --ingest-url instead."
     )]
-    pub tapes_url: Option<String>,
+    pub api_url: Option<String>,
 
     #[command(subcommand)]
     pub command: Command,
 }
 
-/// The argument id `--tapes-url` is known by, everywhere it is declared.
+/// The argument id `--api-url` is known by, everywhere it is declared.
 ///
 /// The derive takes it from the field name, so the hand-built declarations —
-/// [`Cli::tapes_url`] here and the one decorated onto every generated cassette
-/// method — have to spell the same id, not merely the same `--tapes-url`. Two
+/// [`Cli::api_url`] here and the one decorated onto every generated cassette
+/// method — have to spell the same id, not merely the same `--api-url`. Two
 /// ids sharing one long name is a clap conflict the moment the global one
 /// propagates into a command that declares the other, and the global one now
 /// propagates everywhere.
-pub const TAPES_URL_ARG: &str = "tapes_url";
+pub const API_URL_ARG: &str = "api_url";
 
 /// The flag, and the environment variable behind it, that name a server.
-const TAPES_URL_FLAG: &str = "--tapes-url";
+const API_URL_FLAG: &str = "--api-url";
 
-/// The environment variable `--tapes-url` falls back to.
-pub const TAPES_URL_ENV: &str = "TAPES_URL";
+/// The environment variable `--api-url` falls back to.
+pub const TAPES_API_URL_ENV: &str = "TAPES_API_URL";
+/// The environment variable `--ingest-url` falls back to.
+pub const TAPES_INGEST_URL_ENV: &str = "TAPES_INGEST_URL";
+
+pub const DEFAULT_API_URL: &str = "http://localhost:8081";
+pub const DEFAULT_INGEST_URL: &str = "http://localhost:8082";
+pub const INGEST_URL_ARG: &str = "ingest_url";
 
 /// Find the server to discover cassettes from, before anything is parsed.
 ///
@@ -92,21 +101,22 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
-    let joined = format!("{TAPES_URL_FLAG}=");
+    let joined = format!("{API_URL_FLAG}=");
     let mut arguments = argv.into_iter();
+    let mut found = None;
 
     while let Some(argument) = arguments.next() {
         let argument = argument.as_ref();
         // Everything after a bare `--` belongs to the launched harness, not
         // to tapesctl — a harness flag that happens to be spelled
-        // `--tapes-url` must not steer discovery.
+        // `--api-url` must not steer discovery.
         if argument == "--" {
             break;
         }
         let value = if let Some(value) = argument.strip_prefix(&joined) {
             Some(value.to_owned())
-        } else if argument == TAPES_URL_FLAG {
-            // A trailing `--tapes-url` with nothing after it is a mistake clap
+        } else if argument == API_URL_FLAG {
+            // A trailing `--api-url` with nothing after it is a mistake clap
             // will report; there is simply no value to discover from.
             arguments.next().map(|value| value.as_ref().to_owned())
         } else {
@@ -114,13 +124,15 @@ where
         };
 
         if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
-            return Some(value);
+            found = Some(value);
         }
     }
 
-    std::env::var(TAPES_URL_ENV)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
+    found.or_else(|| {
+        std::env::var(TAPES_API_URL_ENV)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    })
 }
 
 /// Count `-v`/`--verbose` before anything is parsed.
@@ -157,6 +169,114 @@ where
         }
     }
     count
+}
+
+/// Global flags that take a value in the space-separated spelling.
+///
+/// [`gated`]'s argv scan must not mistake a global flag's *value* for the
+/// first subcommand: `tapesctl --api-url http://x cassettes …` names
+/// `cassettes`, not `http://x`. Nothing has been parsed when the scan runs, so
+/// it carries its own list of value-taking globals; a test pins the list to
+/// the derived [`Cli`] so it cannot drift.
+const VALUE_TAKING_GLOBALS: [&str; 1] = [API_URL_FLAG];
+
+/// The first token that can be a subcommand name, before any `--` cutoff.
+fn first_noun(argv: &[String]) -> Option<&str> {
+    let mut arguments = argv.iter().skip(1).map(String::as_str);
+    while let Some(argument) = arguments.next() {
+        // Everything after a bare `--` belongs to a launched harness, not to
+        // tapesctl — a harness argument spelled `cassettes` must not run
+        // discovery. The same cutoff `discovery_url` and `verbosity` apply.
+        if argument == "--" {
+            return None;
+        }
+        if VALUE_TAKING_GLOBALS.contains(&argument) {
+            // Space-separated flag value; skip it. The `--flag=value`
+            // spelling is one token and starts with `-`, so it needs no
+            // special case.
+            let _ = arguments.next();
+            continue;
+        }
+        if !argument.starts_with('-') {
+            return Some(argument);
+        }
+    }
+    None
+}
+
+/// Whether the top level will print the version and exit.
+///
+/// `--version` and `-V` before the first subcommand end the parse: clap
+/// prints the stamped identity and exits, and no help — so no cassette
+/// list — is ever rendered. Discovery for that command line would be pure
+/// waste (a cache read, and on a cold or stale cache a network round-trip),
+/// so [`gated`] treats it like a non-cassette verb.
+///
+/// The scan stops at the first token that outranks the version flag: a help
+/// flag or a subcommand name. clap answers whichever of `--help` and
+/// `--version` it processes first, so `--help --version` renders the
+/// top-level help — which must list the cassette noun — while
+/// `--version --help` prints the version; a test pins that precedence
+/// against the real parser. The `--` cutoff and the value-skip for
+/// [`VALUE_TAKING_GLOBALS`] are the same ones [`first_noun`] applies.
+fn version_short_circuits(argv: &[String]) -> bool {
+    let mut arguments = argv.iter().skip(1).map(String::as_str);
+    while let Some(argument) = arguments.next() {
+        if argument == "--" {
+            return false;
+        }
+        if VALUE_TAKING_GLOBALS.contains(&argument) {
+            let _ = arguments.next();
+            continue;
+        }
+        match argument {
+            "--version" | "-V" => return true,
+            "--help" | "-h" => return false,
+            _ if !argument.starts_with('-') => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Whether this command line can possibly reach the generated cassette surface.
+///
+/// Only three shapes can: `tapesctl cassettes …` itself, `tapesctl help …`
+/// (whose output may descend into the noun), and a bare / flags-only
+/// invocation (whose help must list the noun and explain where its contents
+/// come from). A first noun this binary does not know joins them: it may be a
+/// cassette's own top-level command (`tapesctl search …`), which only
+/// discovery can mount. Every *static* verb — `sessions list`, `start`, all
+/// of them — still builds its parser with **zero** discovery I/O: a known
+/// noun short-circuits before any cache read or network.
+///
+/// One flags-only shape is carved back out: a version request
+/// ([`version_short_circuits`]) prints and exits without rendering help, so
+/// it pays for no discovery either.
+#[must_use]
+pub fn gated(argv: &[String]) -> bool {
+    if version_short_circuits(argv) {
+        return false;
+    }
+    match first_noun(argv) {
+        None | Some("help") => true,
+        Some(noun) if noun == crate::cassette::command::NOUN => true,
+        Some(noun) => !is_static_noun(noun),
+    }
+}
+
+/// Whether the noun is one of this binary's own compiled-in commands.
+///
+/// The boundary the generated surface must not cross: a name listed here is
+/// never mounted from discovery (a server must not redefine what a consumer's
+/// own command means), and — the same fact read the other way — an invocation
+/// that starts with one never pays for discovery.
+#[must_use]
+pub fn is_static_noun(noun: &str) -> bool {
+    use clap::CommandFactory;
+    Cli::command()
+        .get_subcommands()
+        .any(|sub| sub.get_name() == noun || sub.get_all_aliases().any(|alias| alias == noun))
 }
 
 /// Top-level subcommands.
@@ -209,10 +329,6 @@ pub enum Command {
     /// Populate a server with demo sessions.
     Seed(SeedArgs),
 
-    /// Manage agent skills.
-    #[command(subcommand)]
-    Skill(SkillCommand),
-
     /// Install or manage harness capture plugins.
     #[command(subcommand)]
     Plugin(PluginCommand),
@@ -237,12 +353,12 @@ impl Command {
     }
 }
 
-/// Where the tapes server is, shared by every command that talks to one.
+/// Where the tapes read API is, shared by query commands.
 #[derive(Debug, Clone, Args)]
 pub struct ApiArgs {
-    /// Base URL of the tapes server. Falls back to `TAPES_URL`.
-    #[arg(long, env = "TAPES_URL")]
-    pub tapes_url: Option<String>,
+    /// Base URL of the tapes read API. Falls back to `TAPES_API_URL`.
+    #[arg(long = "api-url", env = "TAPES_API_URL", value_name = "URL")]
+    pub api_url: Option<String>,
 }
 
 /// Arguments for `tapesctl start`.
@@ -255,9 +371,9 @@ pub struct StartArgs {
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub harness_args: Vec<String>,
 
-    /// Base URL of the tapes ingest server. Falls back to `TAPES_URL`.
-    #[arg(long, env = "TAPES_URL")]
-    pub tapes_url: Option<String>,
+    /// Base URL of the tapes ingest server. Falls back to `TAPES_INGEST_URL`.
+    #[arg(long, env = "TAPES_INGEST_URL")]
+    pub ingest_url: Option<String>,
 
     /// Where to forward the harness's LLM traffic. Defaults to the harness's
     /// own provider API, so the harness behaves exactly as it would unproxied.
@@ -311,9 +427,9 @@ pub struct CaptureArgs {
     /// The harness to capture (today: `codex-app`).
     pub harness: String,
 
-    /// Base URL of the tapes ingest server. Falls back to `TAPES_URL`.
-    #[arg(long, env = "TAPES_URL")]
-    pub tapes_url: Option<String>,
+    /// Base URL of the tapes ingest server. Falls back to `TAPES_INGEST_URL`.
+    #[arg(long, env = "TAPES_INGEST_URL")]
+    pub ingest_url: Option<String>,
 
     /// Where to forward the harness's LLM traffic. Defaults to the backend
     /// that honours the credential the harness was configured with.
@@ -338,9 +454,9 @@ pub struct CaptureArgs {
 /// Arguments for `tapesctl sync`.
 #[derive(Debug, Args)]
 pub struct SyncArgs {
-    /// Base URL of the tapes ingest server. Falls back to `TAPES_URL`.
-    #[arg(long, env = "TAPES_URL")]
-    pub tapes_url: Option<String>,
+    /// Base URL of the tapes ingest server. Falls back to `TAPES_INGEST_URL`.
+    #[arg(long, env = "TAPES_INGEST_URL")]
+    pub ingest_url: Option<String>,
 
     /// Transcript tree to sweep. Defaults to `~/.claude/projects`.
     #[arg(long)]
@@ -401,9 +517,29 @@ pub struct SessionsListArgs {
     #[arg(long)]
     pub until: Option<String>,
 
+    /// Only the session captured from this harness session id — the id
+    /// `start` prints (distinct from the tapes session id read commands
+    /// take). The server takes the harness filter only as a pair, so
+    /// `--harness-id` must come with it.
+    #[arg(long, requires = "harness_id")]
+    pub harness_session_id: Option<String>,
+
+    /// The harness the session ran under (e.g. `claude`), naming the
+    /// other half of the harness filter pair.
+    #[arg(long, requires = "harness_session_id")]
+    pub harness_id: Option<String>,
+
     /// Only sessions stamped with this acting subject.
     #[arg(long)]
     pub auth_subject: Option<String>,
+
+    /// Print the raw JSON response instead of the table.
+    ///
+    /// `sessions list` renders a table by default; this restores the
+    /// pretty-printed JSON the read commands printed before, so the output still
+    /// composes with `jq`.
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// A session id and where to find its server.
@@ -523,8 +659,8 @@ pub struct SearchArgs {
 
     /// Print only session ids, one per line, deduplicated in score order.
     ///
-    /// The shape `skill generate` takes as positional arguments, so the two
-    /// compose: `tapesctl skill generate $(tapesctl search "..." -q -k 1)`.
+    /// The shape the skills cassette's generate takes as sessionIds, so the
+    /// two compose through a shell substitution.
     #[arg(long, short = 'q')]
     pub quiet: bool,
 }
@@ -552,125 +688,6 @@ pub struct ExportArgs {
 pub struct SeedArgs {
     #[command(flatten)]
     pub api: ApiArgs,
-}
-
-/// `tapesctl skill` subcommands.
-///
-/// `generate` carries far more flags than its siblings, so the variants differ
-/// in size. Boxing it is the usual fix and is not available here — clap derives
-/// a subcommand from a type implementing `Args`, which `Box<T>` does not — and
-/// the enum is built exactly once, at parse time, so the difference costs
-/// nothing worth contorting the surface for.
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug, Subcommand)]
-pub enum SkillCommand {
-    /// Extract a skill from one or more captured sessions.
-    Generate(SkillGenerateArgs),
-
-    /// List authored skills.
-    List(SkillListArgs),
-
-    /// Copy an authored skill into an agent's skills directory.
-    Sync(SkillSyncArgs),
-}
-
-/// Arguments for `tapesctl skill generate`.
-///
-/// Two servers are involved and they are not the same one: the tapes API
-/// supplies the session transcript, and an LLM provider does the extraction.
-/// `--tapes-url` addresses the first; `--provider`/`--model`/`--api-key`
-/// address the second.
-#[derive(Debug, Args)]
-pub struct SkillGenerateArgs {
-    #[command(flatten)]
-    pub api: ApiArgs,
-
-    /// Sessions to extract from. Takes priority over `--search`.
-    pub session_ids: Vec<String>,
-
-    /// Skill name, kebab-case.
-    #[arg(long)]
-    pub name: String,
-
-    /// `workflow` (default), `domain-knowledge`, or `prompt-template`.
-    #[arg(long = "type", default_value = "workflow")]
-    pub skill_type: String,
-
-    /// Render the generated skill without writing it.
-    #[arg(long)]
-    pub preview: bool,
-
-    /// LLM provider: `openai` (default), `anthropic`, or `ollama`.
-    #[arg(long, default_value = "openai")]
-    pub provider: String,
-
-    /// Model for the extraction call. Each provider has its own default.
-    #[arg(long)]
-    pub model: Option<String>,
-
-    /// API key for the LLM provider.
-    ///
-    /// Prefer the provider's environment variable — a key passed here is
-    /// visible in the process list and in shell history to everything on the
-    /// machine, for as long as the command runs.
-    #[arg(long)]
-    pub api_key: Option<String>,
-
-    /// Only include turns starting on or after this date (`YYYY-MM-DD` or
-    /// RFC 3339).
-    #[arg(long)]
-    pub since: Option<String>,
-
-    /// Only include turns starting on or before this date.
-    #[arg(long)]
-    pub until: Option<String>,
-
-    /// Resolve sessions by span search instead of naming them.
-    #[arg(long)]
-    pub search: Option<String>,
-
-    /// How many search hits to draw sessions from.
-    #[arg(long = "search-top", default_value_t = 3)]
-    pub search_top: u64,
-
-    /// Where authored skills are written. Defaults to `~/.tapes/skills`.
-    #[arg(long)]
-    pub source_dir: Option<PathBuf>,
-}
-
-/// Arguments for `tapesctl skill list`.
-#[derive(Debug, Args)]
-pub struct SkillListArgs {
-    /// Only show skills of this type.
-    #[arg(long = "type")]
-    pub skill_type: Option<String>,
-
-    /// Where authored skills live. Defaults to `~/.tapes/skills`.
-    #[arg(long)]
-    pub source_dir: Option<PathBuf>,
-}
-
-/// Arguments for `tapesctl skill sync`.
-#[derive(Debug, Args)]
-pub struct SkillSyncArgs {
-    /// The skill name, without the `.md` suffix.
-    pub name: String,
-
-    /// Write into a Claude skills directory rather than the agent-neutral one.
-    #[arg(long)]
-    pub claude: bool,
-
-    /// Write into this project rather than the user's home.
-    #[arg(long)]
-    pub local: bool,
-
-    /// Report the destination without writing anything.
-    #[arg(long)]
-    pub dry_run: bool,
-
-    /// Where authored skills live. Defaults to `~/.tapes/skills`.
-    #[arg(long)]
-    pub source_dir: Option<PathBuf>,
 }
 
 /// `tapesctl plugin` subcommands.
@@ -732,8 +749,8 @@ pub struct PluginUninstallArgs {
 
 /// `tapesctl config` subcommands.
 ///
-/// Key/value rather than a flag per setting — `config set tapes-url <url>`,
-/// not `config set --tapes-url <url>` — so the surface does not have to grow a
+/// Key/value rather than a flag per setting — `config set api-url <url>`,
+/// not `config set --api-url <url>` — so the surface does not have to grow a
 /// verb, a flag, and a printer for every future key. `git config` and `gh
 /// config` are the same shape, which is most of why it is this one.
 #[derive(Debug, Subcommand)]
@@ -754,7 +771,7 @@ pub enum ConfigCommand {
 /// Arguments for `tapesctl config set`.
 #[derive(Debug, Args)]
 pub struct ConfigSetArgs {
-    /// The key to set. Today: `tapes-url`.
+    /// The key to set. Today: `api-url`.
     pub key: String,
 
     /// The value to store.
@@ -806,14 +823,14 @@ mod tests {
 
     #[test]
     fn the_server_can_be_named_before_the_subcommand_and_still_reaches_it() {
-        // The point of the global: `--tapes-url` given once, at the front,
+        // The point of the global: `--api-url` given once, at the front,
         // where a shell alias or a wrapper script would put it.
-        let cli = parse(&["tapesctl", "--tapes-url", "http://x", "sessions", "list"]);
-        assert_eq!(cli.tapes_url.as_deref(), Some("http://x"));
+        let cli = parse(&["tapesctl", "--api-url", "http://x", "sessions", "list"]);
+        assert_eq!(cli.api_url.as_deref(), Some("http://x"));
         match cli.command {
             Command::Sessions(SessionsCommand::List(args)) => {
                 assert_eq!(
-                    args.api.tapes_url.as_deref(),
+                    args.api.api_url.as_deref(),
                     Some("http://x"),
                     "a global value must reach the leaf that consumes it",
                 );
@@ -829,22 +846,22 @@ mod tests {
         // user meant.
         let cli = parse(&[
             "tapesctl",
-            "--tapes-url",
+            "--api-url",
             "http://global",
             "sessions",
             "list",
-            "--tapes-url",
+            "--api-url",
             "http://leaf",
         ]);
         match cli.command {
             Command::Sessions(SessionsCommand::List(args)) => {
-                assert_eq!(args.api.tapes_url.as_deref(), Some("http://leaf"));
+                assert_eq!(args.api.api_url.as_deref(), Some("http://leaf"));
             }
             other => panic!("got: {other:?}"),
         }
     }
 
-    /// The global flag deliberately does not bind `TAPES_URL`, and this is the
+    /// The global flag deliberately does not bind `TAPES_API_URL`, and this is the
     /// guard on that: clap treats an environment-sourced value as an argument
     /// the user supplied, so a top-level `env` binding would make a bare
     /// `tapesctl` answer "requires a subcommand" instead of help on every
@@ -855,31 +872,34 @@ mod tests {
         let command = Cli::command();
         let global = command
             .get_arguments()
-            .find(|arg| arg.get_id() == TAPES_URL_ARG)
+            .find(|arg| arg.get_id() == API_URL_ARG)
             .expect("the global flag should exist");
         assert!(global.is_global_set());
         assert!(
             global.get_env().is_none(),
-            "binding TAPES_URL here would cost the bare invocation its help",
+            "binding TAPES_API_URL here would cost the bare invocation its help",
         );
 
         let leaf = command
             .find_subcommand("seed")
             .and_then(|sub| {
                 sub.get_arguments()
-                    .find(|arg| arg.get_id() == TAPES_URL_ARG)
+                    .find(|arg| arg.get_id() == API_URL_ARG)
                     .cloned()
             })
             .expect("a leaf should declare the flag itself");
-        assert_eq!(leaf.get_env(), Some(std::ffi::OsStr::new(TAPES_URL_ENV)));
+        assert_eq!(
+            leaf.get_env(),
+            Some(std::ffi::OsStr::new(TAPES_API_URL_ENV))
+        );
     }
 
     #[test]
     fn config_reads_and_writes_one_key_at_a_time() {
-        let cli = parse(&["tapesctl", "config", "set", "tapes-url", "http://x"]);
+        let cli = parse(&["tapesctl", "config", "set", "api-url", "http://x"]);
         match cli.command {
             Command::Config(ConfigCommand::Set(args)) => {
-                assert_eq!(args.key, "tapes-url");
+                assert_eq!(args.key, "api-url");
                 assert_eq!(args.value, "http://x");
             }
             other => panic!("got: {other:?}"),
@@ -892,21 +912,21 @@ mod tests {
             other => panic!("got: {other:?}"),
         }
         assert!(
-            Cli::try_parse_from(["tapesctl", "config", "set", "tapes-url"]).is_err(),
+            Cli::try_parse_from(["tapesctl", "config", "set", "api-url"]).is_err(),
             "a set with no value would have nothing to store",
         );
     }
 
     #[test]
     fn config_needs_no_server() {
-        // It writes a local file. Requiring --tapes-url to configure
-        // --tapes-url would be a circle.
+        // It writes a local file. Requiring --api-url to configure
+        // --api-url would be a circle.
         assert!(Cli::try_parse_from(["tapesctl", "config", "path"]).is_ok());
     }
 
     #[test]
     fn resource_and_method_parse_as_two_words() {
-        let cli = parse(&["tapesctl", "sessions", "list", "--tapes-url", "http://x"]);
+        let cli = parse(&["tapesctl", "sessions", "list", "--api-url", "http://x"]);
         assert!(matches!(
             cli.command,
             Command::Sessions(SessionsCommand::List(_)),
@@ -921,7 +941,7 @@ mod tests {
             "get",
             "t-1",
             "s-1",
-            "--tapes-url",
+            "--api-url",
             "http://x",
         ]);
         match cli.command {
@@ -941,7 +961,7 @@ mod tests {
             "tapesctl",
             "start",
             "claude",
-            "--tapes-url",
+            "--ingest-url",
             "http://x",
             "--",
             "--verbose",
@@ -951,6 +971,7 @@ mod tests {
         match cli.command {
             Command::Start(args) => {
                 assert_eq!(args.harness, "claude");
+                assert_eq!(args.ingest_url.as_deref(), Some("http://x"));
                 assert_eq!(args.harness_args, vec!["--verbose", "-p", "hi"]);
             }
             other => panic!("got: {other:?}"),
@@ -965,7 +986,7 @@ mod tests {
             "tapesctl",
             "start",
             "pi",
-            "--tapes-url",
+            "--ingest-url",
             "http://x",
             "--schema",
             "openai",
@@ -985,7 +1006,7 @@ mod tests {
 
     #[test]
     fn sync_defaults_to_the_bounded_window_and_the_home_tree() {
-        let cli = parse(&["tapesctl", "sync", "--tapes-url", "http://x"]);
+        let cli = parse(&["tapesctl", "sync", "--ingest-url", "http://x"]);
         match cli.command {
             Command::Sync(args) => {
                 assert_eq!(args.since_days, None);
@@ -1003,7 +1024,7 @@ mod tests {
             "s-1",
             "-o",
             "out.jsonl",
-            "--tapes-url",
+            "--api-url",
             "http://x",
         ]);
         match cli.command {
@@ -1015,23 +1036,19 @@ mod tests {
     }
 
     #[test]
-    fn skill_sync_needs_no_server() {
-        // It is a local file copy; requiring --tapes-url would be a lie.
-        let cli = parse(&["tapesctl", "skill", "sync", "review", "--claude", "--local"]);
-        match cli.command {
-            Command::Skill(SkillCommand::Sync(args)) => {
-                assert_eq!(args.name, "review");
-                assert!(args.claude);
-                assert!(args.local);
-            }
-            other => panic!("got: {other:?}"),
-        }
+    fn skill_is_not_a_built_in_noun() {
+        // Skills are the skills cassette's product: the surface is discovered
+        // (`tapesctl cassettes skills <method>`), never compiled in. A
+        // built-in `skill` noun would also shadow-block a cassette named
+        // `skill` from ever being mounted.
+        assert!(Cli::try_parse_from(["tapesctl", "skill", "list"]).is_err());
+        assert!(Cli::try_parse_from(["tapesctl", "skill", "sync", "review"]).is_err());
     }
 
     #[test]
     fn plugin_install_names_a_harness_and_needs_no_server() {
         // Installing a plugin is a local file copy over crate-owned bytes;
-        // nothing is fetched, so requiring --tapes-url would be a lie.
+        // nothing is fetched, so requiring --api-url would be a lie.
         let cli = parse(&["tapesctl", "plugin", "install", "pi"]);
         match cli.command {
             Command::Plugin(PluginCommand::Install(args)) => {
@@ -1048,7 +1065,7 @@ mod tests {
             "tapesctl",
             "search",
             "gum glow charm",
-            "--tapes-url",
+            "--api-url",
             "http://x",
         ]);
         match cli.command {
@@ -1069,13 +1086,13 @@ mod tests {
             "tapesctl",
             "capture",
             "codex-app",
-            "--tapes-url",
+            "--ingest-url",
             "http://x",
         ]);
         match cli.command {
             Command::Capture(args) => {
                 assert_eq!(args.harness, "codex-app");
-                assert_eq!(args.tapes_url.as_deref(), Some("http://x"));
+                assert_eq!(args.ingest_url.as_deref(), Some("http://x"));
             }
             other => panic!("got: {other:?}"),
         }
@@ -1092,7 +1109,7 @@ mod tests {
             "tapesctl",
             "capture",
             "codex-app",
-            "--tapes-url",
+            "--ingest-url",
             "http://x",
         ]);
         assert!(!cli.command.hands_over_terminal());
@@ -1155,7 +1172,7 @@ mod tests {
             "-k",
             "10",
             "-q",
-            "--tapes-url",
+            "--api-url",
             "http://x",
         ]);
         match cli.command {
@@ -1175,84 +1192,33 @@ mod tests {
     }
 
     #[test]
-    fn generate_requires_a_name_and_defaults_the_rest() {
-        let cli = parse(&[
-            "tapesctl",
-            "skill",
-            "generate",
-            "s-1",
-            "s-2",
-            "--name",
-            "debug-hooks",
-            "--tapes-url",
-            "http://x",
-        ]);
-        match cli.command {
-            Command::Skill(SkillCommand::Generate(args)) => {
-                assert_eq!(args.session_ids, vec!["s-1", "s-2"]);
-                assert_eq!(args.name, "debug-hooks");
-                assert_eq!(args.skill_type, "workflow");
-                assert_eq!(args.provider, "openai");
-                assert_eq!(args.search_top, 3);
-                assert!(!args.preview);
-            }
-            other => panic!("got: {other:?}"),
-        }
-        assert!(
-            Cli::try_parse_from(["tapesctl", "skill", "generate", "s-1"]).is_err(),
-            "--name is required",
-        );
-    }
-
-    #[test]
     fn the_discovery_server_is_found_under_both_spellings_clap_accepts() {
         // The cassette nouns must exist before argv is parsed, so this scan is
         // what stands in for the parse that has not happened yet.
         assert_eq!(
-            discovery_url(["tapesctl", "sessions", "list", "--tapes-url", "http://x"]),
+            discovery_url(["tapesctl", "sessions", "list", "--api-url", "http://x"]),
             Some("http://x".to_owned()),
         );
         assert_eq!(
-            discovery_url(["tapesctl", "summary", "reports", "--tapes-url=http://y"]),
+            discovery_url([
+                "tapesctl",
+                "cassettes",
+                "summary",
+                "reports",
+                "--api-url=http://y"
+            ]),
             Some("http://y".to_owned()),
         );
-    }
-
-    #[test]
-    fn generate_can_take_its_sessions_from_a_search_instead() {
-        let cli = parse(&[
-            "tapesctl",
-            "skill",
-            "generate",
-            "--search",
-            "react hooks",
-            "--search-top",
-            "5",
-            "--name",
-            "react-debug",
-            "--tapes-url",
-            "http://x",
-        ]);
-        match cli.command {
-            Command::Skill(SkillCommand::Generate(args)) => {
-                assert!(args.session_ids.is_empty());
-                assert_eq!(args.search.as_deref(), Some("react hooks"));
-                assert_eq!(args.search_top, 5);
-            }
-            other => panic!("got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn skill_list_needs_no_server() {
-        // It reads the authoring directory; requiring --tapes-url would be a lie.
-        let cli = parse(&["tapesctl", "skill", "list", "--type", "workflow"]);
-        match cli.command {
-            Command::Skill(SkillCommand::List(args)) => {
-                assert_eq!(args.skill_type.as_deref(), Some("workflow"));
-            }
-            other => panic!("got: {other:?}"),
-        }
+        assert_eq!(
+            discovery_url([
+                "tapesctl",
+                "--api-url=http://first",
+                "cassettes",
+                "--api-url",
+                "http://last",
+            ]),
+            Some("http://last".to_owned()),
+        );
     }
 
     #[test]
@@ -1275,18 +1241,22 @@ mod tests {
                 "start",
                 "claude",
                 "--",
-                "--tapes-url",
+                "--api-url",
                 "http://evil"
             ]),
-            std::env::var(TAPES_URL_ENV).ok().filter(|v| !v.is_empty()),
+            std::env::var(TAPES_API_URL_ENV)
+                .ok()
+                .filter(|v| !v.is_empty()),
         );
     }
 
     #[test]
     fn a_dangling_server_flag_is_not_read_as_a_value() {
         assert_eq!(
-            discovery_url(["tapesctl", "sessions", "list", "--tapes-url"]),
-            std::env::var(TAPES_URL_ENV).ok().filter(|v| !v.is_empty()),
+            discovery_url(["tapesctl", "sessions", "list", "--api-url"]),
+            std::env::var(TAPES_API_URL_ENV)
+                .ok()
+                .filter(|v| !v.is_empty()),
         );
     }
 
@@ -1294,5 +1264,174 @@ mod tests {
     fn a_missing_required_positional_is_rejected() {
         assert!(Cli::try_parse_from(["tapesctl", "sessions", "get"]).is_err());
         assert!(Cli::try_parse_from(["tapesctl", "spans", "get", "t-1"]).is_err());
+    }
+
+    #[test]
+    fn a_lone_harness_filter_flag_is_rejected_at_parse() {
+        // The server takes the harness filter only as a pair — a lone
+        // param is a 400 — so the parser refuses the shapes the server
+        // would refuse, with a message that names the missing half.
+        assert!(
+            Cli::try_parse_from([
+                "tapesctl",
+                "sessions",
+                "list",
+                "--harness-session-id",
+                "sid"
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["tapesctl", "sessions", "list", "--harness-id", "claude"])
+                .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "tapesctl",
+                "sessions",
+                "list",
+                "--harness-session-id",
+                "sid",
+                "--harness-id",
+                "claude",
+            ])
+            .is_ok()
+        );
+    }
+
+    fn argv(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn value_taking_globals_track_the_real_cli() {
+        // The gate's list must match the derived CLI exactly: a value-taking
+        // global missing here makes the gate misread that flag's value as the
+        // subcommand, and a listed flag that stopped taking a value makes the
+        // gate swallow a real subcommand.
+        let command = Cli::command();
+        let mut expected: Vec<String> = command
+            .get_arguments()
+            .filter(|a| a.is_global_set() && a.get_action().takes_values())
+            .map(|a| format!("--{}", a.get_long().expect("globals are long flags")))
+            .collect();
+        expected.sort();
+        let mut actual: Vec<String> = VALUE_TAKING_GLOBALS
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        actual.sort();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn only_cassettes_help_and_bare_invocations_are_gated_in() {
+        assert!(gated(&argv(&["tapesctl"])));
+        assert!(gated(&argv(&["tapesctl", "--help"])));
+        assert!(gated(&argv(&["tapesctl", "-v"])));
+        assert!(gated(&argv(&["tapesctl", "cassettes"])));
+        assert!(gated(&argv(&[
+            "tapesctl",
+            "cassettes",
+            "summary",
+            "reports"
+        ])));
+        assert!(gated(&argv(&["tapesctl", "help"])));
+        assert!(gated(&argv(&["tapesctl", "help", "cassettes"])));
+
+        assert!(!gated(&argv(&["tapesctl", "sessions", "list"])));
+        assert!(!gated(&argv(&["tapesctl", "start", "claude"])));
+        assert!(!gated(&argv(&["tapesctl", "version"])));
+        assert!(!gated(&argv(&["tapesctl", "config", "get", "api-url"])));
+    }
+
+    #[test]
+    fn a_version_request_is_gated_out() {
+        // `--version` prints and exits without rendering help, so discovery
+        // for it would be a cache read — and on a cold cache a network
+        // round-trip — spent on output that never shows a cassette.
+        assert!(!gated(&argv(&["tapesctl", "--version"])));
+        assert!(!gated(&argv(&["tapesctl", "-V"])));
+        assert!(!gated(&argv(&["tapesctl", "-v", "--version"])));
+        assert!(!gated(&argv(&[
+            "tapesctl",
+            "--api-url",
+            "http://x",
+            "--version"
+        ])));
+
+        // Whichever of `--help` and `--version` clap processes first is the
+        // one it answers, so only a version flag that comes first ends the
+        // parse without help.
+        assert!(gated(&argv(&["tapesctl", "--help", "--version"])));
+        assert!(!gated(&argv(&["tapesctl", "--version", "--help"])));
+
+        // Past a noun or a `--` cutoff the token is not the top-level flag.
+        assert!(gated(&argv(&["tapesctl", "cassettes", "--version"])));
+        assert!(gated(&argv(&["tapesctl", "--", "--version"])));
+    }
+
+    #[test]
+    fn clap_answers_the_first_of_help_and_version() {
+        // The gate's precedence rule mirrors the parser; pin the parser's
+        // half so a clap upgrade cannot silently split them.
+        use clap::error::ErrorKind;
+
+        let kind_of = |argv: &[&str]| {
+            Cli::command()
+                .try_get_matches_from(argv)
+                .expect_err("help and version both end the parse")
+                .kind()
+        };
+        assert_eq!(
+            kind_of(&["tapesctl", "--version", "--help"]),
+            ErrorKind::DisplayVersion
+        );
+        assert_eq!(
+            kind_of(&["tapesctl", "--help", "--version"]),
+            ErrorKind::DisplayHelp
+        );
+    }
+
+    #[test]
+    fn a_global_flag_value_is_not_mistaken_for_the_subcommand() {
+        // `http://x` is --api-url's value, not the first noun.
+        assert!(gated(&argv(&[
+            "tapesctl",
+            "--api-url",
+            "http://x",
+            "cassettes",
+            "summary",
+        ])));
+        assert!(!gated(&argv(&[
+            "tapesctl",
+            "--api-url",
+            "http://x",
+            "sessions",
+            "list",
+        ])));
+        // The `=` spelling is one token and needs no lookahead.
+        assert!(!gated(&argv(&[
+            "tapesctl",
+            "--api-url=http://x",
+            "sessions",
+            "list",
+        ])));
+    }
+
+    #[test]
+    fn tokens_after_a_bare_dash_dash_never_gate_discovery_in() {
+        // Everything after `--` belongs to the launched harness; a harness
+        // argument spelled `cassettes` must not cost a discovery round trip.
+        assert!(!gated(&argv(&[
+            "tapesctl",
+            "start",
+            "claude",
+            "--",
+            "cassettes"
+        ])));
+        // A `--` with nothing before it means no subcommand of tapesctl's own
+        // was named — and nothing after it is tapesctl's either.
+        assert!(gated(&argv(&["tapesctl", "--", "sessions"])));
     }
 }

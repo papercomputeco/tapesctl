@@ -14,7 +14,7 @@
 //!
 //! The named methods on [`tapes_client::CoreClient`] return the vendored
 //! contract's models, and every command that *renders* a response — search,
-//! seed, the skill transcript — uses them. The `<resource> <method>` commands
+//! seed — uses them. The `<resource> <method>` commands
 //! do not render: they print the server's document, and a document that had
 //! been through a model would be missing whatever fields this build predates.
 //! For those, [`tapes_client::CoreClient::call`] is the documented escape
@@ -241,7 +241,7 @@ mod tests {
     async fn a_search_response_is_decoded_through_the_shipped_model() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/v1/search/spans"))
+            .and(path("/v1/cassettes/search/spans"))
             .and(query_param("query", "hooks"))
             .and(query_param("top_k", "5"))
             .respond_with(ResponseTemplate::new(200).set_body_string(

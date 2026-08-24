@@ -43,7 +43,35 @@ make dist   # cross-compile all four release targets into ./build
 
 CI additionally cross-compiles for `linux/{amd64,arm64}` and
 `darwin/{amd64,arm64}` and smoke-tests each binary: `tapesctl version` must
-print its canary line, and a bare `tapesctl` must print help and exit `2`.
+print its canary line and the commit it was built from, and a bare `tapesctl`
+must print help and exit `2`.
+
+### What a build calls itself
+
+`tapesctl version` and `tapesctl --version` print the same three fields the
+tapes server prints — version, commit, build date — and the `version` command
+adds the canary after them.
+
+None of it comes from `Cargo.toml`. The workspace version is a placeholder that
+no release bumps, because a release tag is created by tagging a commit that has
+already merged, so the source cannot know it. The build supplies the identity
+instead: a local `cargo build` fills the commit in from git and reports a
+development version.
+
+```
+tapesctl 0.0.0-dev+3f2a1b9
+Sha: 3f2a1b9c0d4e5f60718293a4b5c6d7e8f9012345
+Built at: unknown
+```
+
+The release and nightly workflows pass the rest to the Dagger build, which
+exports `TAPESCTL_RELEASE_TAG`, `TAPESCTL_BUILD_SHA`, and `TAPESCTL_BUILD_DATE`
+into the compile. Any of the three can be set by hand to see what a release
+will print:
+
+```bash
+TAPESCTL_RELEASE_TAG=v9.9.9 cargo build -p tapesctl
+```
 
 ## Layout
 
@@ -141,7 +169,7 @@ cover, and then the session runs normally and records nothing.
 
 ```bash
 tapesctl plugin install pi     # once; writes pi's capture extension
-tapesctl start pi --tapes-url http://localhost:8081 -- --provider anthropic --model <model-id>
+tapesctl start pi --ingest-url http://localhost:8082 -- --provider anthropic --model <model-id>
 ```
 
 There is no `tapesctl` error for this — do not go looking for one to improve.
@@ -208,7 +236,7 @@ after the harness name is silently handed to the harness instead of rejected.
 Put `tapesctl` flags before the harness name, or `--` before the harness's own:
 
 ```bash
-tapesctl -v start claude --tapes-url http://localhost:8081 -- --model opus
+tapesctl -v start claude --ingest-url http://localhost:8082 -- --model opus
 ```
 
 ### Vendored corpora and contracts are byte-for-byte copies
@@ -228,12 +256,11 @@ per server. Never add a hard-coded cassette list — it would freeze one
 deployment's extensions into everyone's binary. Point the cache elsewhere with
 `TAPESCTL_CACHE_DIR`.
 
-### Commands refuse rather than guess a server
+### Local endpoint defaults
 
-With no `--tapes-url`, no `TAPES_URL`, and no configured default, a command that
-needs a server exits with an error instead of trying `localhost`. Preserve that:
-a capture pointed at whatever happened to be listening is worse than one that
-never started.
+Read commands default to `http://localhost:8081`; capture commands default to
+`http://localhost:8082`. Keep their configuration separate: `--api-url` /
+`TAPES_API_URL` for reads and `--ingest-url` / `TAPES_INGEST_URL` for capture.
 
 ## Pull requests
 

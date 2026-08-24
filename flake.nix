@@ -35,20 +35,23 @@
               # `builtins.fetchGit` needs nothing else — which is why there is no
               # `outputHashes` block here.
               #
-              # There used to be one, and it was the single worst part of a pin
-              # bump: every rev change also required a `nix-prefetch-git`
-              # recompute, in a file the bump does not otherwise touch. Cargo
-              # never reads those hashes, so a bump that skipped the recompute
-              # passed `cargo build` and failed only under `nix build` — which is
-              # how more than one stale hash reached main. `make bump-harnesses`
-              # now rewrites the revs alone and this stays correct by
-              # construction.
-              #
-              # If the tapes crates move to crates.io, the git pins disappear
-              # entirely and this setting can go with them.
+              # The tapes crates come from crates.io now and go through ordinary
+              # cargo vendoring, but this setting is not theirs to retire: the
+              # `[patch.crates-io]` libproc pin is still a git dependency, and
+              # any temporary co-development git pin of a tapes crate (the
+              # escape hatch in .github/dependabot.yml) rides through here too —
+              # without needing a hash recomputed, which is what an
+              # `outputHashes` block would demand on every rev change.
               allowBuiltinFetchGit = true;
             };
             cargoBuildFlags = [ "-p" "tapesctl" ];
+
+            # What the built binary reports for `tapesctl version`. The build
+            # script would otherwise ask git, and `cleanSource` has already
+            # removed the `.git` directory by the time it runs — so without this
+            # a Nix-built tapesctl could not say which commit it came from.
+            # Empty for a dirty tree, where there is no revision to name.
+            TAPESCTL_BUILD_SHA = self.rev or "";
 
             # Workspace tests are exercised in CI (`make test`); keep the package
             # build focused on producing the CLI.
