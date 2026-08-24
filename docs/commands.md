@@ -241,13 +241,14 @@ as a success.
 
 ## sessions
 
-Read commands. Each prints the server's JSON pretty-printed and nothing else.
-Responses are never re-modelled on the way through, so fields the server grows
-reach you without a client upgrade.
+Read commands. `sessions list` renders its listing as a table by default, with
+`--json` restoring the raw document; every other command prints the server's
+JSON pretty-printed. Responses are never re-modelled on the way through, so
+fields the server grows reach you without a client upgrade.
 
 | leaf | route | flags |
 |---|---|---|
-| `list` | `GET /v1/sessions` | `--limit`, `--cursor`, `--sort`, `--direction`, `--since`, `--until`, `--harness-id`, `--harness-session-id`, `--auth-subject` |
+| `list` | `GET /v1/sessions` | `--limit`, `--cursor`, `--sort`, `--direction`, `--since`, `--until`, `--harness-id`, `--harness-session-id`, `--auth-subject`, `--json` |
 | `get <ID>` | `GET /v1/sessions/{id}` | — |
 | `traces <ID>` | `GET /v1/sessions/{id}/traces` | `--payload` |
 | `raw-turns <ID>` | `GET /v1/sessions/{id}/raw_turns` | — |
@@ -272,6 +273,7 @@ come as a pair — a lone half fails at parse with the missing half named.
 | `--harness-id <H>` | the harness the session ran under (e.g. `claude`) — the other half of the pair |
 | `--harness-session-id <ID>` | exact match on the harness session id — the id `start` prints; pairs with `--harness-id`; see [Session ids](./capture.md#session-ids) |
 | `--auth-subject <S>` | exact match |
+| `--json` | print the raw pretty-printed JSON instead of the table, so the output still composes with `jq` |
 
 `--payload` takes `full` (the default) or `preview`, case-insensitively. An
 unknown value fails **before any request is made**:

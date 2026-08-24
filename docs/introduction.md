@@ -130,8 +130,9 @@ Read the session with the `id` from the listing:
 tapesctl sessions get 01JDQ8F3K2M4N6P8R0T2V4X6Z8 --api-url http://localhost:8081
 ```
 
-Every read command prints the server's JSON pretty-printed and nothing else, so
-it composes with `jq`.
+`sessions list` renders its listing as a table by default; `--json` restores
+the raw document so it still composes with `jq`. The other read commands print
+the server's JSON pretty-printed and nothing else.
 
 ## Where to go next
 
