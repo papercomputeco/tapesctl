@@ -93,6 +93,13 @@ Inside `crates/tapesctl/src`:
 - `api/` — the `<resource> <method>` read client.
 - `cassette/` — the runtime-discovered `cassettes <name> <method>` surface:
   discovery, the spec reducer, the cache, and clap synthesis.
+- `upgrade/` — verified, crash-safe self-replacement: bucket resolution,
+  staging, digest verification, and the atomic swap.
+- `install_layout.rs` — where this binary actually lives, derived from the
+  running executable. `upgrade` and `uninstall` both build on it.
+- `rc_block.rs` — removal of the installer's sentinel block from shell rc
+  files. Its markers are pinned against `install.sh` by a test.
+- `uninstall.rs` — the binary, the local state, and that block.
 - `plugin.rs`, `capture.rs`, `logging.rs`, `error.rs` — the remaining
   command entry points and cross-cutting support.
 - `ports/` — search, skills, and seed.

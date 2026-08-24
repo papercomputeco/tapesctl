@@ -69,7 +69,36 @@ are tagged independently. Do not use `tapesctl --version` to work out which
 build you have, and do not treat `0.1.0` in a bug report as meaningful. Read
 [the version trap](./commands.md#version) before relying on it for anything.
 
+The binary lands in `$HOME/.local/bin`, which you own — a normal install never
+asks for `sudo`. Because that directory is not on every default `PATH`, the
+installer also writes a guarded `PATH` export into your shell's rc file, inside
+a sentinel-marked block it rewrites in place rather than duplicating on
+re-install. Set `TAPESCTL_INSTALL_DIR` to put it somewhere else.
+
 Supported platforms are Linux and macOS, on x86-64 and arm64.
+
+### Upgrading
+
+```bash
+tapesctl upgrade
+```
+
+Replaces this binary with the newest published release, or says `already up to
+date` and exits successfully when there is nothing to do. The download's
+SHA-256 is checked against the published sidecar and the staged file is
+sanity-probed before anything replaces the installed binary, so a failed
+upgrade leaves the one you had still working. `--version v0.6.0` pins an exact
+release; `--nightly` takes the rolling nightly build.
+
+### Uninstalling
+
+```bash
+tapesctl uninstall
+```
+
+Removes the binary, `~/.tapes`, the cassette cache, and the installer's `PATH`
+block — leaving the rest of your rc file untouched. Harness-side capture
+plugins are removed separately with `tapesctl plugin uninstall <harness>`.
 
 ## Two minutes: capture, then read
 

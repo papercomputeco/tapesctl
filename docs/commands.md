@@ -34,7 +34,8 @@ cannot steer `tapesctl`.
 
 **`--api-url` appears in the help of commands that never make an HTTP
 call** — `config set`, `config get`, `config path`,
-`version`, and `plugin uninstall` — because the global flag propagates into
+`version`, `upgrade`, `uninstall`, and `plugin uninstall` — because the global
+flag propagates into
 every leaf's help. It is inert there. Its presence in `config`'s help is
 actively misleading, since the point of `config set api-url` is that you do
 not have a server configured yet.
@@ -46,7 +47,7 @@ Three values, and only three.
 | code | meaning |
 |---|---|
 | `0` | success |
-| `1` | a runtime error — one line on stderr, prefixed `tapesctl: ` |
+| `1` | a runtime error — a `tapesctl: ` line on stderr, plus a `caused by:` line per underlying cause |
 | `2` | an argument-parsing error, or help printed because a subcommand was missing |
 
 **A bare `tapesctl` prints help and exits `2`.** So does `tapesctl sessions`,
@@ -527,19 +528,96 @@ tapesctl version
 ```
 
 ```
-tapesctl 0.1.0
+tapesctl v0.7.0+3f2a1b9
+Sha: 3f2a1b9c0d4e5f60718293a4b5c6d7e8f9012345
+Built at: 2026-08-13T18:22:04Z
 All in all, just another tape in the stereo
 ```
 
-Both lines are expected; the second is the release smoke test's canary and is
-pinned as an exact string. `--version` prints only the first line.
+Four lines, and all four are expected; the last is the release smoke test's
+canary and is pinned as an exact string. `--version` prints the same block
+without it.
 
-**The number is not a release identifier.** It comes from the crate version,
-which has never been bumped, while releases are tagged independently — so a
-binary from any release reports `0.1.0`. Do not tell anyone to "check your
-version with `tapesctl --version`", do not pin documentation to a version the
-binary can confirm, and treat `0.1.0` in a bug report as version-less. To
-identify a build, record where you got it.
+The identity comes from the build that produced the artifact, not from
+`Cargo.toml` — the manifest holds a placeholder no release bumps, because a
+release is cut by tagging a commit that has already merged, so the source
+cannot know its own tag. A release reports `v0.7.0+<commit>`, a nightly
+`nightly+<commit>`, and a local `cargo build` `0.0.0-dev+<commit>`. The commit
+rides along as semver build metadata, which comparison ignores — that is what
+lets `upgrade` recognize a stamped `v0.7.0+3f2a1b9` as the published `v0.7.0`.
+
+A `0.0.0-dev` in a bug report means a build from source, not a release.
+
+## upgrade
+
+```bash
+tapesctl upgrade                    # newest published release
+tapesctl upgrade --version v0.6.0   # an exact release, older included
+tapesctl upgrade --nightly          # the rolling nightly build
+```
+
+Replaces this binary in place. With no flags it compares the installed version
+against the published `latest`, prints `tapesctl <version> is already up to
+date.` and exits `0` when they match, and otherwise prints
+`tapesctl upgraded: <old> → <new>`.
+
+| flag | default | notes |
+|---|---|---|
+| `--version <spec>` | the newest release | `v0.6.0` and `0.6.0` are the same target. Downgrades are allowed — a bad release needs an escape hatch |
+| `--nightly` | off | always downloads; a nightly carries no orderable version to compare. Conflicts with `--version` |
+
+**Every failure leaves the binary you had still working.** The order is fixed
+and nothing is skipped: the published `.sha256` is compared *before* the
+downloaded file is made executable or run; the staged file is then probed with
+`version`, which catches a faithfully published wrong-architecture artifact
+that a correct digest cannot; its answer is checked against the resolved
+version, which catches a prefix serving the wrong build; only then is the file
+renamed over the installed binary, atomically. A missing `.sha256` aborts —
+there is no unverified-download fallback. Debris from a crashed run is swept at
+the start of the next attempt, so repeated failures converge.
+
+An install in a directory you cannot write — the pre-`$HOME/.local/bin` layout
+— refuses before any network request and names the installer as the way to
+migrate. `upgrade` never escalates.
+
+| error | means |
+|---|---|
+| `install directory '<dir>' is not writable; re-run the installer to migrate: …` | an unmigrated root-owned install; refused before downloading |
+| `no published checksum at '<url>' (answered <status>) — refusing to install an unverifiable binary` | no `.sha256` sidecar was served. Any non-success status counts: a bucket without `ListBucket` answers 403 for a missing object |
+| `sha256 mismatch: expected <a>, downloaded file hashes to <b>` | a corrupted or tampered download; nothing was executed |
+| `staged binary '<path>' would not execute` | a wrong-architecture artifact |
+| `staged binary '<path>' reports version <x>, expected <y>` | the bucket prefix is serving the wrong build |
+
+## uninstall
+
+```bash
+tapesctl uninstall        # confirms first
+tapesctl uninstall -y     # no prompt
+```
+
+Removes, in this order: `~/.tapes`, the cassette cache, the installer's `PATH`
+block from `.bashrc` / `.zshrc` / `config.fish`, and finally the binary itself.
+The prompt lists every one of those paths before you answer, because two of
+them are recursive deletes.
+
+The cassette cache it removes is the one tapesctl derived for itself, under the
+platform cache directory. If `TAPESCTL_CACHE_DIR` is set, that location is
+**named in the output and left alone** — the variable points at a directory you
+chose, which may hold more than our cache, and an uninstall does not get to
+recursively delete it on your behalf.
+
+Each step warns and continues rather than aborting, so an interruption always
+leaves a `tapesctl` that can be run again to finish. The rc-file edit removes
+exactly the lines between the installer's sentinel markers and preserves every
+byte outside them; a block whose end marker is missing is reported and left
+alone, because rewriting would drop whatever follows it. A `paperctl` block in
+the same file is never touched.
+
+Harness-side capture plugins are **not** removed — those are registrations in a
+config file the harness owns. Use `tapesctl plugin uninstall <harness>`.
+
+A prompt that reaches end-of-input counts as a decline, so a piped or
+`</dev/null` invocation removes nothing.
 
 ## cassettes
 
@@ -558,7 +636,10 @@ naming the discovered set it wanted.
 
 ## Error families
 
-Every runtime error is one line on stderr prefixed `tapesctl: `, and exits `1`.
+Every runtime error exits `1` and prints a `tapesctl: ` line on stderr,
+followed by one indented `caused by:` line for each error beneath it. The
+outermost line is the least specific — `upgrade failed` is a category — and the
+cause you act on is usually the last line, so read the chain from the bottom.
 
 | family | shape |
 |---|---|
