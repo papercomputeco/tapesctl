@@ -53,6 +53,42 @@ tapesctl version
 
 Supported platforms are Linux and macOS, on x86-64 and arm64.
 
+### Upgrading
+
+```bash
+tapesctl upgrade
+```
+
+No curl, no re-running the installer. It checks the published version, says
+`already up to date` and exits successfully when there is nothing to do, and
+otherwise replaces this binary in place and prints `old → new`.
+
+Nothing touches the installed binary until the download's SHA-256 matches the
+published sidecar and the staged file has answered `version` sensibly — so a
+corrupted download, a wrong-architecture artifact, or a lost connection all
+leave the binary you had still working. A missing sidecar aborts rather than
+installing something unverifiable.
+
+`--version v0.6.0` pins an exact release, older ones included, because a bad
+release needs an escape hatch. `--nightly` installs the rolling nightly build.
+
+An install still living in `/usr/local/bin` cannot upgrade itself — the
+directory is not yours to write — and says so, naming the installer as the way
+to migrate.
+
+### Uninstalling
+
+```bash
+tapesctl uninstall
+```
+
+Removes the binary, `~/.tapes`, the cassette cache, and the `PATH` block the
+installer wrote — leaving every other line of your rc file byte-for-byte
+intact, and listing each path before you confirm. A cache location you pinned
+with `TAPESCTL_CACHE_DIR` is named rather than deleted. Capture plugins installed into a harness are left alone, because those
+live in the harness's own config; `tapesctl plugin uninstall <harness>` removes
+one. Pass `-y` to skip the confirmation.
+
 ## Your first capture
 
 `start` launches a harness the way you normally would, with a capture proxy in
