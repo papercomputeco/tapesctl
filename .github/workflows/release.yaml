@@ -4,9 +4,6 @@ on:
   release:
     types: [published]
 
-env:
-  DAGGER_VERSION: "0.21.7"
-
 jobs:
   release:
     runs-on: depot-ubuntu-24.04
@@ -17,10 +14,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Dagger
-        uses: dagger/dagger-for-github@v8.2.0
-        with:
-          version: ${{ env.DAGGER_VERSION }}
+      - name: Install Nix
+        uses: DeterminateSystems/determinate-nix-action@d96678350ffd6a456235832eb11e1c491589b7bb # v3.21.8
+
+      - name: Cache Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+
 
       # `--version` and `--commit` are what a released binary answers
       # `tapesctl version` with. They have to be passed in: the Dagger module
@@ -40,7 +39,7 @@ jobs:
       # release it just cut.
       - name: Build and upload release artifacts
         run: |
-          dagger call \
+          nix develop --command dagger call \
             release-latest \
               --version="${{ github.event.release.tag_name }}" \
               --commit="${{ github.sha }}" \
