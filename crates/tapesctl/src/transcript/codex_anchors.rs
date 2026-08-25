@@ -308,12 +308,13 @@ impl CodexAnchorLane {
             return false;
         };
         let payload = build_anchor_payload(rollout, anchor, HARNESS_ID_CODEX, &records);
-        match self.client.post_transcript(&payload).await {
+        match self.client.post_transcript_detailed(&payload).await {
             Ok(outcome) => {
                 debug!(
                     thread_id = %anchor.thread_id,
                     call_id = %anchor.call_id,
-                    deduped = outcome.deduped,
+                    deduped = %outcome.deduped_for_log(),
+                    records = %outcome.records_for_log(),
                     "codex spawn anchor pushed",
                 );
                 true

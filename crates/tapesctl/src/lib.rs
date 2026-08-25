@@ -290,6 +290,7 @@ pub async fn dispatch(invocation: Invocation) -> Result<()> {
 
 /// Dispatch a parsed CLI invocation.
 pub async fn run(cli: Cli) -> Result<()> {
+    let verbosity = cli.verbose;
     match cli.command {
         Command::Version => {
             println!("{}", banner());
@@ -297,7 +298,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
         Command::Start(args) => start(args).await,
         Command::Capture(args) => capture::run(args).await,
-        Command::Sync(args) => transcript::sync::run(args).await,
+        Command::Sync(args) => transcript::sync::run_with_verbosity(args, verbosity).await,
         Command::Sessions(command) => api::sessions(command).await,
         Command::Traces(command) => api::traces(command).await,
         Command::Spans(command) => api::spans(command).await,

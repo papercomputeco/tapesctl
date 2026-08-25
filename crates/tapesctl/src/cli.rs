@@ -25,7 +25,8 @@ use clap::{Args, Parser, Subcommand};
     arg_required_else_help = true
 )]
 pub struct Cli {
-    /// Increase log verbosity (`-v` debug, `-vv` trace). `RUST_LOG` overrides.
+    /// Increase detail (`-v` adds sync file outcomes and debug logs; `-vv`
+    /// enables trace logs). `RUST_LOG` overrides only the log level.
     #[arg(short, long, global = true, action = clap::ArgAction::Count)]
     pub verbose: u8,
 
@@ -304,8 +305,8 @@ pub enum Command {
     /// Sweep completed harness transcripts into the tapes ingest server.
     ///
     /// The live tailer that runs during `start` is the primary path; this is the
-    /// backstop for sessions no capture was running for (dedup makes re-push
-    /// safe).
+    /// backstop for sessions no capture was running for. Re-push is safe and
+    /// requeues asynchronous projection; `-v` prints each file's outcome.
     Sync(SyncArgs),
 
     /// Read sessions.
