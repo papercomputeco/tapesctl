@@ -79,11 +79,26 @@ tapesctl sync --ingest-url http://localhost:8082
 ```
 
 ```
-tapesctl: swept 2 session(s), 2 file(s): 2 stored, 0 deduped, 0 failed
+tapesctl: swept 2 session(s), 2 file(s): 2 new versions, 0 already present, 0 failed
+tapesctl: projection queued asynchronously for 2 unique session(s)
 ```
 
-Unlike `start`, `sync` logs to stderr as usual — only `start` diverts its
-diagnostics to a file, and only because a harness owns the terminal.
+The second line is deliberately narrower than "projected." Every session with
+at least one accepted or already-present file has projection queued by ingest,
+but that work runs asynchronously. `sync` does not poll the read API, and a
+read immediately afterwards may still show the previous projection. An
+already-present file is still a successful upload and requeues projection
+server-side.
+
+Global `-v` adds one line per file with its harness session id, path, the record
+count reported by the server, and outcome (`new`, `already present`, `failed`,
+or `unavailable`). A failed request has no server count. For a successful
+response, the acknowledgement fields are independent: an omitted record count
+prints `server records unavailable` without hiding a known outcome, while an
+omitted dedup status prints `outcome unavailable` without hiding a known count.
+Normal mode omits successful per-file detail. Unlike `start`, `sync` logs to
+stderr as usual — only `start` diverts its diagnostics to a file, and only
+because a harness owns the terminal.
 
 Two things about `sync` are not visible from its help text:
 
@@ -98,13 +113,28 @@ Two things about `sync` are not visible from its help text:
   the flag name suggests.
 
 Re-running `sync` is cheap and safe: the ingest endpoint keys rows on a content
-hash, so an unchanged transcript comes back `deduped`. `tapesctl` keeps no
-client-side ledger of what it has already sent, by design — a ledger that
-disagreed with the server would be worse than no ledger.
+hash, so the summary counts unchanged content as `already present`. `tapesctl`
+keeps no client-side ledger of what it has already sent, by design — a ledger
+that disagreed with the server would be worse than no ledger.
+
+Syncing an old transcript is **partial historical reconstruction**, not a
+replacement for capture. When a session has no usable wire calls, its
+transcript can still produce partial, browsable LLM calls and causal structure.
+Those transcript-derived calls lack full wire fidelity: exact provider requests
+and response bytes are unavailable, and the harness transcript can omit some
+side calls or context.
+
+The fallback is session-wide. If usable wire capture arrives later, projection
+switches to the wire call inventory; the transcript continues to reconcile
+causal structure, while wire-derived calls replace and prune the partial
+transcript projection instead of appearing beside it as duplicates.
 
 Any undelivered transcript makes `sync` exit `1`, deliberately, because `sync`
-is an explicit request to move data. The summary line still prints first, and
-everything that did land is durable.
+is an explicit request to move data. Both status lines still print before the
+command returns its final error, and everything that did land is durable. The
+queued-session count includes only
+unique sessions with at least one successful response; a wholly failed session
+is not claimed as queued.
 
 ## Which harness uses which mechanism
 

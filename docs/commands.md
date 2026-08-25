@@ -20,7 +20,7 @@ subcommand and reach every leaf.
 
 | flag | type | default | notes |
 |---|---|---|---|
-| `-v`, `--verbose` | count | `0` | `-v` is `debug`, `-vv` is `trace`. `RUST_LOG` overrides both |
+| `-v`, `--verbose` | count | `0` | `-v` adds sync file outcomes and enables `debug`; `-vv` enables `trace`. `RUST_LOG` overrides the log level, not sync detail |
 | `--api-url <URL>` | string | `http://localhost:8081` | falls back to `TAPES_API_URL`, then `config.toml` |
 | `-h`, `--help` | flag | — | |
 | `-V`, `--version` | flag | — | prints one line; see [`version`](#version) before trusting it |
@@ -229,16 +229,48 @@ is a cost bound, never a correctness one.
 so `--projects-root` pointed at another harness's tree will not do what the
 name suggests.
 
-Prints one line:
+Normal mode prints two lines:
 
 ```
-tapesctl: swept 2 session(s), 2 file(s): 2 stored, 0 deduped, 0 failed
+tapesctl: swept 2 session(s), 2 file(s): 1 new version, 1 already present, 0 failed
+tapesctl: projection queued asynchronously for 2 unique session(s)
 ```
+
+The first line distinguishes accepted new content versions from files the
+server already held. If a successful response omits dedup status, it adds an
+`outcome(s) unavailable` count rather than treating that file as new. The second line does **not** mean projection completed: ingest
+queued asynchronous projection for each unique session with at least one
+successful response, and `sync` does not poll the read API. Reads may lag.
+Deduplicated uploads are successes and requeue projection server-side; the
+server remains the only source of truth, with no client upload ledger.
+
+Global `-v` adds one line per offered file:
+
+```
+tapesctl: sync file: session sid-1, path /home/me/.claude/projects/-work/sid-1.jsonl, server records 42, outcome new
+tapesctl: sync file: session sid-2, path /home/me/.claude/projects/-work/sid-2.jsonl, server records 18, outcome already present
+```
+
+The outcomes are `new`, `already present`, `failed`, and `unavailable`. A
+failure has no server-reported record count. Successful acknowledgement fields
+are independent: if `records` is absent only the count is `unavailable`; if
+`deduped` is absent only the outcome is `unavailable`. Sync preserves whichever
+field the server did report rather than guessing or discarding both. Normal
+mode omits successful per-file detail.
 
 Any failure then exits `1` with `<n> of <m> transcript(s) could not be
-delivered`. The summary prints first, and everything that landed is durable.
-Deduplication is entirely server-side, keyed on a content hash; a dedup counts
-as a success.
+delivered`. Both aggregate lines print before the final error, and everything
+that landed is durable. The queued count excludes a session when all of its
+files failed, but includes it once when any file received a successful response.
+
+A historical sync can create partial, browsable calls directly from transcript
+content even when the wire proxy captured none. This is lower fidelity than
+wire capture: exact provider requests and response bytes are unavailable, and
+some harness-side calls or context may not appear in the transcript. Once a
+usable wire call arrives, the whole session switches to wire projection;
+wire-derived calls replace the transcript-derived fallback rather than
+combining with it, while transcript evidence continues to supply causal
+structure.
 
 ## sessions
 

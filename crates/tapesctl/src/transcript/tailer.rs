@@ -362,14 +362,14 @@ impl Tailer {
                 .iter()
                 .find(|(path, _)| path == &file.path)
                 .map(|(path, fp)| (path.clone(), *fp));
-            match self.client.upload_file(&envelope, file).await {
+            match self.client.upload_file_detailed(&envelope, file).await {
                 Ok(outcome) => {
                     debug!(
                         session = %session.session_id,
                         file = %file.label(&session.session_id),
                         reason = reason.as_str(),
-                        deduped = outcome.deduped,
-                        records = outcome.records,
+                        deduped = %outcome.deduped_for_log(),
+                        records = %outcome.records_for_log(),
                         "transcript pushed",
                     );
                     // The fingerprint taken *before* the read is what gets

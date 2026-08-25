@@ -142,9 +142,26 @@ tapesctl sync    # backstop: sweep transcripts no live tailer saw
 ```
 
 `sync` is safe to run repeatedly — the ingest endpoint keys rows on a content
-hash, so re-offering an unchanged transcript is a cheap `deduped`. It sweeps
+hash, so an unchanged transcript is reported as `already present`. It sweeps
 `~/.claude/projects` by default (`--projects-root` to point elsewhere), and
-`--since-days` bounds how far back it looks.
+`--since-days` bounds how far back it looks. The summary distinguishes `new
+versions` from files `already present`, then separately reports how many unique
+sessions had asynchronous projection queued. That line means queued, not
+projected: `sync` does not poll the read API, so reads may lag briefly. Even an
+already-present upload requeues projection server-side.
+
+Pass global `-v` to print every file's harness session id, path,
+server-reported record count, and outcome (`new`, `already present`, `failed`,
+or `unavailable` when a successful response omits dedup status). Ack fields are
+independent, so either the count or outcome can be unavailable while the other
+is known. Normal mode omits successful per-file detail.
+
+A historical transcript can create partial, browsable transcript-derived calls
+even when no wire calls were captured. That reconstruction lacks full wire
+fidelity: it cannot recover exact provider request/response bytes, and the
+transcript may omit some harness-side calls or context. If usable wire capture
+arrives later, it replaces the transcript-derived calls rather than duplicating
+them; the transcript still supplies causal structure.
 
 ### Capturing `pi`
 

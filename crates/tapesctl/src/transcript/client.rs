@@ -31,7 +31,7 @@
 //! else, exactly like the Go reference client.
 
 use serde::Deserialize;
-use serde_json::value::RawValue;
+use serde_json::{Value, value::RawValue};
 use snafu::ResultExt;
 use std::time::Duration;
 use tapes_harnesses::transcript::{
@@ -57,14 +57,57 @@ pub struct UploadOutcome {
     pub records: usize,
 }
 
-/// The server's 202 acknowledgement. Both fields default so a server that grows
-/// the response — or trims it — does not turn a successful upload into an error.
+/// The server's 202 acknowledgement. Each field is advisory and independently
+/// optional: older servers and proxies may return only one of them.
 #[derive(Debug, Default, Deserialize)]
 struct TranscriptAck {
-    #[serde(default)]
-    deduped: bool,
-    #[serde(default)]
-    records: usize,
+    deduped: Option<Value>,
+    records: Option<Value>,
+}
+
+impl TranscriptAck {
+    fn deduped(&self) -> Option<bool> {
+        self.deduped.as_ref()?.as_bool()
+    }
+
+    fn records(&self) -> Option<usize> {
+        usize::try_from(self.records.as_ref()?.as_u64()?).ok()
+    }
+}
+
+/// Successful upload details before unavailable fields are collapsed onto the
+/// historical public defaults in [`UploadOutcome`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DetailedUploadOutcome {
+    deduped: Option<bool>,
+    records: Option<usize>,
+}
+
+impl DetailedUploadOutcome {
+    pub(crate) fn deduped(self) -> Option<bool> {
+        self.deduped
+    }
+
+    pub(crate) fn records(self) -> Option<usize> {
+        self.records
+    }
+
+    pub(crate) fn deduped_for_log(self) -> String {
+        self.deduped
+            .map_or_else(|| "unavailable".to_owned(), |value| value.to_string())
+    }
+
+    pub(crate) fn records_for_log(self) -> String {
+        self.records
+            .map_or_else(|| "unavailable".to_owned(), |value| value.to_string())
+    }
+
+    fn compatibility_outcome(self) -> UploadOutcome {
+        UploadOutcome {
+            deduped: self.deduped.unwrap_or(false),
+            records: self.records.unwrap_or(0),
+        }
+    }
 }
 
 /// A client for one tapes ingest server's transcript lane.
@@ -109,6 +152,17 @@ impl TranscriptClient {
 
     /// Post one already-assembled payload.
     pub async fn post_transcript(&self, payload: &TranscriptPayload<'_>) -> Result<UploadOutcome> {
+        self.post_transcript_detailed(payload)
+            .await
+            .map(DetailedUploadOutcome::compatibility_outcome)
+    }
+
+    /// Post one payload without collapsing missing acknowledgement fields onto
+    /// their historical public defaults.
+    pub(crate) async fn post_transcript_detailed(
+        &self,
+        payload: &TranscriptPayload<'_>,
+    ) -> Result<DetailedUploadOutcome> {
         let response = self
             .http
             .post(self.endpoint.clone())
@@ -128,11 +182,13 @@ impl TranscriptClient {
         }
 
         // A body that does not parse is not a failed upload: the server already
-        // answered 2xx, and the ack is only advisory detail for the log.
-        let ack: TranscriptAck = response.json().await.unwrap_or_default();
-        Ok(UploadOutcome {
-            deduped: ack.deduped,
-            records: ack.records,
+        // answered 2xx. Keep each advisory field independently optional for
+        // truth-sensitive callers; the public path defaults only the field that
+        // was unavailable.
+        let ack = response.json::<TranscriptAck>().await.unwrap_or_default();
+        Ok(DetailedUploadOutcome {
+            deduped: ack.deduped(),
+            records: ack.records(),
         })
     }
 
@@ -147,13 +203,25 @@ impl TranscriptClient {
         session: &TranscriptSession,
         file: &TranscriptFile,
     ) -> Result<UploadOutcome> {
+        self.upload_file_detailed(session, file)
+            .await
+            .map(DetailedUploadOutcome::compatibility_outcome)
+    }
+
+    /// Upload one file while preserving dedup status and record count as
+    /// independently optional acknowledgement fields.
+    pub(crate) async fn upload_file_detailed(
+        &self,
+        session: &TranscriptSession,
+        file: &TranscriptFile,
+    ) -> Result<DetailedUploadOutcome> {
         let raw = std::fs::read(&file.path).context(error::TranscriptReadSnafu {
             path: file.path.clone(),
         })?;
         let records =
             RawValue::from_string(jsonl_to_records(&raw)).context(error::TranscriptRecordsSnafu)?;
         let payload = build_payload(session, file, &records);
-        self.post_transcript(&payload).await
+        self.post_transcript_detailed(&payload).await
     }
 }
 
@@ -228,6 +296,122 @@ mod tests {
 
         assert!(outcome.deduped);
         assert_eq!(outcome.records, 3);
+    }
+
+    #[test]
+    fn detailed_acknowledgement_log_values_are_readable() {
+        let partial = DetailedUploadOutcome {
+            deduped: Some(true),
+            records: None,
+        };
+        assert_eq!(partial.deduped_for_log(), "true");
+        assert_eq!(partial.records_for_log(), "unavailable");
+
+        let malformed = DetailedUploadOutcome::default();
+        assert_eq!(malformed.deduped_for_log(), "unavailable");
+        assert_eq!(malformed.records_for_log(), "unavailable");
+    }
+
+    #[tokio::test]
+    async fn a_dedup_only_ack_preserves_the_public_dedup_field() {
+        let server =
+            ingest_server(ResponseTemplate::new(202).set_body_string(r#"{"deduped":true}"#)).await;
+        let dir = tempfile::tempdir().unwrap();
+        let file = write_jsonl(dir.path(), "sid-1.jsonl", "{\"a\":1}\n");
+        let client = TranscriptClient::new(&Url::parse(&server.uri()).unwrap()).unwrap();
+
+        let outcome = client.upload_file(&session(), &file).await.unwrap();
+        assert_eq!(
+            outcome,
+            UploadOutcome {
+                deduped: true,
+                records: 0,
+            }
+        );
+
+        let detailed = client
+            .upload_file_detailed(&session(), &file)
+            .await
+            .unwrap();
+        assert_eq!(detailed.deduped(), Some(true));
+        assert_eq!(detailed.records(), None);
+    }
+
+    #[tokio::test]
+    async fn a_records_only_ack_preserves_the_public_record_count() {
+        let server =
+            ingest_server(ResponseTemplate::new(202).set_body_string(r#"{"records":3}"#)).await;
+        let dir = tempfile::tempdir().unwrap();
+        let file = write_jsonl(dir.path(), "sid-1.jsonl", "{\"a\":1}\n");
+        let client = TranscriptClient::new(&Url::parse(&server.uri()).unwrap()).unwrap();
+
+        let outcome = client.upload_file(&session(), &file).await.unwrap();
+        assert_eq!(
+            outcome,
+            UploadOutcome {
+                deduped: false,
+                records: 3,
+            }
+        );
+
+        let detailed = client
+            .upload_file_detailed(&session(), &file)
+            .await
+            .unwrap();
+        assert_eq!(detailed.deduped(), None);
+        assert_eq!(detailed.records(), Some(3));
+    }
+
+    #[tokio::test]
+    async fn a_malformed_records_type_does_not_discard_known_dedup_status() {
+        let server = ingest_server(
+            ResponseTemplate::new(202).set_body_string(r#"{"deduped":true,"records":"bad"}"#),
+        )
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+        let file = write_jsonl(dir.path(), "sid-1.jsonl", "{\"a\":1}\n");
+        let client = TranscriptClient::new(&Url::parse(&server.uri()).unwrap()).unwrap();
+
+        let detailed = client
+            .upload_file_detailed(&session(), &file)
+            .await
+            .unwrap();
+        assert_eq!(detailed.deduped(), Some(true));
+        assert_eq!(detailed.records(), None);
+
+        assert_eq!(
+            client.upload_file(&session(), &file).await.unwrap(),
+            UploadOutcome {
+                deduped: true,
+                records: 0,
+            },
+        );
+    }
+
+    #[tokio::test]
+    async fn a_malformed_dedup_type_does_not_discard_known_record_count() {
+        let server = ingest_server(
+            ResponseTemplate::new(202).set_body_string(r#"{"deduped":"bad","records":3}"#),
+        )
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+        let file = write_jsonl(dir.path(), "sid-1.jsonl", "{\"a\":1}\n");
+        let client = TranscriptClient::new(&Url::parse(&server.uri()).unwrap()).unwrap();
+
+        let detailed = client
+            .upload_file_detailed(&session(), &file)
+            .await
+            .unwrap();
+        assert_eq!(detailed.deduped(), None);
+        assert_eq!(detailed.records(), Some(3));
+
+        assert_eq!(
+            client.upload_file(&session(), &file).await.unwrap(),
+            UploadOutcome {
+                deduped: false,
+                records: 3,
+            },
+        );
     }
 
     #[tokio::test]
@@ -305,6 +489,17 @@ mod tests {
         let outcome = client.upload_file(&session(), &file).await.unwrap();
 
         assert!(!outcome.deduped);
+        assert_eq!(
+            outcome.records, 0,
+            "the public compatibility default remains numeric"
+        );
+
+        let detailed = client
+            .upload_file_detailed(&session(), &file)
+            .await
+            .unwrap();
+        assert_eq!(detailed.deduped(), None);
+        assert_eq!(detailed.records(), None);
     }
 
     #[tokio::test]

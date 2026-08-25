@@ -213,7 +213,17 @@ or `--no-transcripts` was passed, or nothing was tailing when the session ran.
 tapesctl sync --ingest-url http://localhost:8082 --since-days 0
 ```
 
-`sync` is safe to repeat — the server dedups on a content hash.
+`sync` is safe to repeat — the server dedups on a content hash, reports the
+file as `already present`, and requeues asynchronous projection. The queued
+status does not mean the read model is ready; `sync` does not poll, so retry the
+read after a short delay.
+
+If the wire proxy was not running, `sync` can still create partial, browsable
+calls from the transcript. They lack full wire fidelity: exact provider
+requests and response bytes are unavailable, and the transcript may omit some
+harness-side calls or context. A later usable wire capture replaces this
+session-wide transcript fallback rather than duplicating it; transcript
+evidence remains available to restore causal structure.
 
 ## `sync` says it swept less than expected
 
@@ -227,8 +237,23 @@ name suggests.
 
 **`sync` exited 1 but the summary looked fine.** Any undelivered transcript
 fails the command, deliberately, because `sync` is an explicit request to move
-data. The summary prints first and everything that landed is durable — re-run
-to retry the rest.
+data. The aggregate upload and asynchronous-projection lines print before the
+final error and everything that landed is durable — re-run to retry the rest.
+The queued-session count includes only unique sessions for which at least one
+file got a successful response; a session whose every file failed is excluded.
+
+**The session is still missing structure immediately after a successful
+sync.** Projection is asynchronous. `projection queued asynchronously` means
+ingest accepted the work, not that the read model is already updated. `sync`
+does not poll the read API. Wait briefly and read again.
+
+**You need to see which file did what.** Run `tapesctl -v sync ...`. Each file
+line includes its harness session id, path, server-reported record count, and
+`new`, `already present`, `failed`, or `unavailable` outcome. Ack fields are
+independent: a response can report a count without dedup status, or dedup status
+without a count, and sync renders the known field instead of discarding both.
+Normal mode omits successful per-file detail; failures still contribute to the
+nonzero exit.
 
 ## `search` returns 503
 
