@@ -78,6 +78,27 @@ fn payload_of(raw: Option<&str>) -> Result<Option<PayloadDetail>> {
     }
 }
 
+/// Split repeatable `--filter key=value` flags into wire pairs.
+///
+/// Only the flag's own grammar is checked — there must be a `=`, with a
+/// non-empty key before it. The key is data: cassettes claim filter params on
+/// the sessions listing at runtime, so which names mean anything is decided
+/// by the deployment at request time, and validating names here would only
+/// make this binary disagree with the server it talks to. Refusing the
+/// malformed spelling here rather than sending it costs no round trip and
+/// names the expected shape.
+fn parse_filters(flags: &[String]) -> Result<Vec<(String, String)>> {
+    flags
+        .iter()
+        .map(|flag| {
+            flag.split_once('=')
+                .filter(|(key, _)| !key.is_empty())
+                .map(|(key, value)| (key.to_owned(), value.to_owned()))
+                .context(error::InvalidFilterFlagSnafu { flag: flag.clone() })
+        })
+        .collect()
+}
+
 /// Print a JSON document the way every read command does.
 pub fn print_json(value: &serde_json::Value) -> Result<()> {
     let rendered = serde_json::to_string_pretty(value).context(error::RenderJsonSnafu)?;
@@ -90,6 +111,7 @@ pub async fn sessions(command: SessionsCommand) -> Result<()> {
     match command {
         SessionsCommand::List(args) => {
             let client = resolve_client(&args.api)?;
+            let claimed = parse_filters(&args.filter)?;
             let mut values = SessionListParams {
                 limit: args.limit.map(narrow),
                 cursor: args.cursor,
@@ -110,7 +132,13 @@ pub async fn sessions(command: SessionsCommand) -> Result<()> {
             if let Some(direction) = args.direction {
                 values.push(("direction", direction));
             }
-            let value: Value = client.call(ops::LIST_SESSIONS, values).await?;
+            // Claimed pairs ride the sealed method's own channel: appended to
+            // the query after the declared parameters, verbatim and in order,
+            // with the response passed through untouched. No client-side
+            // filtering — server-side fail-open governs what a key means.
+            let value: Value = client
+                .call_with_claimed(ops::LIST_SESSIONS, values, &claimed)
+                .await?;
             if args.json {
                 print_json(&value)
             } else {
@@ -217,8 +245,22 @@ mod tests {
             harness_session_id: None,
             harness_id: None,
             auth_subject: None,
+            filter: Vec::new(),
             json: false,
         }
+    }
+
+    #[tokio::test]
+    async fn a_malformed_filter_flag_fails_before_any_request() {
+        // No `=` means no pair to send; the refusal happens here, with the
+        // expected shape named, rather than as a server round trip.
+        let server = MockServer::start().await;
+        let mut args = sessions_list_args(server.uri());
+        args.filter = vec!["no-equals".to_owned()];
+        let result = sessions(SessionsCommand::List(args)).await;
+
+        assert!(result.is_err(), "got: {result:?}");
+        assert!(server.received_requests().await.unwrap().is_empty());
     }
 
     #[test]

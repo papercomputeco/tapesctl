@@ -572,6 +572,17 @@ pub struct SessionsListArgs {
     #[arg(long)]
     pub auth_subject: Option<String>,
 
+    /// Extra filter, repeatable, as `key=value`; sent through as `?key=value`.
+    ///
+    /// The param name is data, not a name this binary knows: a deployment's
+    /// cassettes can claim extra filter params on the sessions listing at
+    /// runtime, so which keys mean anything is the server's to decide. Pairs
+    /// are passed through verbatim and in order — nothing is validated,
+    /// normalized, or filtered client-side — and a key no admitted cassette
+    /// claims is ignored by the server.
+    #[arg(long = "filter", value_name = "KEY=VALUE")]
+    pub filter: Vec<String>,
+
     /// Print the raw JSON response instead of the table.
     ///
     /// `sessions list` renders a table by default; this restores the

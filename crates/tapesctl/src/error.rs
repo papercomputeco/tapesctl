@@ -44,6 +44,18 @@ pub enum Error {
         schema: String,
     },
 
+    /// A `--filter` flag that does not spell `key=value`.
+    ///
+    /// The only thing checked is the flag's own grammar — a `=` with a
+    /// non-empty key before it. The key itself travels as data: which params
+    /// mean anything is the server's question, so there is nothing else this
+    /// binary could validate without guessing at a deployment's cassettes.
+    #[snafu(display("invalid --filter {flag:?} (expected key=value)"))]
+    InvalidFilterFlag {
+        /// What the user typed.
+        flag: String,
+    },
+
     /// `--schema` was passed for a harness that speaks exactly one schema.
     ///
     /// Refused rather than ignored: a flag that silently does nothing reads,

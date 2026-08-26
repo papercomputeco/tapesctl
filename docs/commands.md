@@ -281,7 +281,7 @@ fields the server grows reach you without a client upgrade.
 
 | leaf | route | flags |
 |---|---|---|
-| `list` | `GET /v1/sessions` | `--limit`, `--cursor`, `--sort`, `--direction`, `--since`, `--until`, `--harness-id`, `--harness-session-id`, `--auth-subject`, `--json` |
+| `list` | `GET /v1/sessions` | `--limit`, `--cursor`, `--sort`, `--direction`, `--since`, `--until`, `--harness-id`, `--harness-session-id`, `--auth-subject`, `--filter`, `--json` |
 | `get <ID>` | `GET /v1/sessions/{id}` | — |
 | `traces <ID>` | `GET /v1/sessions/{id}/traces` | `--payload` |
 | `raw-turns <ID>` | `GET /v1/sessions/{id}/raw_turns` | — |
@@ -306,6 +306,7 @@ come as a pair — a lone half fails at parse with the missing half named.
 | `--harness-id <H>` | the harness the session ran under (e.g. `claude`) — the other half of the pair |
 | `--harness-session-id <ID>` | exact match on the harness session id — the id `start` prints; pairs with `--harness-id`; see [Session ids](./capture.md#session-ids) |
 | `--auth-subject <S>` | exact match |
+| `--filter <KEY=VALUE>` | repeatable; each pair is passed through as `?key=value`, verbatim and in order. The key names a filter param a cassette on your deployment claims at runtime — nothing is validated or filtered client-side, and a key nothing claims is ignored by the server |
 | `--json` | print the raw pretty-printed JSON instead of the table, so the output still composes with `jq` |
 
 `--payload` takes `full` (the default) or `preview`, case-insensitively. An
