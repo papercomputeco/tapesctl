@@ -311,15 +311,17 @@ fn run_in(args: &PluginInstallArgs, machine: &Machine) -> Result<()> {
             // be describing a different operation than the one it stands in
             // for. Only what is actually there is listed — an absent superseded
             // copy is nothing this run would do.
-            for superseded in artifact.superseded_paths(home) {
-                if superseded.exists() {
-                    println!(
-                        "tapesctl: would remove superseded {} (loaded alongside {} by {})",
-                        superseded.display(),
-                        artifact.file_name(),
-                        harness.id(),
-                    );
-                }
+            for superseded in artifact
+                .superseded_paths(home)
+                .into_iter()
+                .filter(|superseded| superseded.exists())
+            {
+                println!(
+                    "tapesctl: would remove superseded {} (loaded alongside {} by {})",
+                    superseded.display(),
+                    artifact.file_name(),
+                    harness.id(),
+                );
             }
         }
         return Ok(());
