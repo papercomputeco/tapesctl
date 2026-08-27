@@ -14,27 +14,53 @@
 use tokio::io::AsyncWriteExt;
 
 use snafu::{OptionExt, ResultExt};
-use tapes_client::core::models::ExportSessionParams;
+use tapes_client::Call;
 
-use crate::api::client::parse_grain;
 use crate::api::resolve_client;
 use crate::cli::ExportArgs;
 use crate::error::{Result, error};
+
+/// The export cassette's per-session route, called directly. Export is a
+/// cassette a deployment serves, not an operation of the sealed core
+/// contract, so the route and the accepted `--detail` grains belong to this
+/// command rather than to the shared client.
+const EXPORT_SESSION_ROUTE: &str = "/v1/cassettes/export/sessions/{id}";
+
+/// The export grains the server accepts, in the spelling the wire takes.
+///
+/// [`crate::error::Error::InvalidExportDetail`] spells these inline; a test
+/// below holds the two lists together.
+pub const DETAIL_VALUES: [&str; 2] = ["spans", "traces"];
+
+/// Resolve a user-typed `--detail` onto the accepted set, case-folded and
+/// trimmed the way this CLI has always accepted a closed set.
+fn parse_detail(raw: &str) -> Option<&'static str> {
+    let folded = raw.trim().to_ascii_lowercase();
+    DETAIL_VALUES
+        .iter()
+        .find(|value| **value == folded)
+        .copied()
+}
 
 /// Run one export.
 pub async fn run(args: ExportArgs) -> Result<()> {
     let client = resolve_client(&args.api)?;
     let detail = match args.detail.as_deref() {
-        Some(raw) => parse_grain(raw)
-            .map(Some)
-            .context(error::InvalidExportDetailSnafu {
-                detail: raw.to_owned(),
-            })?,
+        Some(raw) => Some(parse_detail(raw).context(error::InvalidExportDetailSnafu {
+            detail: raw.to_owned(),
+        })?),
         None => None,
     };
-    let response = client
-        .export_session(&args.session_id, &ExportSessionParams { detail })
-        .await?;
+    let mut call = Call {
+        method: "GET",
+        path: EXPORT_SESSION_ROUTE,
+        path_params: vec![("id".to_owned(), args.session_id.clone())],
+        ..Call::default()
+    };
+    if let Some(detail) = detail {
+        call.query.push(("detail".to_owned(), detail.to_owned()));
+    }
+    let response = client.transport().execute_stream(&call).await?;
 
     match args.output.as_deref() {
         Some(path) => {
@@ -132,6 +158,23 @@ mod tests {
         let mut args = args(&server, Some(dir.path().join("out.jsonl")));
         args.detail = Some("traces".to_owned());
         assert!(run(args).await.is_ok());
+    }
+
+    #[test]
+    fn the_refusal_message_names_exactly_the_grains_the_server_accepts() {
+        // The message spells its alternatives inline, because a user reading
+        // it wants the answer and not a cross-reference. This is what keeps
+        // that spelling honest: a server that grows a grain fails here rather
+        // than teaching the user a stale set.
+        let rendered = crate::error::error::InvalidExportDetailSnafu { detail: "x" }
+            .build()
+            .to_string();
+        for value in DETAIL_VALUES {
+            assert!(
+                rendered.contains(value),
+                "{value:?} missing from: {rendered}"
+            );
+        }
     }
 
     #[tokio::test]

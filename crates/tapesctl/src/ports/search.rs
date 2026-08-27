@@ -14,7 +14,8 @@
 //! printed plain. And the command reported a result count to product
 //! telemetry, which tapesctl does not have.
 
-use tapes_client::core::models::{SearchSpansParams, SpanSearchResult};
+use serde::Deserialize;
+use tapes_client::Call;
 use time::OffsetDateTime;
 use time::UtcOffset;
 use time::format_description::well_known::Rfc3339;
@@ -30,18 +31,77 @@ const PROMPT_WIDTH: usize = 80;
 /// Longest snippet before it is elided.
 const SNIPPET_WIDTH: usize = 100;
 
+/// The search cassette's span route, called directly. Search is a cassette a
+/// deployment serves, not an operation of the sealed core contract, so the
+/// route and the response shape below belong to this command rather than to
+/// the shared client.
+const SEARCH_SPANS_ROUTE: &str = "/v1/cassettes/search/spans";
+
+/// The span search response, decoded here because the shape is the search
+/// cassette's own. Only the fields this renderer reads are named; anything
+/// else the server says is ignored rather than fatal, so an additive change
+/// cannot blank a page of results.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct SpanSearchOutput {
+    /// The query the server ran, echoed back.
+    pub query: String,
+    /// The ranked hits. An explicit `null` decodes as empty, like an absent
+    /// key.
+    #[serde(deserialize_with = "null_default")]
+    pub results: Vec<SpanSearchResult>,
+}
+
+/// One span hit with its trace/turn context.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct SpanSearchResult {
+    /// The hit's relevance score.
+    pub score: f32,
+    /// The session the span belongs to.
+    pub session_id: String,
+    /// Preview of the matched span's delta-only text.
+    pub snippet: String,
+    /// The span's id.
+    pub span_id: String,
+    /// The span's start, an RFC 3339 timestamp.
+    pub started_at: String,
+    /// The trace the span belongs to.
+    pub trace_id: String,
+    /// The prompt of the turn the span belongs to. The server sends it even
+    /// when blank, so a synthetic turn's empty prompt is distinguishable from
+    /// a missing field.
+    pub user_prompt: String,
+}
+
+/// Decode an explicit `null` as the type's default, like an absent key.
+fn null_default<'de, D, T>(deserializer: D) -> std::result::Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 /// Run one search.
 pub async fn run(args: SearchArgs) -> Result<()> {
     let client = resolve_client(&args.api)?;
-    let output = client
-        .search_spans(&SearchSpansParams {
-            query: args.query.clone(),
-            // Always sent, unlike a listing's omit-when-unset rule: the flag
-            // carries the default, so this client always has a value, and one
-            // request spelling is better than two.
-            top_k: Some(narrow(args.top)),
+    let value = client
+        .transport()
+        .execute(&Call {
+            method: "GET",
+            path: SEARCH_SPANS_ROUTE,
+            query: vec![
+                ("query".to_owned(), args.query.clone()),
+                // Always sent, unlike a listing's omit-when-unset rule: the
+                // flag carries the default, so this client always has a value,
+                // and one request spelling is better than two.
+                ("top_k".to_owned(), narrow(args.top).to_string()),
+            ],
+            ..Call::default()
         })
         .await?;
+    let output: SpanSearchOutput = tapes_client::decode::typed(value)?;
 
     if output.results.is_empty() {
         if !args.quiet {
@@ -259,6 +319,9 @@ mod tests {
                 "user_prompt": "how do I use gum",
                 "snippet": "gum glow",
                 "started_at": "2026-07-31T12:00:00Z",
+                // A field this build has never heard of must be ignored
+                // rather than fatal.
+                "a_field_from_the_future": 7,
             }],
         }))
         .await;

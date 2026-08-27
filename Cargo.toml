@@ -103,14 +103,7 @@ tapes-capture = { version = "0.1" }
 # is built at runtime from a document this binary has never seen, which is the
 # one surface that cannot be written by hand. `direct-http` is `DirectHttp`,
 # the no-redirect transport this CLI talks to a tapes server with.
-# RECONCILIATION: temporarily a path override onto the sibling checkout — the
-# documented co-development loan (see the escape-hatch note above and
-# `scripts/check-tapes-pins.sh`). The generic claimed-filter-param support on
-# the sealed sessions method is committed there and not yet published; repoint
-# this entry at the next released `tapes-client` (>= the release carrying
-# `CoreClient::call_with_claimed`) once it exists, restoring the
-# `version = "0.4"` registry form.
-tapes-client = { path = "../tapes-harnesses/crates/tapes-client", features = [
+tapes-client = { version = "0.5", features = [
   "cli",
   "direct-http",
 ] }

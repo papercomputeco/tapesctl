@@ -13,8 +13,8 @@
 //! # Why the read commands still print `serde_json::Value`
 //!
 //! The named methods on [`tapes_client::CoreClient`] return the vendored
-//! contract's models, and every command that *renders* a response — search,
-//! seed — uses them. The `<resource> <method>` commands
+//! contract's models, and every command that *renders* a response — seed —
+//! uses them. The `<resource> <method>` commands
 //! do not render: they print the server's document, and a document that had
 //! been through a model would be missing whatever fields this build predates.
 //! For those, [`tapes_client::CoreClient::call`] is the documented escape
@@ -62,8 +62,8 @@ pub fn connect(base: Url) -> ApiClient {
 /// The contract's own spellings are the only ones accepted, case-folded and
 /// trimmed the way this CLI has always accepted them. Refusing here rather than
 /// letting the server answer 400 costs no round trip and names the alternatives
-/// — see [`crate::error::Error::InvalidPayloadDetail`] and its sibling, whose
-/// wording a test holds to [`ContractEnum::VALUES`].
+/// — see [`crate::error::Error::InvalidPayloadDetail`], whose wording a test
+/// holds to [`ContractEnum::VALUES`].
 pub fn parse_grain<E: ContractEnum + DeserializeOwned>(raw: &str) -> Option<E> {
     serde_json::from_value(Value::String(raw.trim().to_ascii_lowercase())).ok()
 }
@@ -86,8 +86,8 @@ mod tests {
     use crate::api::contract::ops;
     use serde_json::json;
     use tapes_client::core::models::params::ContractParams;
-    use tapes_client::core::models::{ExportDetail, PayloadDetail, SessionListParams};
-    use wiremock::matchers::{method, path, query_param};
+    use tapes_client::core::models::{PayloadDetail, SessionListParams};
+    use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn client_for(server: &MockServer) -> ApiClient {
@@ -156,33 +156,29 @@ mod tests {
     #[test]
     fn a_user_typed_grain_resolves_to_the_contracts_own_spelling() {
         assert_eq!(
-            parse_grain::<ExportDetail>("SPANS"),
-            Some(ExportDetail::Spans)
+            parse_grain::<PayloadDetail>("PREVIEW"),
+            Some(PayloadDetail::Preview)
         );
         assert_eq!(
-            parse_grain::<PayloadDetail>(" preview "),
-            Some(PayloadDetail::Preview),
+            parse_grain::<PayloadDetail>(" full "),
+            Some(PayloadDetail::Full),
         );
         assert_eq!(parse_grain::<PayloadDetail>("hologram"), None);
     }
 
     #[test]
-    fn the_refusal_messages_name_exactly_the_values_the_contract_declares() {
-        // The two messages spell their alternatives inline, because a user
-        // reading one wants the answer and not a cross-reference. This is what
-        // keeps that spelling honest: a contract that grows a grain fails here
-        // rather than teaching the user a stale set.
+    fn the_refusal_message_names_exactly_the_values_the_contract_declares() {
+        // The message spells its alternatives inline, because a user reading
+        // it wants the answer and not a cross-reference. This is what keeps
+        // that spelling honest: a contract that grows a grain fails here
+        // rather than teaching the user a stale set. Its export sibling is
+        // held the same way in `ports::export`, where the accepted set now
+        // lives.
         let payload = crate::error::error::InvalidPayloadDetailSnafu { payload: "x" }
             .build()
             .to_string();
         for value in PayloadDetail::VALUES {
             assert!(payload.contains(value), "{value:?} missing from: {payload}");
-        }
-        let detail = crate::error::error::InvalidExportDetailSnafu { detail: "x" }
-            .build()
-            .to_string();
-        for value in ExportDetail::VALUES {
-            assert!(detail.contains(value), "{value:?} missing from: {detail}");
         }
     }
 
@@ -235,32 +231,5 @@ mod tests {
         let rendered = format!("{err}");
         assert!(rendered.contains("400"), "got: {rendered}");
         assert!(rendered.contains("invalid cursor"), "got: {rendered}");
-    }
-
-    #[tokio::test]
-    async fn a_search_response_is_decoded_through_the_shipped_model() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/v1/cassettes/search/spans"))
-            .and(query_param("query", "hooks"))
-            .and(query_param("top_k", "5"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(
-                r#"{"query":"hooks","count":1,"results":[{"trace_id":"t-1","a_new_field":1}]}"#,
-            ))
-            .mount(&server)
-            .await;
-
-        let got = client_for(&server)
-            .search_spans(&tapes_client::core::models::SearchSpansParams {
-                query: "hooks".to_owned(),
-                top_k: Some(5),
-            })
-            .await
-            .unwrap();
-
-        // A field the model has never heard of is ignored rather than fatal:
-        // an additive server change must not blank a page of results.
-        assert_eq!(got.count, 1);
-        assert_eq!(got.results[0].trace_id, "t-1");
     }
 }

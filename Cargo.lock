@@ -1844,7 +1844,9 @@ dependencies = [
 
 [[package]]
 name = "tapes-client"
-version = "0.4.1"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "99371583a418fc5eab8ee40542432f2494847e8e88017234080725bed163cc63"
 dependencies = [
  "clap",
  "dirs",
