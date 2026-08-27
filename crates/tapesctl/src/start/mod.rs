@@ -539,6 +539,10 @@ impl Harness {
     /// session, so it has nothing to prove — but it is a parameter rather than
     /// generated inside so the same value ends up in the launched environment
     /// and in the proxy that validates the echo.
+    // Seven arguments because a launch plan genuinely has seven independent
+    // inputs; bundling them into a struct would name a type with exactly one
+    // constructor and one caller, which is ceremony rather than clarity.
+    #[allow(clippy::too_many_arguments)]
     pub fn plan(
         self,
         endpoint: ProxyEndpoint,

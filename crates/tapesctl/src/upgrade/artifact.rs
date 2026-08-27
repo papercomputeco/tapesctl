@@ -862,23 +862,20 @@ mod tests {
         };
         let pid = read_pid(&pid_file, "the probe child");
         let descendant = read_pid(&descendant_file, "the probe child's descendant");
+        // Signal 0 probes existence without an external `kill` binary, which
+        // a minimal container may not ship. A zombie still counts as existing
+        // until it is reaped.
+        let is_alive = |p: &i32| unsafe { libc::kill(*p, 0) } == 0;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        loop {
-            // Signal 0 probes existence without an external `kill` binary,
-            // which a minimal container may not ship. A zombie still counts
-            // as existing until it is reaped.
-            let alive: Vec<i32> = [pid, descendant]
-                .into_iter()
-                .filter(|&p| unsafe { libc::kill(p, 0) } == 0)
-                .collect();
-            if alive.is_empty() {
-                break;
-            }
+        let mut alive = vec![pid, descendant];
+        alive.retain(is_alive);
+        while !alive.is_empty() {
             assert!(
                 std::time::Instant::now() < deadline,
                 "probe processes {alive:?} still running after the probe timed out"
             );
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            alive.retain(is_alive);
         }
     }
 
