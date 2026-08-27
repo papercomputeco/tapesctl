@@ -53,14 +53,12 @@ pub const EXPOSED_OPERATIONS: &[(&str, &str)] = &[
     (ops::GET_SESSION, "tapesctl sessions get"),
     (ops::GET_SESSION_TRACES, "tapesctl sessions traces"),
     (ops::LIST_RAW_TURNS, "tapesctl sessions raw-turns"),
-    (ops::EXPORT_SESSION, "tapesctl export"),
     (ops::LIST_TRACES, "tapesctl traces list"),
     (
         ops::GET_TRACE,
         "tapesctl traces get, and the spans-list projection",
     ),
     (ops::GET_SPAN, "tapesctl spans get"),
-    (ops::SEARCH_SPANS, "tapesctl search"),
     (ops::SEED_DEMO, "tapesctl seed"),
     (
         ops::LIST_CASSETTES,
@@ -100,58 +98,8 @@ pub const UNEXPOSED_OPERATIONS: &[(&str, &str)] = &[
         "session rename/edit; not ported from the Go CLI, which never had it either",
     ),
     (
-        "exportSessions",
-        "bulk export window; tapesctl export is per-session today, the bulk port is future work",
-    ),
-    (
         "getStats",
         "aggregate stats; not ported from the Go CLI yet",
-    ),
-    (
-        "listSessionSkills",
-        "core's copy of a surface the skills cassette owns; tapesctl reaches skills through the \
-         discovered `cassettes skills` commands, and these routes are deleted from core with the \
-         cassette cutover's batched removal",
-    ),
-    (
-        "listSkills",
-        "core's copy of a cassette-owned surface; see listSessionSkills",
-    ),
-    (
-        "createSkill",
-        "core's copy of a cassette-owned surface; see listSessionSkills",
-    ),
-    (
-        "getSkill",
-        "core's copy of a cassette-owned surface; see listSessionSkills",
-    ),
-    (
-        "updateSkill",
-        "core's copy of a cassette-owned surface; see listSessionSkills",
-    ),
-    (
-        "deleteSkill",
-        "core's copy of a cassette-owned surface; see listSessionSkills",
-    ),
-    (
-        "duplicateSkill",
-        "core's copy of a cassette-owned surface; see listSessionSkills",
-    ),
-    (
-        "getSkillMarkdown",
-        "core's copy of a cassette-owned surface; see listSessionSkills",
-    ),
-    (
-        "listSkillVersions",
-        "core's copy of a cassette-owned surface; see listSessionSkills",
-    ),
-    (
-        "publishSkill",
-        "core's copy of a cassette-owned surface; see listSessionSkills",
-    ),
-    (
-        "generateSkill",
-        "core's copy of a cassette-owned surface; see listSessionSkills",
     ),
 ];
 
