@@ -68,7 +68,7 @@ repository = "https://github.com/papercomputeco/tapesctl"
 # regression — but it is a loan, repaid by re-pointing at the next published
 # version once the burst lands. See .github/dependabot.yml for the fuller
 # note.
-tapes-harnesses = { version = "0.1" }
+tapes-harnesses = { version = "0.1.1" }
 
 # The harness-agnostic half of capture — the X-Tapes-* envelope, the
 # capture-gateway environment contract, and the peer-trust ancestry check — in
