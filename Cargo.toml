@@ -203,7 +203,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # DIGEST seals (how a stale or hand-edited vendored copy fails in this repo's CI
 # rather than silently testing cases nobody upstream still has), and verifying a
 # downloaded artifact against its published `.sha256` in `tapesctl upgrade`.
-sha2 = "0.10"
+sha2 = "0.11"
 # Also shipped: `upgrade` and `uninstall` probe install-directory writability by
 # creating a file there, which respects ACLs and read-only mounts where a
 # mode-bit inspection would not.
