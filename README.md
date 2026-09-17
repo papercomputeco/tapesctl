@@ -235,7 +235,9 @@ tapesctl spans get <trace-id> <span-id>
 
 `sessions list` renders its listing as a table by default; `--json` restores the
 raw document so it still composes with `jq`. The other commands print the
-server's JSON verbatim. `sessions list` pages with `--limit`/`--cursor` and
+server's JSON verbatim, and a cassette method that answers with something
+other than JSON (`skills get-skill-markdown`) prints that body as sent.
+`sessions list` pages with `--limit`/`--cursor` and
 narrows with `--sort`, `--direction`, `--since`, `--until`, and
 `--auth-subject`; a cursor is only valid with the `--sort` and `--direction` it
 was minted under. `sessions traces` and `spans list` take `--payload preview`
