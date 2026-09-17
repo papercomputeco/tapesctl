@@ -143,8 +143,10 @@ tapesctl sync    # backstop: sweep transcripts no live tailer saw
 
 `sync` is safe to run repeatedly — the ingest endpoint keys rows on a content
 hash, so an unchanged transcript is reported as `already present`. It sweeps
-`~/.claude/projects` by default (`--projects-root` to point elsewhere), and
-`--since-days` bounds how far back it looks. The summary distinguishes `new
+`~/.claude/projects` by default (`--projects-root` to point elsewhere),
+`--since-days` bounds how far back it looks, and `--harness-id` (default
+`claude`) sets the label uploads are filed under without changing what the
+sweep can read. The summary distinguishes `new
 versions` from files `already present`, then separately reports how many unique
 sessions had asynchronous projection queued. That line means queued, not
 projected: `sync` does not poll the read API, so reads may lag briefly. Even an

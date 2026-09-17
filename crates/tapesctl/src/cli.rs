@@ -501,6 +501,12 @@ pub struct SyncArgs {
     #[arg(long)]
     pub projects_root: Option<PathBuf>,
 
+    /// Harness id to stamp on uploaded transcripts. The tree must still be
+    /// laid out like `~/.claude/projects` and hold Claude-shaped records;
+    /// this only changes the label the server files them under.
+    #[arg(long, default_value = "claude")]
+    pub harness_id: String,
+
     /// Acting subject to stamp on uploaded transcripts. Defaults to
     /// `local:<username>`.
     #[arg(long, env = "TAPES_AUTH_SUBJECT")]

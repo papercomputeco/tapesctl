@@ -30,7 +30,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use snafu::{OptionExt, ResultExt};
-use tapes_capture::envelope::HARNESS_ID_CLAUDE;
 use tapes_harnesses::transcript::{SweepOptions, TranscriptSession, sweep};
 use tracing::{info, warn};
 use url::Url;
@@ -218,6 +217,8 @@ pub struct SyncConfig {
     pub ingest_url: Url,
     /// Root of the transcript tree to sweep.
     pub projects_root: PathBuf,
+    /// Harness id stamped on uploaded transcripts.
+    pub harness_id: String,
     /// Acting subject stamped on uploaded transcripts.
     pub auth_subject: String,
     /// How far back to sweep. `None` sweeps the whole tree.
@@ -238,6 +239,7 @@ impl SyncConfig {
         Ok(Self {
             ingest_url: Url::parse(ingest_url).context(error::TapesUrlSnafu)?,
             projects_root,
+            harness_id: args.harness_id,
             auth_subject: args
                 .auth_subject
                 .unwrap_or_else(|| format!("local:{}", crate::start::local_username())),
@@ -304,7 +306,7 @@ async fn sweep_report(client: &TranscriptClient, config: &SyncConfig) -> SyncRep
         // The envelope is rebuilt from the transcript's own records — a swept
         // session has no live harness to ask, and the directory name is a lossy
         // encoding of the cwd that cannot be decoded back.
-        let envelope = TranscriptSession::new(HARNESS_ID_CLAUDE, session.session_id.clone())
+        let envelope = TranscriptSession::new(&config.harness_id, session.session_id.clone())
             .with_harness_version(session.harness_version.clone())
             .with_cwd(session.cwd.clone())
             .with_auth_subject(config.auth_subject.clone());
@@ -350,6 +352,7 @@ mod tests {
         SyncArgs {
             ingest_url: Some("http://127.0.0.1:8090".to_owned()),
             projects_root: Some(PathBuf::from("/tmp/nope")),
+            harness_id: "claude".to_owned(),
             auth_subject: None,
             since_days: None,
         }
@@ -391,6 +394,7 @@ mod tests {
         SyncConfig {
             ingest_url: Url::parse(&server.uri()).unwrap(),
             projects_root: root,
+            harness_id: "claude".to_owned(),
             auth_subject: "local:test".to_owned(),
             since: None,
         }
@@ -415,6 +419,38 @@ mod tests {
         let config = SyncConfig::resolve(args).unwrap();
         assert_eq!(config.since, None);
         assert_eq!(config.sweep_options(), SweepOptions::default());
+    }
+
+    #[test]
+    fn the_harness_id_defaults_to_claude_and_is_overridable() {
+        assert_eq!(SyncConfig::resolve(args()).unwrap().harness_id, "claude");
+        let mut codex = args();
+        codex.harness_id = "codex".to_owned();
+        assert_eq!(SyncConfig::resolve(codex).unwrap().harness_id, "codex");
+    }
+
+    #[tokio::test]
+    async fn the_harness_id_is_stamped_on_every_upload() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/ingest/transcript"))
+            .and(body_string_contains(r#""harness_id":"codex""#))
+            .respond_with(
+                ResponseTemplate::new(202).set_body_string(r#"{"deduped":false,"records":1}"#),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let tree = tempfile::tempdir().unwrap();
+        write_session(tree.path(), "/tmp/one", "sid-1", &[]);
+
+        let mut config = config_for(&server, tree.path().to_path_buf());
+        config.harness_id = "codex".to_owned();
+        let client = TranscriptClient::new(&config.ingest_url).unwrap();
+        let report = sweep_report(&client, &config).await;
+
+        assert_eq!(report.summary.stored, 1, "{:?}", report.files);
+        assert_eq!(report.summary.failed, 0);
     }
 
     #[test]

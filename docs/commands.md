@@ -217,6 +217,7 @@ tapesctl sync --ingest-url http://localhost:8082 --since-days 0
 |---|---|---|
 | `--ingest-url <URL>` | `http://localhost:8082` | `TAPES_INGEST_URL` |
 | `--projects-root <PATH>` | `~/.claude/projects` | — |
+| `--harness-id <ID>` | `claude` | — |
 | `--auth-subject <S>` | `local:<username>` | `TAPES_AUTH_SUBJECT` |
 | `--since-days <N>` | **7** — see below | — |
 
@@ -225,9 +226,12 @@ carries no default and the parsed value is genuinely absent; an absent value is
 mapped to seven days downstream. `--since-days 0` sweeps everything. The window
 is a cost bound, never a correctness one.
 
-**`sync` files Claude sessions only** — the harness id it stamps is hardcoded,
-so `--projects-root` pointed at another harness's tree will not do what the
-name suggests.
+**`sync` reads Claude-shaped trees only.** The sweep expects the
+`~/.claude/projects` layout (`<project>/<session>.jsonl`) and the server derives
+Claude Code records. `--harness-id` changes the label the sessions are filed
+under, nothing else: pointing `--projects-root` at a Codex tree still finds
+zero sessions. To import another harness, first rewrite its history into that
+layout and shape, then sync it with the matching `--harness-id`.
 
 Normal mode prints two lines:
 
