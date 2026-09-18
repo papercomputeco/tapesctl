@@ -141,6 +141,10 @@ server onto the paths a client can actually call.
 - Every method's help ends by naming the route it calls. That is the one piece
   of context you cannot recover from the command name, and it is what makes a
   generated surface auditable.
+- The response is printed as the server labels it: `application/json` (and
+  any `+json` type) is re-rendered pretty, so it composes with `jq`; anything
+  else — `skills get-skill-markdown` answers `text/markdown` — is written to
+  stdout byte-for-byte, so `> SKILL.md` is the whole download.
 
 Four flag names are reserved and can never be handed to a cassette parameter:
 `api-url`, `body`, `help`, and `verbose`.

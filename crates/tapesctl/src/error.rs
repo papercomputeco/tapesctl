@@ -394,6 +394,20 @@ pub enum Error {
         source: serde_json::Error,
     },
 
+    /// A cassette answered, but its body could not be read to the end.
+    #[snafu(display("could not read the cassette response"))]
+    CassetteRead {
+        /// Underlying transport failure.
+        source: reqwest::Error,
+    },
+
+    /// A cassette response could not be written to stdout.
+    #[snafu(display("could not write the cassette response"))]
+    CassetteWrite {
+        /// Underlying IO failure.
+        source: std::io::Error,
+    },
+
     /// The server's response shape changed out from under this client.
     #[snafu(display("unexpected server contract: {detail}"))]
     ApiContract {

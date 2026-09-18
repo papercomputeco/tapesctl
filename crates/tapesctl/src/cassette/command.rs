@@ -5,8 +5,12 @@
 //! *tapesctl* command: the `--api-url` flag (with its `TAPES_API_URL` fallback)
 //! decorated onto every generated method — mirroring [`crate::cli::ApiArgs`]
 //! — and the dispatch that builds this CLI's client from it, executes the
-//! resolved call, and prints the server's JSON verbatim, so a cassette
-//! command is not visibly a second-class citizen next to `sessions list`.
+//! resolved call, and prints the server's answer verbatim — JSON re-rendered
+//! pretty, anything else (a cassette's `skill.md` download is
+//! `text/markdown`) byte-for-byte — so a cassette command is not visibly a
+//! second-class citizen next to `sessions list`.
+
+use std::io::{self, Write};
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use snafu::{OptionExt, ResultExt};
@@ -18,6 +22,7 @@ use crate::cassette::spec::Surface;
 use crate::error::{Result, error};
 use tapes_client::DirectHttp;
 use tapes_client::cli::resolve_invocation;
+use tapes_client::transport::Call;
 
 /// The flag every generated method carries, mirroring [`crate::cli::ApiArgs`].
 const API_URL_FLAG: &str = "api-url";
@@ -200,8 +205,55 @@ pub async fn dispatch(surface: &Surface, name: &str, matches: &ArgMatches) -> Re
 
     // A discovered call goes over the same transport a sealed one does — the
     // only difference is where the operation table came from.
-    let value = transport.execute(&call).await?;
-    print_json(&value)
+    let (body, json) = fetch(&transport, &call).await?;
+    print_response(&body, json)
+}
+
+/// Execute a call and read its body, reporting whether the server said it is JSON.
+///
+/// The reduced method table does not carry response media types, so the
+/// answer is read off the response itself: `application/json` and any `+json`
+/// suffix count, everything else is opaque text.
+async fn fetch(transport: &DirectHttp, call: &Call<'_>) -> Result<(Vec<u8>, bool)> {
+    let response = transport.execute_stream(call).await?;
+    let json = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(is_json_media_type)
+        .unwrap_or(false);
+    // Bytes, not `text()`: that decodes as UTF-8 and replaces anything invalid,
+    // so a cassette serving a binary body would be saved corrupted while the
+    // command reported success.
+    let body = response.bytes().await.context(error::CassetteReadSnafu)?;
+    Ok((body.to_vec(), json))
+}
+
+/// Print a cassette response: JSON re-rendered pretty, anything else as sent.
+///
+/// A body the server labelled JSON but that does not parse is still an error,
+/// as it always was; the label is what stops a markdown document from being
+/// fed to the JSON decoder.
+fn print_response(body: &[u8], json: bool) -> Result<()> {
+    if json {
+        let value: serde_json::Value =
+            serde_json::from_slice(body).context(error::ApiDecodeSnafu)?;
+        return print_json(&value);
+    }
+    io::stdout()
+        .write_all(body)
+        .context(error::CassetteWriteSnafu)?;
+    Ok(())
+}
+
+fn is_json_media_type(content_type: &str) -> bool {
+    let media = content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    media == "application/json" || media.ends_with("+json")
 }
 
 #[cfg(test)]
@@ -719,5 +771,146 @@ mod tests {
         let rendered = format!("{err}");
         assert!(rendered.contains("502"), "got: {rendered}");
         assert!(rendered.contains("cassette_unavailable"), "got: {rendered}");
+    }
+
+    #[test]
+    fn json_is_recognised_by_media_type_not_by_looking_at_the_body() {
+        for yes in [
+            "application/json",
+            "application/json; charset=utf-8",
+            "application/problem+json",
+        ] {
+            assert!(is_json_media_type(yes), "{yes}");
+        }
+        for no in [
+            "text/markdown; charset=utf-8",
+            "text/plain",
+            "application/octet-stream",
+            "",
+        ] {
+            assert!(!is_json_media_type(no), "{no:?}");
+        }
+    }
+
+    #[test]
+    fn a_body_labelled_json_that_is_not_json_is_still_a_decode_error() {
+        // The label picks the decoder; it does not excuse a broken document.
+        let err = print_response(b"---\nname: x\n", true).unwrap_err();
+        assert!(
+            matches!(err, crate::error::Error::ApiDecode { .. }),
+            "got: {err:?}"
+        );
+        print_response(b"---\nname: x\n", false).expect("text is printed as sent");
+    }
+
+    #[tokio::test]
+    async fn a_non_utf8_body_survives_byte_for_byte() {
+        // `response.text()` would replace 0xff with U+FFFD, saving a corrupt
+        // file while the command reported success.
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let raw: Vec<u8> = vec![0x50, 0x4b, 0x03, 0x04, 0xff, 0xfe, 0x00, 0x41];
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/cassettes/export/api/bundle"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/octet-stream")
+                    .set_body_bytes(raw.clone()),
+            )
+            .mount(&server)
+            .await;
+
+        let surface = surface_from(
+            "export",
+            &json!({"paths": {"/v1/cassettes/export/api/bundle": {
+                "get": {"operationId": "getBundle"}
+            }}}),
+        );
+        let matches = mount(root(), &surface)
+            .try_get_matches_from([
+                "tapesctl",
+                NOUN,
+                "export",
+                "get-bundle",
+                "--api-url",
+                &server.uri(),
+            ])
+            .unwrap();
+        let (_, noun) = matches.subcommand().unwrap();
+        let (_, cassette) = noun.subcommand().unwrap();
+        let (_, call) = resolve_invocation(&surface, "export", cassette).unwrap();
+        let transport = DirectHttp::new(Url::parse(&server.uri()).unwrap());
+
+        let (body, json) = fetch(&transport, &call).await.unwrap();
+        assert!(!json);
+        assert_eq!(body, raw, "every byte must survive the round trip");
+    }
+
+    #[tokio::test]
+    async fn a_markdown_response_is_fetched_as_text_not_decoded() {
+        // `skills get-skill-markdown` returns `text/markdown`; feeding that to
+        // the JSON decoder was the bug (`invalid number at line 1 column 2`).
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/cassettes/skills/api/skills/s-1/skill.md"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/markdown; charset=utf-8")
+                    .set_body_string("---\nname: x\n---\n\n## Steps\n"),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/cassettes/skills/api/skills/s-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "s-1"})))
+            .mount(&server)
+            .await;
+
+        let surface = surface_from(
+            "skills",
+            &json!({"paths": {
+                "/v1/cassettes/skills/api/skills/{id}/skill.md": {"get": {
+                    "operationId": "getSkillMarkdown",
+                    "parameters": [{"name": "id", "in": "path", "required": true}]
+                }},
+                "/v1/cassettes/skills/api/skills/{id}": {"get": {
+                    "operationId": "getSkill",
+                    "parameters": [{"name": "id", "in": "path", "required": true}]
+                }}
+            }}),
+        );
+        let transport = DirectHttp::new(Url::parse(&server.uri()).unwrap());
+
+        for (verb, want_json, want_body) in [
+            (
+                "get-skill-markdown",
+                false,
+                b"---\nname: x\n---\n\n## Steps\n".as_slice(),
+            ),
+            ("get-skill", true, b"{\"id\":\"s-1\"}".as_slice()),
+        ] {
+            let matches = mount(root(), &surface)
+                .try_get_matches_from([
+                    "tapesctl",
+                    NOUN,
+                    "skills",
+                    verb,
+                    "s-1",
+                    "--api-url",
+                    &server.uri(),
+                ])
+                .unwrap();
+            let (_, noun) = matches.subcommand().unwrap();
+            let (_, cassette) = noun.subcommand().unwrap();
+            let (_, call) = resolve_invocation(&surface, "skills", cassette).unwrap();
+            let (body, json) = fetch(&transport, &call).await.unwrap();
+            assert_eq!(json, want_json, "{verb}");
+            assert_eq!(body, want_body, "{verb}");
+        }
     }
 }

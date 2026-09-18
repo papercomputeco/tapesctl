@@ -16,6 +16,14 @@ break, and every breaking change is recorded here plainly.
   `SyncArgs` and `SyncConfig` gain a `harness_id: String` field; code that
   builds either by struct literal must supply it.
 
+### Fixed
+
+- `tapesctl cassettes <name> <method>` no longer fails with `could not decode
+  the tapes API response` when the cassette answers with something other than
+  JSON. The response is now read by its `Content-Type`: JSON is pretty-printed
+  as before, anything else is printed byte-for-byte. `skills
+  get-skill-markdown` (`text/markdown`) was unusable before this.
+
 ### Removed
 
 - **Breaking:** the top-level cassette spelling `tapesctl <cassette> <method>`
