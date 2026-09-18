@@ -401,6 +401,13 @@ pub enum Error {
         source: reqwest::Error,
     },
 
+    /// A cassette response could not be written to stdout.
+    #[snafu(display("could not write the cassette response"))]
+    CassetteWrite {
+        /// Underlying IO failure.
+        source: std::io::Error,
+    },
+
     /// The server's response shape changed out from under this client.
     #[snafu(display("unexpected server contract: {detail}"))]
     ApiContract {

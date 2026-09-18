@@ -10,6 +10,8 @@
 //! `text/markdown`) byte-for-byte — so a cassette command is not visibly a
 //! second-class citizen next to `sessions list`.
 
+use std::io::{self, Write};
+
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use snafu::{OptionExt, ResultExt};
 use url::Url;
@@ -212,7 +214,7 @@ pub async fn dispatch(surface: &Surface, name: &str, matches: &ArgMatches) -> Re
 /// The reduced method table does not carry response media types, so the
 /// answer is read off the response itself: `application/json` and any `+json`
 /// suffix count, everything else is opaque text.
-async fn fetch(transport: &DirectHttp, call: &Call<'_>) -> Result<(String, bool)> {
+async fn fetch(transport: &DirectHttp, call: &Call<'_>) -> Result<(Vec<u8>, bool)> {
     let response = transport.execute_stream(call).await?;
     let json = response
         .headers()
@@ -220,8 +222,11 @@ async fn fetch(transport: &DirectHttp, call: &Call<'_>) -> Result<(String, bool)
         .and_then(|value| value.to_str().ok())
         .map(is_json_media_type)
         .unwrap_or(false);
-    let body = response.text().await.context(error::CassetteReadSnafu)?;
-    Ok((body, json))
+    // Bytes, not `text()`: that decodes as UTF-8 and replaces anything invalid,
+    // so a cassette serving a binary body would be saved corrupted while the
+    // command reported success.
+    let body = response.bytes().await.context(error::CassetteReadSnafu)?;
+    Ok((body.to_vec(), json))
 }
 
 /// Print a cassette response: JSON re-rendered pretty, anything else as sent.
@@ -229,12 +234,15 @@ async fn fetch(transport: &DirectHttp, call: &Call<'_>) -> Result<(String, bool)
 /// A body the server labelled JSON but that does not parse is still an error,
 /// as it always was; the label is what stops a markdown document from being
 /// fed to the JSON decoder.
-fn print_response(body: &str, json: bool) -> Result<()> {
+fn print_response(body: &[u8], json: bool) -> Result<()> {
     if json {
-        let value: serde_json::Value = serde_json::from_str(body).context(error::ApiDecodeSnafu)?;
+        let value: serde_json::Value =
+            serde_json::from_slice(body).context(error::ApiDecodeSnafu)?;
         return print_json(&value);
     }
-    print!("{body}");
+    io::stdout()
+        .write_all(body)
+        .context(error::CassetteWriteSnafu)?;
     Ok(())
 }
 
@@ -787,12 +795,57 @@ mod tests {
     #[test]
     fn a_body_labelled_json_that_is_not_json_is_still_a_decode_error() {
         // The label picks the decoder; it does not excuse a broken document.
-        let err = print_response("---\nname: x\n", true).unwrap_err();
+        let err = print_response(b"---\nname: x\n", true).unwrap_err();
         assert!(
             matches!(err, crate::error::Error::ApiDecode { .. }),
             "got: {err:?}"
         );
-        print_response("---\nname: x\n", false).expect("text is printed as sent");
+        print_response(b"---\nname: x\n", false).expect("text is printed as sent");
+    }
+
+    #[tokio::test]
+    async fn a_non_utf8_body_survives_byte_for_byte() {
+        // `response.text()` would replace 0xff with U+FFFD, saving a corrupt
+        // file while the command reported success.
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let raw: Vec<u8> = vec![0x50, 0x4b, 0x03, 0x04, 0xff, 0xfe, 0x00, 0x41];
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/cassettes/export/api/bundle"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/octet-stream")
+                    .set_body_bytes(raw.clone()),
+            )
+            .mount(&server)
+            .await;
+
+        let surface = surface_from(
+            "export",
+            &json!({"paths": {"/v1/cassettes/export/api/bundle": {
+                "get": {"operationId": "getBundle"}
+            }}}),
+        );
+        let matches = mount(root(), &surface)
+            .try_get_matches_from([
+                "tapesctl",
+                NOUN,
+                "export",
+                "get-bundle",
+                "--api-url",
+                &server.uri(),
+            ])
+            .unwrap();
+        let (_, noun) = matches.subcommand().unwrap();
+        let (_, cassette) = noun.subcommand().unwrap();
+        let (_, call) = resolve_invocation(&surface, "export", cassette).unwrap();
+        let transport = DirectHttp::new(Url::parse(&server.uri()).unwrap());
+
+        let (body, json) = fetch(&transport, &call).await.unwrap();
+        assert!(!json);
+        assert_eq!(body, raw, "every byte must survive the round trip");
     }
 
     #[tokio::test]
@@ -837,9 +890,9 @@ mod tests {
             (
                 "get-skill-markdown",
                 false,
-                "---\nname: x\n---\n\n## Steps\n",
+                b"---\nname: x\n---\n\n## Steps\n".as_slice(),
             ),
-            ("get-skill", true, "{\"id\":\"s-1\"}"),
+            ("get-skill", true, b"{\"id\":\"s-1\"}".as_slice()),
         ] {
             let matches = mount(root(), &surface)
                 .try_get_matches_from([
