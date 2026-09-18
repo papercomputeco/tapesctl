@@ -108,9 +108,11 @@ Two things about `sync` are not visible from its help text:
   `--since-days 0` is the "everything" spelling. The window is a cost bound
   only, never a correctness one — widening it is always safe, because the
   server dedups.
-- **`sync` can only file Claude sessions.** The harness id it stamps is
-  hardcoded. Pointing `--projects-root` at a Codex or pi tree will not do what
-  the flag name suggests.
+- **`sync` reads Claude-shaped trees only.** `--harness-id` (default
+  `claude`) changes the label sessions are filed under, not what the sweep can
+  read. Pointing `--projects-root` at a Codex or pi tree still finds zero
+  sessions; rewrite that history into the `~/.claude/projects` layout and
+  record shape first, then sync it with the matching `--harness-id`.
 
 Re-running `sync` is cheap and safe: the ingest endpoint keys rows on a content
 hash, so the summary counts unchanged content as `already present`. `tapesctl`

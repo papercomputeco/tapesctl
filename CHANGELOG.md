@@ -5,6 +5,17 @@ break, and every breaking change is recorded here plainly.
 
 ## Unreleased
 
+### Added
+
+- `tapesctl sync --harness-id <ID>` (default `claude`) sets the harness id
+  stamped on every uploaded transcript. It changes only the label the server
+  files sessions under: the sweep still reads the `~/.claude/projects` layout
+  and the server still derives Claude-shaped records, so a Codex or pi tree
+  pointed at `--projects-root` still finds zero sessions. The flag exists for
+  history rewritten into that layout and shape ahead of time.
+  `SyncArgs` and `SyncConfig` gain a `harness_id: String` field; code that
+  builds either by struct literal must supply it.
+
 ### Removed
 
 - **Breaking:** the top-level cassette spelling `tapesctl <cassette> <method>`
