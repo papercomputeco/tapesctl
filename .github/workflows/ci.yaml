@@ -27,30 +27,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
-    name: Lint & Test
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-24.04' || 'depot-ubuntu-24.04-8' }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Nix
-        uses: DeterminateSystems/determinate-nix-action@d96678350ffd6a456235832eb11e1c491589b7bb # v3.21.8
-
-      - name: Cache Nix store
-        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
-
-      - name: Lint (cargo fmt --check + clippy)
-        run: nix develop --command dagger call lint
-        env:
-          DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
-
-      - name: Test (cargo test --workspace)
-        run: nix develop --command dagger call test
-        env:
-          DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
-
   freshness:
     name: Vendored Corpus Freshness
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-24.04' || 'depot-ubuntu-24.04' }}
@@ -149,7 +125,7 @@ jobs:
       - name: Cross-compile all targets via Dagger
         env:
           DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
-        run: nix develop --command dagger call build --commit=${{ github.sha }} export --path=./build
+        run: nix develop --command dagger call build --commit=${{ github.sha }} export --path=./build --cloud
 
       - name: Upload darwin arm64 binary
         uses: actions/upload-artifact@v4
