@@ -136,10 +136,14 @@ fn choose_filter(env_rust_log: Option<&str>, verbose: u8) -> EnvFilter {
 }
 
 /// The filter used when nothing in the environment names one.
+///
+/// Quiet by default: a command's result is what it prints, and an `INFO`
+/// line about what it is about to do reads as noise next to that. `-v` turns
+/// the narration on, `-vv` the wire.
 fn default_directive(verbose: u8) -> &'static str {
     match verbose {
-        0 => "info",
-        1 => "debug",
+        0 => "warn",
+        1 => "info,tapesctl=debug",
         _ => "trace",
     }
 }
@@ -215,8 +219,8 @@ mod tests {
         // The trap this avoids: `export RUST_LOG=` left in a shell profile
         // yielding an empty log file that looks like a capture with nothing to
         // report.
-        assert_eq!(choose_filter(Some(""), 0).to_string(), "info");
-        assert_eq!(choose_filter(Some("   "), 0).to_string(), "info");
+        assert_eq!(choose_filter(Some(""), 0).to_string(), "warn");
+        assert_eq!(choose_filter(Some("   "), 0).to_string(), "warn");
     }
 
     #[test]
@@ -229,14 +233,14 @@ mod tests {
         // the one below, actually fails to parse.
         assert_eq!(
             choose_filter(Some("tapesctl=louder"), 0).to_string(),
-            "info"
+            "warn"
         );
     }
 
     #[test]
     fn the_verbosity_flag_sets_the_default_when_rust_log_is_absent() {
-        assert_eq!(choose_filter(None, 0).to_string(), "info");
-        assert_eq!(choose_filter(None, 1).to_string(), "debug");
+        assert_eq!(choose_filter(None, 0).to_string(), "warn");
+        assert_eq!(choose_filter(None, 1).to_string(), "tapesctl=debug,info");
         assert_eq!(choose_filter(None, 2).to_string(), "trace");
     }
 

@@ -71,30 +71,28 @@ impl SyncSummary {
         )
     }
 
-    /// The human summary of upload outcomes.
+    /// The human summary of upload outcomes, as two lines: what was swept,
+    /// then how it went. `✓` when nothing failed, `✗` when something did.
     #[must_use]
-    pub fn render(&self) -> String {
-        let version_label = if self.stored == 1 {
-            "new version"
-        } else {
-            "new versions"
-        };
+    pub fn render(&self) -> Vec<String> {
+        let sessions = plural(self.sessions, "session", "sessions");
+        let files = plural(self.files, "file", "files");
+        let mut outcome = vec![
+            format!("{} new", self.stored),
+            format!("{} unchanged", self.deduped),
+        ];
+        if self.failed > 0 {
+            outcome.push(format!("{} failed", self.failed));
+        }
         let unavailable = self.unavailable();
-        let unavailable_suffix = if unavailable == 0 {
-            String::new()
-        } else {
-            format!(", {unavailable} outcome(s) unavailable")
-        };
-        format!(
-            "tapesctl: swept {} session(s), {} file(s): {} {}, {} already present, {} failed{}",
-            self.sessions,
-            self.files,
-            self.stored,
-            version_label,
-            self.deduped,
-            self.failed,
-            unavailable_suffix,
-        )
+        if unavailable > 0 {
+            outcome.push(format!("{unavailable} outcome unknown"));
+        }
+        let mark = if self.failed == 0 { "✓" } else { "✗" };
+        vec![
+            format!("Swept {sessions} ({files})"),
+            format!("  {mark} {}", outcome.join(" · ")),
+        ]
     }
 }
 
@@ -133,8 +131,8 @@ impl FileOutcome {
     fn as_str(self) -> &'static str {
         match self {
             Self::New => "new",
-            Self::AlreadyPresent => "already present",
-            Self::Unavailable => "unavailable (dedup status unavailable)",
+            Self::AlreadyPresent => "unchanged",
+            Self::Unavailable => "unknown",
             Self::Failed => "failed",
         }
     }
@@ -154,18 +152,20 @@ struct FileReport {
 }
 
 impl FileReport {
-    /// The detail line printed by `sync -v`.
+    /// The detail line printed by `sync -v`: outcome first so the eye can scan
+    /// a column of them, then the file and what the server counted.
     #[must_use]
     pub fn render(&self) -> String {
-        let records = self
-            .records
-            .map_or_else(|| "unavailable".to_owned(), |records| records.to_string());
+        let records = self.records.map_or_else(
+            || "? records".to_owned(),
+            |records| format!("{records} records"),
+        );
         format!(
-            "tapesctl: sync file: session {}, path {}, server records {}, outcome {}",
+            "  {:<9} {}  {}  {}",
+            self.outcome.as_str(),
             self.harness_session_id,
             self.path.display(),
             records,
-            self.outcome.as_str(),
         )
     }
 }
@@ -191,10 +191,10 @@ impl SyncReport {
         } else {
             Vec::new()
         };
-        lines.push(self.summary.render());
+        lines.extend(self.summary.render());
         lines.push(format!(
-            "tapesctl: projection queued asynchronously for {} unique session(s)",
-            self.queued_sessions,
+            "  {} queued for projection",
+            plural(self.queued_sessions, "session", "sessions"),
         ));
         lines
     }
@@ -209,6 +209,11 @@ impl SyncReport {
         }
         Ok(())
     }
+}
+
+/// `3 files`, `1 file`.
+fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
 }
 
 /// Resolved configuration for one `tapesctl sync`.
@@ -516,13 +521,22 @@ mod tests {
             failed: 0,
         };
 
-        let rendered = summary.render();
+        let rendered = summary.render().join("\n");
         assert_eq!(
             rendered,
-            "tapesctl: swept 2 session(s), 3 file(s): 2 new versions, 1 already present, 0 failed",
+            "Swept 2 sessions (3 files)\n  ✓ 2 new · 1 unchanged"
         );
         assert!(!rendered.contains("stored"), "got: {rendered}");
         assert!(!rendered.contains("deduped"), "got: {rendered}");
+
+        let failed = SyncSummary {
+            failed: 1,
+            ..summary
+        };
+        assert_eq!(
+            failed.render().join("\n"),
+            "Swept 2 sessions (3 files)\n  ✗ 2 new · 1 unchanged · 1 failed"
+        );
     }
 
     #[tokio::test]
@@ -544,10 +558,7 @@ mod tests {
         assert_eq!(report.summary.stored, 3);
         assert_eq!(report.summary.failed, 0);
         assert_eq!(report.queued_sessions, 2);
-        assert_eq!(
-            report.render(0)[1],
-            "tapesctl: projection queued asynchronously for 2 unique session(s)",
-        );
+        assert_eq!(report.render(0)[2], "  2 sessions queued for projection");
     }
 
     #[test]
@@ -578,24 +589,15 @@ mod tests {
         };
 
         let lines = report.render(1);
-        assert_eq!(lines.len(), 5, "three files plus two summary lines");
-        assert!(lines[0].contains("session sid-new"), "got: {}", lines[0]);
-        assert!(
-            lines[0].contains("path /tmp/new.jsonl"),
-            "got: {}",
-            lines[0]
-        );
-        assert!(lines[0].contains("server records 3"), "got: {}", lines[0]);
-        assert!(lines[0].ends_with("outcome new"), "got: {}", lines[0]);
-        assert!(
-            lines[1].ends_with("outcome already present"),
-            "got: {}",
+        assert_eq!(lines.len(), 6, "three files plus three summary lines");
+        assert_eq!(lines[0], "  new       sid-new  /tmp/new.jsonl  3 records");
+        assert_eq!(
             lines[1],
+            "  unchanged sid-present  /tmp/present.jsonl  5 records"
         );
-        assert!(
-            lines[2].contains("server records unavailable") && lines[2].ends_with("outcome failed"),
-            "got: {}",
+        assert_eq!(
             lines[2],
+            "  failed    sid-failed  /tmp/failed.jsonl  ? records"
         );
     }
 
@@ -619,7 +621,7 @@ mod tests {
         };
 
         let lines = report.render(0);
-        assert_eq!(lines.len(), 2, "only summary and projection status");
+        assert_eq!(lines.len(), 3, "only summary and projection status");
         assert!(lines.iter().all(|line| !line.contains("/tmp/sid-1.jsonl")));
     }
 
@@ -660,11 +662,8 @@ mod tests {
         assert_eq!(report.summary.deduped, 1);
         assert_eq!(report.summary.stored, 0);
         let detail = report.files[0].render();
-        assert!(
-            detail.contains("server records unavailable"),
-            "got: {detail}"
-        );
-        assert!(detail.ends_with("outcome already present"), "got: {detail}");
+        assert!(detail.ends_with("? records"), "got: {detail}");
+        assert!(detail.starts_with("  unchanged "), "got: {detail}");
     }
 
     #[tokio::test]
@@ -682,11 +681,8 @@ mod tests {
         assert_eq!(report.summary.stored, 0);
         assert_eq!(report.summary.unavailable(), 1);
         let detail = report.files[0].render();
-        assert!(detail.contains("server records 3"), "got: {detail}");
-        assert!(
-            detail.ends_with("outcome unavailable (dedup status unavailable)"),
-            "got: {detail}"
-        );
+        assert!(detail.ends_with("3 records"), "got: {detail}");
+        assert!(detail.starts_with("  unknown "), "got: {detail}");
     }
 
     #[tokio::test]
@@ -705,11 +701,8 @@ mod tests {
         assert_eq!(report.summary.deduped, 1);
         assert_eq!(report.summary.stored, 0);
         let detail = report.files[0].render();
-        assert!(
-            detail.contains("server records unavailable"),
-            "got: {detail}"
-        );
-        assert!(detail.ends_with("outcome already present"), "got: {detail}");
+        assert!(detail.ends_with("? records"), "got: {detail}");
+        assert!(detail.starts_with("  unchanged "), "got: {detail}");
     }
 
     #[tokio::test]
@@ -729,11 +722,8 @@ mod tests {
         assert_eq!(report.summary.stored, 0);
         assert_eq!(report.summary.unavailable(), 1);
         let detail = report.files[0].render();
-        assert!(detail.contains("server records 3"), "got: {detail}");
-        assert!(
-            detail.ends_with("outcome unavailable (dedup status unavailable)"),
-            "got: {detail}"
-        );
+        assert!(detail.ends_with("3 records"), "got: {detail}");
+        assert!(detail.starts_with("  unknown "), "got: {detail}");
     }
 
     #[tokio::test]
@@ -814,16 +804,16 @@ mod tests {
         assert_eq!(report.summary.deduped, 0, "unknown is not already present");
         assert_eq!(report.summary.failed, 0, "the 2xx remains successful");
         assert_eq!(report.queued_sessions, 1);
-        assert!(report.summary.render().contains("1 outcome(s) unavailable"));
+        assert!(
+            report
+                .summary
+                .render()
+                .join("\n")
+                .contains("1 outcome unknown")
+        );
         let detail = report.files[0].render();
-        assert!(
-            detail.contains("server records unavailable"),
-            "got: {detail}"
-        );
-        assert!(
-            detail.contains("outcome unavailable (dedup status unavailable)"),
-            "got: {detail}",
-        );
+        assert!(detail.contains("? records"), "got: {detail}");
+        assert!(detail.starts_with("  unknown "), "got: {detail}");
         assert!(report.ensure_complete().is_ok());
     }
 

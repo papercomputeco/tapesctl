@@ -114,9 +114,10 @@ Before the harness launches, and again when it exits, `tapesctl` prints to
 stdout; while the harness holds the terminal it prints nothing at all:
 
 ```
-tapesctl: capturing; logs at ~/.tapes/logs/start-20260813-180411-54233.log
-tapesctl: captured session f47ac10b-58cc-4372-a567-0e02b2c3d479 (pass --web-url for a console link)
-tapesctl: logs at ~/.tapes/logs/start-20260813-180411-54233.log
+capturing · logs at ~/.tapes/logs/start-20260813-180411-54233.log
+✓ captured session f47ac10b-58cc-4372-a567-0e02b2c3d479
+  pass --web-url for a console link
+  logs at ~/.tapes/logs/start-20260813-180411-54233.log
 ```
 
 Now read it back, against the **read** port:
@@ -125,28 +126,21 @@ Now read it back, against the **read** port:
 tapesctl sessions list --limit 20 --api-url http://localhost:8081
 ```
 
-```json
-{
-  "items": [
-    {
-      "auth_subject": "local:jasonwc",
-      "harness_id": "claude",
-      "harness_session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-      "id": "01JDQ8F3K2M4N6P8R0T2V4X6Z8",
-      "last_seen_at": "2026-08-13T18:19:52Z",
-      "rollup": {
-        "status": "ended",
-        "turn_count": 12
-      },
-      "started_at": "2026-08-13T18:04:11Z"
-    }
-  ],
-  "next_cursor": ""
-}
+```
+TITLE                            STATUS     TURNS    COST  LAST ACTIVE  ID
+Add a table view                 completed     12   $0.04  5m ago       01a0d365
+untitled (f47ac10b)              unknown        —       —  2h ago       01a0d365
+
+2 sessions · more with --cursor eyJzb3J0IjoibGFzdF9…  (full cursor: --json)
 ```
 
-Note the two ids. The one `start` printed is `harness_session_id`; the one every
-read command takes is `id`. They are different values in different namespaces,
+On a terminal the `ID` column is the leading group of the tapes session id;
+`--json` carries the full id, and so does the table when it is piped or the
+terminal is wide. The untitled row is a session nothing has derived a title for
+yet; the parenthesised value is the leading group of its harness session id.
+
+Note the two ids. The one `start` printed is the `harness_session_id`; the one
+every read command takes is the tapes `id`. They are different values in different namespaces,
 and feeding the printed one to `sessions get` returns a 404. That is a live
 defect, not a misunderstanding — pass the printed id to
 `sessions list --harness-id claude --harness-session-id <id>` to resolve it to
@@ -159,9 +153,25 @@ Read the session with the `id` from the listing:
 tapesctl sessions get 01JDQ8F3K2M4N6P8R0T2V4X6Z8 --api-url http://localhost:8081
 ```
 
-`sessions list` renders its listing as a table by default; `--json` restores
-the raw document so it still composes with `jq`. The other read commands print
-the server's JSON pretty-printed and nothing else.
+```
+Add a table view
+01a0d365-2f42-77a1-8473-bd2e295244a4 · claude 2.1.281 · local:jasonwc
+
+Status   completed
+Started  Aug 13 18:04 (2h ago), last seen 18:19
+Turns    12
+Model    claude-opus-5-5
+Tokens   1,076 in · 39,288 out
+Cost     $0.0421
+Cwd      ~/code/tapes
+
+next  tapesctl traces list 01a0d365-2f42-77a1-8473-bd2e295244a4
+```
+
+Every read command has a human view like this by default, laid out for the
+terminal it is printed on, and `--json` on any of them restores the server's
+document so the output still composes with `jq`. The last line of a record
+names the command to run next.
 
 ## Where to go next
 

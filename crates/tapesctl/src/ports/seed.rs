@@ -50,9 +50,9 @@ pub fn render(result: &SeedResult, target: &str) -> String {
     let raw_turns = result.raw_turns;
     let inserted = result.raw_turns_inserted;
     let deduped = result.raw_turns_deduped;
+    let noun = if sessions == 1 { "session" } else { "sessions" };
     format!(
-        "tapesctl: seeded {sessions} session(s) ({raw_turns} raw turns: {inserted} inserted, \
-         {deduped} deduped) into {target}",
+        "Seeded {sessions} {noun} into {target}\n  ✓ {raw_turns} raw turns · {inserted} inserted · {deduped} deduped",
     )
 }
 
@@ -81,7 +81,7 @@ mod tests {
             })),
             "http://127.0.0.1:8081/",
         );
-        assert!(rendered.contains("3 session(s)"), "got: {rendered}");
+        assert!(rendered.contains("3 sessions"), "got: {rendered}");
         assert!(rendered.contains("10 inserted"), "got: {rendered}");
         assert!(rendered.contains("2 deduped"), "got: {rendered}");
     }
@@ -91,7 +91,7 @@ mod tests {
         // The summary is a courtesy; a server that trims a field must not turn a
         // successful seed into a failure.
         let rendered = render(&result(json!({"sessions": 1})), "http://x/");
-        assert!(rendered.contains("1 session(s)"), "got: {rendered}");
+        assert!(rendered.contains("1 session"), "got: {rendered}");
         assert!(rendered.contains("0 inserted"), "got: {rendered}");
     }
 
