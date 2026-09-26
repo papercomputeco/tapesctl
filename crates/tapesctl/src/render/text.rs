@@ -1,17 +1,11 @@
-//! Formatting the values a view shows: money, counts, times, ids, and the
-//! sanitizing every server string goes through before it reaches a terminal.
+//! Value formatting for views, and the sanitizing every server string gets.
 
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
 use unicode_width::UnicodeWidthStr;
 
-/// Replace control and bidirectional formatting characters with spaces so a
-/// server-returned value cannot inject terminal control sequences (ESC,
-/// carriage return, backspace, C1 controls), reorder displayed text, or break
-/// a row's layout with an embedded newline.
-///
-/// These fields are the server's to set; sanitizing at the render boundary is
-/// what keeps a hostile or buggy response from steering the user's terminal.
+/// Replace control and bidi formatting characters with spaces so a server
+/// value cannot inject terminal escapes, reorder text, or break a row.
 #[must_use]
 pub fn sanitize(value: &str) -> String {
     value
@@ -35,8 +29,7 @@ pub fn sanitize(value: &str) -> String {
         .collect()
 }
 
-/// Collapse runs of whitespace (including newlines) into one space, for a
-/// prompt or snippet shown on a single line.
+/// Sanitize and collapse whitespace runs, including newlines, into one space.
 #[must_use]
 pub fn one_line(value: &str) -> String {
     sanitize(value)
@@ -45,16 +38,12 @@ pub fn one_line(value: &str) -> String {
         .join(" ")
 }
 
-/// The display width of `value` in terminal cells.
 #[must_use]
 pub fn width(value: &str) -> usize {
     UnicodeWidthStr::width(value)
 }
 
-/// Truncate to `width` cells, marking the cut with an ellipsis.
-///
-/// Measured in display cells rather than bytes or chars, so a wide glyph
-/// counts for what it occupies and a multi-byte rune is never split.
+/// Truncate to `max` display cells, marking the cut with an ellipsis.
 #[must_use]
 pub fn elide(value: &str, max: usize) -> String {
     if width(value) <= max {
@@ -75,8 +64,7 @@ pub fn elide(value: &str, max: usize) -> String {
     format!("{kept}…")
 }
 
-/// Money in US dollars for a list: cents, `<$0.01` for a trace of spend, and
-/// `None` for nothing at all so the caller can print the absent glyph.
+/// Dollars to the cent, `<$0.01` for tiny spend, `None` for zero.
 #[must_use]
 pub fn money(usd: Option<f64>) -> Option<String> {
     let usd = usd?;
@@ -89,8 +77,7 @@ pub fn money(usd: Option<f64>) -> Option<String> {
     Some(format!("${usd:.2}"))
 }
 
-/// Money in US dollars for a record view, where the exact figure matters:
-/// four decimals under a dollar, two above.
+/// Dollars with four decimals under a dollar, two above.
 #[must_use]
 pub fn money_exact(usd: f64) -> String {
     if usd < 1.0 {
@@ -137,17 +124,13 @@ pub fn duration_ns(ns: i64) -> String {
     }
 }
 
-/// Parse an RFC 3339 timestamp, keeping the offset it arrived with.
 #[must_use]
 pub fn parse_time(raw: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(raw, &Rfc3339).ok()
 }
 
-/// A timestamp relative to `now` for a list: `just now`, `5m ago`, `3h ago`,
-/// `2d ago`, then a calendar date once it is more than a week old.
-///
-/// A raw value that will not parse is shown as it arrived: it is the server's
-/// field, and showing it beats showing nothing.
+/// `just now`, `5m ago`, `3h ago`, `2d ago`, then a calendar date after a week.
+/// An unparseable value is shown as it arrived.
 #[must_use]
 pub fn relative(raw: &str, now: OffsetDateTime) -> String {
     let Some(then) = parse_time(raw) else {
@@ -169,9 +152,7 @@ pub fn relative(raw: &str, now: OffsetDateTime) -> String {
     calendar(then, now)
 }
 
-/// A timestamp for a record view: `Sep 24 05:01`, with the year when it is
-/// not this one. Rendered in the offset the server sent, which is the offset
-/// the session ran in.
+/// `Sep 24 05:01`, in the offset the server sent (the session's own offset).
 #[must_use]
 pub fn stamp(raw: &str, now: OffsetDateTime) -> String {
     let Some(then) = parse_time(raw) else {
@@ -204,10 +185,8 @@ fn calendar(then: OffsetDateTime, now: OffsetDateTime) -> String {
     }
 }
 
-/// The leading group of a UUID-shaped id, for a narrow column: `01a0d365`.
-///
-/// Only the display is shortened; the read commands still take the full id,
-/// which `--json` carries.
+/// The leading group of a UUID-shaped id: `01a0d365`. Display only; read
+/// commands take the full id.
 #[must_use]
 pub fn short_id(id: &str) -> String {
     let id = sanitize(id);

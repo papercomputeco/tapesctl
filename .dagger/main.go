@@ -117,11 +117,8 @@ rm /tmp/zig.tar.xz`
 // Test runs the workspace unit tests. `--locked` fails if Cargo.lock is stale,
 // which subsumes the go.mod-tidy check the Go pipeline had.
 //
-// The workspace's own artifacts are cleaned first. /src/target is a cache
-// volume that outlives the run, and cargo decides freshness for path crates by
-// source mtime; a checkout whose mtimes do not advance can leave a binary from
-// an earlier commit in place, and the integration tests then exercise that
-// binary instead of this commit's. Dependencies stay cached.
+// tapesctl is cleaned first: /src/target is a persistent cache volume, and
+// cargo's mtime check can otherwise leave a stale binary from an earlier commit.
 //
 // +check
 func (t *Tapesctl) Test(ctx context.Context) (string, error) {

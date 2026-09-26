@@ -1,22 +1,16 @@
-//! Colour, width, and the terminal question.
+//! Colour and width, decided once per command from stdout.
 //!
-//! A [`Theme`] is decided once per command from stdout: is it a terminal, how
-//! wide, and does the user want colour. Views take the theme and never look at
-//! the environment themselves, which is what lets a test render at 80 columns
-//! with colour off and compare bytes.
+//! Views never read the environment themselves, so tests can render at a fixed
+//! width with colour off.
 
 use std::io::IsTerminal;
 
 use anstyle::{AnsiColor, Color, Style};
 
-/// Width assumed when stdout is not a terminal, so piped output still has a
-/// layout to align against rather than growing without bound.
+/// Width assumed when stdout is not a terminal, so piped output still aligns.
 pub const PIPED_WIDTH: usize = 100;
 
-/// What a piece of text means, so the theme can decide how it looks.
-///
-/// Tones are semantic on purpose: a view says "this is a status word", never
-/// "this is green", and the mapping lives in one place.
+/// What a piece of text means; `style_for` maps it to a colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tone {
     /// The thing the row is about: a title, a value.
@@ -39,7 +33,6 @@ pub enum Tone {
     Command,
 }
 
-/// The per-invocation rendering decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Theme {
     /// Whether to emit ANSI styling.
@@ -51,11 +44,8 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// Decide from stdout and the environment.
-    ///
-    /// Colour is on only when stdout is a terminal, `NO_COLOR` is unset, and
-    /// `TERM` is not `dumb`. Width comes from the terminal, or `COLUMNS`, or
-    /// [`PIPED_WIDTH`].
+    /// Colour needs a terminal, no `NO_COLOR`, and `TERM` other than `dumb`.
+    /// Width comes from the terminal, then `COLUMNS`, then [`PIPED_WIDTH`].
     #[must_use]
     pub fn detect() -> Self {
         let tty = std::io::stdout().is_terminal();
@@ -99,8 +89,7 @@ impl Theme {
         if self.tty { "—" } else { "-" }
     }
 
-    /// Wrap `text` in the escapes for `tone`, or return it untouched when
-    /// colour is off.
+    /// Wrap `text` in the escapes for `tone`, or return it as is without colour.
     #[must_use]
     pub fn paint(&self, tone: Tone, text: &str) -> String {
         if !self.color || text.is_empty() {
@@ -111,7 +100,6 @@ impl Theme {
     }
 }
 
-/// The one place a tone becomes a colour.
 fn style_for(tone: Tone) -> Style {
     let dim = Style::new().dimmed();
     match tone {
@@ -125,11 +113,8 @@ fn style_for(tone: Tone) -> Style {
     }
 }
 
-/// The tone a status word carries, by what the word says.
-///
-/// The server's vocabulary is small and stable (`completed`, `ok`, `live`,
-/// `running`, `failed`, `error`, `unknown`); anything else reads as primary so
-/// a new word is visible rather than hidden.
+/// The tone for a status word. Unknown words read as primary so a new status
+/// stays visible.
 #[must_use]
 pub fn status_tone(status: &str) -> Tone {
     match status {

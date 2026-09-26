@@ -116,9 +116,8 @@ tapes-client = { version = "0.5", features = [
 clap = { version = "4", features = ["derive", "env", "string"] }
 anstream = "1"
 anstyle = "1"
-# The render layer (`render/`): every human view is laid out by hand against
-# the terminal width, so the only pieces bought in are the width probe and the
-# display-width measurement a column aligner gets wrong on CJK/emoji cells.
+# `render/` lays out views by hand; these supply terminal width and CJK/emoji
+# display widths.
 terminal_size = "0.4"
 unicode-width = "0.2"
 

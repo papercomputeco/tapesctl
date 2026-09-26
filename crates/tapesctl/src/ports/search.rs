@@ -6,13 +6,7 @@
 //! rather than reproduced.
 //!
 //! What *is* reproduced is the pipe format: `--quiet` prints one bare session
-//! id per line, deduplicated in score order, which is what
-//! `tapesctl search "charm CLI" -q -k 1` feeds to the next command.
-//!
-//! The human view is a ranked list: score, the turn's prompt, when, and the
-//! session, with the matched snippet on a second dim line. `--json` prints the
-//! cassette's document. The Go original also reported a result count to
-//! product telemetry, which tapesctl does not have.
+//! id per line, deduplicated in score order.
 
 use serde::Deserialize;
 use tapes_client::Call;
@@ -126,7 +120,6 @@ pub async fn run(args: SearchArgs) -> Result<()> {
     Ok(())
 }
 
-/// Render the hits, or the one line that says there were none.
 #[must_use]
 pub fn render(
     query: &str,
@@ -180,8 +173,6 @@ pub fn render(
             out.push('\n');
         }
 
-        // The ids that take a hit to `sessions get`, `traces get`, and
-        // `spans get`, whole, on their own dim line.
         let ids: Vec<String> = [
             ("session", &hit.session_id),
             ("trace", &hit.trace_id),
@@ -191,8 +182,7 @@ pub fn render(
         .filter(|(_, id)| !id.is_empty())
         .map(|(name, id)| format!("{name} {}", sanitize(id)))
         .collect();
-        // Ids are never elided, so they wrap between pieces instead: each
-        // line holds as many whole `name id` pieces as fit.
+        // Ids are never elided; they wrap between whole `name id` pieces.
         let indent = "      ";
         let mut line = String::new();
         for piece in ids {

@@ -21,16 +21,10 @@
 //!
 //! # Output
 //!
-//! Every command has a human view by default and `--json` restores the raw
-//! document. The listings are borderless tables and the single-item reads are
-//! record views; both are laid out by [`crate::render`] against the terminal
-//! width. `sessions traces` and `sessions raw-turns` stay JSON: they are the
-//! console's own documents, and there is no shorter true rendering of them.
-//! See [`client`] for why these responses are not decoded through the shared
-//! models on the way through: in short, a model can only carry the fields the
-//! build it shipped in knew about, and these commands exist to show what the
-//! server said. The views keep that spirit by reading their columns off the
-//! undecoded document — see [`view`].
+//! Every command has a human view (see [`view`]) and `--json` for the raw
+//! document. `sessions traces` and `sessions raw-turns` stay JSON: they are the
+//! console's own documents. See [`client`] for why responses are not decoded
+//! through the shared models: a model only carries the fields its build knew.
 //!
 //! # Requests
 //!
@@ -57,7 +51,6 @@ use crate::render::Theme;
 use client::{ApiClient, connect, narrow};
 use contract::ops;
 
-/// The wall clock the human views measure "2d ago" against.
 fn now() -> time::OffsetDateTime {
     time::OffsetDateTime::now_utc()
 }

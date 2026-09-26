@@ -71,9 +71,7 @@ impl SyncSummary {
         )
     }
 
-    /// The human summary of upload outcomes, two lines in one string: what
-    /// was swept, then how it went. `✓` when nothing failed, `✗` when
-    /// something did. One `String`, like every other command's summary.
+    /// The human summary of upload outcomes: what was swept, then how it went.
     #[must_use]
     pub fn render(&self) -> String {
         let sessions = plural(self.sessions, "session", "sessions");
@@ -153,8 +151,7 @@ struct FileReport {
 }
 
 impl FileReport {
-    /// The detail line printed by `sync -v`: outcome first so the eye can scan
-    /// a column of them, then the file and what the server counted.
+    /// The detail line printed by `sync -v`.
     #[must_use]
     pub fn render(&self) -> String {
         let records = self.records.map_or_else(
@@ -212,7 +209,6 @@ impl SyncReport {
     }
 }
 
-/// `3 files`, `1 file`.
 fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }

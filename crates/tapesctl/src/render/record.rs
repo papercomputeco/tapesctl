@@ -1,14 +1,10 @@
-//! A record view: one thing, in full.
+//! A record view: title, subtitle, aligned label/value pairs, and "next" hints.
 //!
-//! A title line, a dim subtitle, a blank line, then label/value pairs with
-//! the labels padded to one width. Fields with nothing to say are left out
-//! rather than shown as a dash; on a record, absence is silence. A trailing
-//! "next" line names the command a reader would run from here.
+//! Empty fields are omitted rather than shown as a dash.
 
 use super::style::{Theme, Tone};
 use super::text::{elide, sanitize, width};
 
-/// One labelled value.
 #[derive(Debug, Clone)]
 struct Field {
     label: &'static str,
@@ -16,19 +12,15 @@ struct Field {
     tone: Tone,
 }
 
-/// The column widths a record's fields are laid out against.
 #[derive(Debug, Clone, Copy)]
 struct Columns {
-    /// Width of the label column, the widest label.
     label: usize,
-    /// Width left for a value after the label and the gap.
     value: usize,
 }
 
 impl Field {
-    /// The padded label, then the value. A multi-line value keeps its lines,
-    /// each indented under the value column; a long single line is elided
-    /// rather than wrapped, so the column stays readable.
+    /// Multi-line values indent under the value column; long lines are elided,
+    /// not wrapped.
     fn render(&self, columns: &Columns, theme: &Theme) -> String {
         let mut out = String::new();
         out.push_str(&theme.paint(
@@ -48,7 +40,6 @@ impl Field {
     }
 }
 
-/// A record ready to render.
 #[derive(Debug, Default)]
 pub struct Record {
     title: String,
@@ -67,8 +58,7 @@ impl Record {
         }
     }
 
-    /// Add a piece of the subtitle; pieces are joined with ` · `. Empty
-    /// pieces are skipped.
+    /// Add a subtitle piece, joined with ` · `. Empty pieces are skipped.
     #[must_use]
     pub fn subtitle(mut self, piece: impl Into<String>) -> Self {
         let piece = sanitize(&piece.into());
@@ -84,7 +74,6 @@ impl Record {
         self.field_toned(label, value, Tone::Primary)
     }
 
-    /// Add a field with a tone other than primary.
     #[must_use]
     pub fn field_toned(
         mut self,
@@ -99,7 +88,6 @@ impl Record {
         self
     }
 
-    /// Add a field only when there is a value.
     #[must_use]
     pub fn maybe(self, label: &'static str, value: Option<String>) -> Self {
         match value {
@@ -108,8 +96,7 @@ impl Record {
         }
     }
 
-    /// A document printed whole after the fields: a dim label on its own
-    /// line, then the text as it is. Never elided, so it can be copied.
+    /// A document printed whole after the fields, never elided so it can be copied.
     #[must_use]
     pub fn block(mut self, label: &'static str, text: impl Into<String>) -> Self {
         let text = text.into();
@@ -126,8 +113,6 @@ impl Record {
         self
     }
 
-    /// The two column widths every field shares, so labels line up and no
-    /// value runs past the terminal.
     fn columns(&self, theme: &Theme) -> Columns {
         let label = self
             .fields
@@ -141,7 +126,6 @@ impl Record {
         }
     }
 
-    /// Render, every line newline-terminated.
     #[must_use]
     pub fn render(&self, theme: &Theme) -> String {
         let mut out = String::new();
@@ -167,8 +151,6 @@ impl Record {
             out.push('\n');
             out.push_str(&theme.paint(Tone::Secondary, label));
             out.push('\n');
-            // Control characters are neutralized line by line; the document
-            // itself is otherwise printed as it is.
             for line in text.lines() {
                 out.push_str(&sanitize(line));
                 out.push('\n');

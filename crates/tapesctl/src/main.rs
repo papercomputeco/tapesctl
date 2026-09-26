@@ -45,14 +45,6 @@ async fn main() -> ExitCode {
             // "install directory is not writable; re-run the installer") lives
             // one or two links down. Printing only the top discards exactly the
             // half that says what to do about it.
-            //
-            // A cause that only repeats the line above it is skipped: some
-            // wrappers render their source inline because that is the whole
-            // diagnosis, and printing it twice reads as a stutter.
-            //
-            // reqwest's own wrappers ("error sending request for url",
-            // "client error (Connect)", "tcp connect error") say nothing the
-            // OS line under them does not, so they are skipped too.
             eprintln!("tapesctl: {err}");
             let refused = print_causes(&err);
             if refused {
@@ -65,8 +57,8 @@ async fn main() -> ExitCode {
     }
 }
 
-/// Print the cause chain under an error, one `caused by:` line each, and say
-/// whether a connection was refused somewhere down it.
+/// Print the cause chain, skipping causes that repeat the line above and
+/// reqwest's wrapper lines. Returns whether a connection was refused.
 fn print_causes(err: &dyn std::error::Error) -> bool {
     let mut previous = err.to_string();
     let mut source = err.source();

@@ -138,11 +138,8 @@ fn choose_filter(env_rust_log: Option<&str>, verbose: u8, to_file: bool) -> EnvF
 
 /// The filter used when nothing in the environment names one.
 ///
-/// Quiet on a terminal by default: a command's result is what it prints, and
-/// an `INFO` line about what it is about to do reads as noise next to that.
-/// `-v` turns the narration on, `-vv` the wire. A log file is nobody's
-/// terminal, so it keeps `info`: that file is where `start` sends the
-/// diagnostics it keeps off the harness's screen.
+/// Quiet on a terminal. A log file keeps `info` because `start` diverts its
+/// diagnostics there.
 fn default_directive(verbose: u8, to_file: bool) -> &'static str {
     match verbose {
         0 if to_file => "info",
@@ -249,7 +246,6 @@ mod tests {
             "tapesctl=debug,info"
         );
         assert_eq!(choose_filter(None, 2, false).to_string(), "trace");
-        // A log file keeps the narration a quiet terminal drops.
         assert_eq!(choose_filter(None, 0, true).to_string(), "info");
     }
 

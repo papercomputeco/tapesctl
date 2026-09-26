@@ -376,9 +376,7 @@ pub enum Error {
     },
 
     /// The API answered with a non-success status. The body is carried because
-    /// every tapes error body names the offending parameter; the display
-    /// shows the body's message field when it is the usual error document,
-    /// and the raw body otherwise (see [`api_status_message`]).
+    /// every tapes error body names the offending parameter.
     #[snafu(display("{}", api_status_message(*status, endpoint, body)))]
     ApiStatus {
         /// HTTP status returned.
@@ -916,9 +914,8 @@ impl From<tapes_client::Error> for Error {
     }
 }
 
-/// The one-line story of a refused API call: the status, the host it came
-/// from, and what the server said, without the full URL and without the JSON
-/// framing. A hint follows on its own line when there is a next thing to try.
+/// Status, host, and the server's message on one line, plus a hint line when
+/// there is a next thing to try.
 #[must_use]
 pub fn api_status_message(status: u16, endpoint: &str, body: &str) -> String {
     let mut out = format!(
@@ -938,8 +935,6 @@ pub fn api_status_message(status: u16, endpoint: &str, body: &str) -> String {
     out
 }
 
-/// `localhost:8081` from a full endpoint URL; the URL itself when it will
-/// not parse.
 fn endpoint_host(endpoint: &str) -> String {
     url::Url::parse(endpoint)
         .ok()
@@ -952,7 +947,6 @@ fn endpoint_host(endpoint: &str) -> String {
         .unwrap_or_else(|| endpoint.to_owned())
 }
 
-/// `404 not found`, or the bare number for a status with no short name.
 fn status_with_reason(status: u16) -> String {
     let reason = match status {
         400 => "bad request",
@@ -970,10 +964,7 @@ fn status_with_reason(status: u16) -> String {
     format!("{status} {reason}")
 }
 
-/// What the server said. Every tapes error body is `{"error": "<code>",
-/// "message": "<text>"}`; the message is the part a person acts on, so it is
-/// what is shown, with the code in parentheses when there is one. A body that
-/// is not that document is shown as it arrived, on one line, cut short.
+/// `message (code)` from a tapes error document, else the raw body on one line.
 fn body_said(body: &str) -> String {
     let parsed: Option<serde_json::Value> = serde_json::from_str(body).ok();
     let field = |key: &str| {
@@ -981,8 +972,7 @@ fn body_said(body: &str) -> String {
             .as_ref()
             .and_then(|v| v.get(key))
             .and_then(serde_json::Value::as_str)
-            // Decoding un-escapes whatever the server put in the string, so
-            // terminal controls are neutralized here, before anything prints.
+            // JSON decoding un-escapes terminal controls; neutralize them.
             .map(crate::render::text::one_line)
     };
     match (field("message"), field("error")) {
@@ -1000,10 +990,7 @@ fn body_said(body: &str) -> String {
     }
 }
 
-/// The first line for a transport failure. The transport's own message is
-/// often the whole diagnosis ("the server answered with a redirect"), and it
-/// sometimes already opens with the same words this wrapper would add; in
-/// that case it is shown once.
+/// Avoids repeating the prefix when the transport message already carries it.
 #[must_use]
 pub fn api_send_message(source: &tapes_client::TransportError) -> String {
     let inner = source.to_string();
@@ -1014,7 +1001,6 @@ pub fn api_send_message(source: &tapes_client::TransportError) -> String {
     }
 }
 
-/// The next thing to try, for the refusals that have one.
 fn api_status_hint(status: u16, body: &str) -> Option<&'static str> {
     if body.contains("unknown_cassette") {
         return Some("`tapesctl cassettes` lists what this server serves");

@@ -1,39 +1,30 @@
 //! A borderless table that fits the terminal.
 //!
-//! Columns declare a header, an alignment, a priority, and whether they may
-//! flex. Layout is: measure every column at its natural width, and while the
-//! total is wider than the theme allows, drop the lowest-priority droppable
-//! column; then, if it still does not fit, shrink the flex column down to its
-//! minimum. A row is never wrapped and never overflows the width by design.
+//! While the natural width is too wide, the lowest-priority column is dropped;
+//! then the flex column shrinks toward its minimum. Rows never wrap.
 
 use super::style::{Theme, Tone};
 use super::text::{elide, width};
 
-/// Which edge a column's text sits against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Align {
     Left,
     Right,
 }
 
-/// A column's shape.
 #[derive(Debug, Clone)]
 pub struct Column {
-    /// Printed in dim caps on the first line.
     pub header: &'static str,
     pub align: Align,
     /// Lower is kept longer. Priority 0 columns are never dropped.
     pub priority: u8,
     /// Widest the column may grow, in cells, before its cells are elided.
     pub max: usize,
-    /// The one column that gives up width before any column is dropped.
-    /// Shrinks no further than `min`.
+    /// Gives up width, down to `min`, before any column is dropped.
     pub flex: bool,
     /// Narrowest a flex column shrinks to.
     pub min: usize,
-    /// Only shown when the terminal is at least this wide, whatever the
-    /// priority says. For columns that are nice on a wide screen and noise on
-    /// a narrow one.
+    /// Hidden on terminals narrower than this, whatever the priority says.
     pub from_width: usize,
 }
 
@@ -84,7 +75,7 @@ impl Column {
     }
 }
 
-/// One cell: text already sanitized, and the tone it should carry.
+/// One cell. The text must already be sanitized.
 #[derive(Debug, Clone)]
 pub struct Cell {
     pub text: String,
@@ -117,10 +108,8 @@ impl Cell {
     }
 }
 
-/// The gap between columns, in cells.
 const GAP: usize = 2;
 
-/// A table ready to lay out.
 #[derive(Debug, Default)]
 pub struct Table {
     columns: Vec<Column>,
@@ -142,8 +131,7 @@ impl Table {
         self.rows.push(cells);
     }
 
-    /// Lay the table out for `theme` and render it, header first, every line
-    /// newline-terminated.
+    /// Render header and rows, each line newline-terminated.
     #[must_use]
     pub fn render(&self, theme: &Theme) -> String {
         let shown = self.choose_columns(theme);
@@ -192,8 +180,6 @@ impl Table {
         loop {
             let natural: usize = shown.iter().map(|&i| self.natural_width(i)).sum::<usize>()
                 + GAP * shown.len().saturating_sub(1);
-            // How much the flex column could give back before anything is
-            // dropped.
             let slack: usize = shown
                 .iter()
                 .filter(|&&i| self.columns[i].flex)
@@ -202,8 +188,7 @@ impl Table {
             if natural.saturating_sub(slack) <= theme.width {
                 return shown;
             }
-            // Drop the lowest-priority droppable column; ties go to the
-            // rightmost so the leading columns keep their place.
+            // Ties go to the rightmost so the leading columns keep their place.
             let Some(victim) = shown
                 .iter()
                 .copied()
@@ -216,8 +201,7 @@ impl Table {
         }
     }
 
-    /// Final width of each shown column: natural, with the flex column
-    /// shrunk to absorb any overflow.
+    /// Natural widths, with the flex column shrunk to absorb any overflow.
     fn widths(&self, shown: &[usize], theme: &Theme) -> Vec<usize> {
         let mut widths: Vec<usize> = shown.iter().map(|&i| self.natural_width(i)).collect();
         let total: usize = widths.iter().sum::<usize>() + GAP * shown.len().saturating_sub(1);
@@ -248,7 +232,6 @@ impl Table {
     }
 }
 
-/// Pad `text` to `w` cells on the side its alignment leaves empty.
 fn pad(text: &str, w: usize, align: Align) -> String {
     let fill = w.saturating_sub(width(text));
     match align {
@@ -294,7 +277,6 @@ mod tests {
         assert_eq!(lines.len(), 3);
         assert!(lines[0].starts_with("TITLE"), "got: {rendered}");
         assert!(lines[0].contains("COST"), "got: {rendered}");
-        // Right-aligned numbers share a right edge with their header.
         let end = lines[0].find("COST").unwrap() + 4;
         assert_eq!(&lines[1][end - 6..end], "$41.62");
         assert!(lines[0].trim_end().len() <= 120);

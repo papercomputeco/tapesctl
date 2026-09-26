@@ -1,10 +1,7 @@
-//! The human views for the read commands: `sessions list` and `get`,
-//! `traces list` and `get`, `spans list` and `get`.
+//! Human views for the sessions, traces, and spans read commands.
 //!
-//! Each view reads its columns off the undecoded [`serde_json::Value`] the
-//! read client returns, so a field the server has not sent renders as absent
-//! rather than failing the command, and a field the server grows simply has
-//! no column yet. `--json` restores the document itself.
+//! Views read the undecoded [`serde_json::Value`], so a field the server did
+//! not send renders as absent rather than failing the command.
 
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -16,23 +13,14 @@ use crate::render::text::{
 };
 use crate::render::{Cell, Column, Record, Table, Theme, Tone};
 
-/// Longest a title cell grows before eliding.
 const TITLE_WIDTH: usize = 48;
 
-/// Longest a prompt cell grows before eliding.
 const PROMPT_WIDTH: usize = 60;
 
-/// Terminal width at which the harness and model columns appear.
 const WIDE_FROM: usize = 110;
 
-// ---------------------------------------------------------------------------
-// sessions list
-
-/// Render `GET /v1/sessions` as a table with a one-line footer.
-///
-/// `sort` is the column the listing is ordered by, so the time column shows
-/// the field that decided the order: `last_active` (the server default) shows
-/// `last_seen_at`; `started_at` shows the start.
+/// Render `GET /v1/sessions`. The time column shows whichever field `sort`
+/// ordered by, so the row order is never a guess.
 #[must_use]
 pub fn sessions(value: &Value, sort: Option<&str>, theme: &Theme, now: OffsetDateTime) -> String {
     let Some(items) = value.get("items").and_then(Value::as_array) else {
@@ -42,9 +30,6 @@ pub fn sessions(value: &Value, sort: Option<&str>, theme: &Theme, now: OffsetDat
         return "No sessions.\n".to_owned();
     }
 
-    // Session ids are UUIDv7: the leading group is a timestamp, so any
-    // shortened form collides across sessions started the same day. The id
-    // is always shown whole, never dropped, and is what `sessions get` takes.
     let (time_header, time_path): (&'static str, &[&str]) = match sort {
         Some("started_at") => ("started", &["started_at"]),
         _ => ("last active", &["last_seen_at"]),
@@ -58,6 +43,7 @@ pub fn sessions(value: &Value, sort: Option<&str>, theme: &Theme, now: OffsetDat
         Column::new("turns").right().priority(2),
         Column::new("cost").right().priority(3),
         Column::new(time_header),
+        // UUIDv7 ids share a timestamp prefix, so the id is never shortened.
         Column::new("id").max(36),
     ]);
 
@@ -109,15 +95,11 @@ pub fn sessions(value: &Value, sort: Option<&str>, theme: &Theme, now: OffsetDat
     out
 }
 
-/// `8 sessions · more with --cursor eyJzb3J0…`
-///
-/// On a terminal the cursor is elided, because nobody types it; piped, it is
-/// printed whole, because a script does.
+/// The cursor is elided on a terminal, where nobody types it, and printed whole
+/// when piped, where a script does.
 fn sessions_footer(shown: usize, sort: Option<&str>, value: &Value, theme: &Theme) -> String {
     let noun = if shown == 1 { "session" } else { "sessions" };
     let mut footer = format!("{shown} {noun}");
-    // The time column follows a time sort; any other sort is named here, so
-    // the order the rows are in is never a guess.
     if let Some(sort) = sort.filter(|s| !matches!(*s, "last_active" | "started_at")) {
         footer.push_str(&format!(" · sorted by {}", sanitize(sort)));
     }
@@ -139,15 +121,12 @@ fn sessions_footer(shown: usize, sort: Option<&str>, value: &Value, theme: &Them
     footer
 }
 
-/// The session label the console would render, falling back the way the
-/// server does: display title, then the captured name, then `untitled` with
-/// the harness session's leading group so two untitled sessions can still be
-/// told apart.
+/// Display title, then name, then `untitled` with the harness session prefix
+/// so untitled sessions stay distinguishable.
 fn title(item: &Value) -> String {
     let title = sanitize(string_at(item, &["display_title"]));
     let harness_session = sanitize(string_at(item, &["harness_session_id"]));
-    // An untitled session's display_title is the harness id cut short, which
-    // reads as corruption rather than as a name; recognize and replace it.
+    // An untitled session's display_title is a truncated harness id; replace it.
     let is_placeholder = title.is_empty()
         || (!harness_session.is_empty() && harness_session.starts_with(&title) && title.len() < 16);
     if !is_placeholder {
@@ -165,8 +144,6 @@ fn title(item: &Value) -> String {
     }
 }
 
-/// The session's status: the deriver's word when it has one, otherwise the
-/// liveness signal, otherwise `unknown`.
 fn status_word(item: &Value) -> String {
     let status = sanitize(string_at(item, &["rollup", "status"]));
     if !status.is_empty() {
@@ -178,10 +155,6 @@ fn status_word(item: &Value) -> String {
     "unknown".to_owned()
 }
 
-// ---------------------------------------------------------------------------
-// sessions get
-
-/// Render `GET /v1/sessions/{id}` as a record.
 #[must_use]
 pub fn session(value: &Value, theme: &Theme, now: OffsetDateTime) -> String {
     let item = value.get("session").unwrap_or(value);
@@ -244,7 +217,7 @@ pub fn session(value: &Value, theme: &Theme, now: OffsetDateTime) -> String {
     record.render(theme)
 }
 
-/// `194 in · 10,090 out · 463,145 cache read`, from a usage object.
+/// `194 in · 10,090 out · 463,145 cache read`
 fn tokens_line(usage: &Value) -> String {
     let mut parts = Vec::new();
     if let Some(n) = number_at(usage, &["input_tokens"]).filter(|n| *n > 0) {
@@ -262,10 +235,6 @@ fn tokens_line(usage: &Value) -> String {
     parts.join(" · ")
 }
 
-// ---------------------------------------------------------------------------
-// traces list
-
-/// Render `GET /v1/traces?session_id=` as a table: one row per turn.
 #[must_use]
 pub fn traces(value: &Value, theme: &Theme, now: OffsetDateTime) -> String {
     let Some(items) = value.get("items").and_then(Value::as_array) else {
@@ -342,8 +311,7 @@ pub fn traces(value: &Value, theme: &Theme, now: OffsetDateTime) -> String {
     out
 }
 
-/// The turn's prompt on one line, or `(synthetic turn)` when the server sent
-/// an empty one on purpose.
+/// `(synthetic turn)` when the server sent an empty prompt on purpose.
 fn prompt_cell(item: &Value) -> String {
     let prompt = one_line(string_at(item, &["user_prompt"]));
     if prompt.is_empty() && item.get("user_prompt").is_some() {
@@ -353,11 +321,6 @@ fn prompt_cell(item: &Value) -> String {
     }
 }
 
-// ---------------------------------------------------------------------------
-// traces get
-
-/// Render `GET /v1/traces/{id}` as a record: the trace's own fields, with the
-/// span count and a pointer to the spans listing.
 #[must_use]
 pub fn trace(value: &Value, theme: &Theme, now: OffsetDateTime) -> String {
     let item = value.get("trace").unwrap_or(value);
@@ -419,10 +382,7 @@ pub fn trace(value: &Value, theme: &Theme, now: OffsetDateTime) -> String {
     record.render(theme)
 }
 
-// ---------------------------------------------------------------------------
-// spans list
-
-/// Render a trace's `spans` array as a table, in sequence order.
+/// Render a trace's `spans` array in sequence order.
 #[must_use]
 pub fn spans(spans: &Value, theme: &Theme) -> String {
     let Some(items) = spans.as_array() else {
@@ -488,11 +448,6 @@ pub fn spans(spans: &Value, theme: &Theme) -> String {
     out
 }
 
-// ---------------------------------------------------------------------------
-// spans get
-
-/// Render one span as a record, with its input and output documents after the
-/// fields when it has any.
 #[must_use]
 pub fn span(value: &Value, theme: &Theme, now: OffsetDateTime) -> String {
     let item = value.get("span").unwrap_or(value);
@@ -536,8 +491,7 @@ pub fn span(value: &Value, theme: &Theme, now: OffsetDateTime) -> String {
                 .map(money_exact),
         );
 
-    // Input and output are documents, not values: printed whole after the
-    // fields, never elided, so what is on screen can be copied as JSON.
+    // Printed as blocks, never elided, so the JSON can be copied.
     for (label, key) in [("Input", "input"), ("Output", "output")] {
         if let Some(doc) = item.get(key).filter(|d| !is_empty_doc(d)) {
             if let Ok(rendered) = serde_json::to_string_pretty(doc) {
@@ -559,10 +513,6 @@ fn is_empty_doc(value: &Value) -> bool {
     }
 }
 
-// ---------------------------------------------------------------------------
-// document readers
-
-/// Read a string field nested under `path`, empty when any hop is missing.
 fn string_at<'a>(value: &'a Value, path: &[&str]) -> &'a str {
     let mut node = value;
     for key in path {
@@ -574,7 +524,6 @@ fn string_at<'a>(value: &'a Value, path: &[&str]) -> &'a str {
     node.as_str().unwrap_or("")
 }
 
-/// Read an integer field nested under `path`.
 fn number_at(value: &Value, path: &[&str]) -> Option<i64> {
     let mut node = value;
     for key in path {
@@ -583,8 +532,7 @@ fn number_at(value: &Value, path: &[&str]) -> Option<i64> {
     node.as_i64()
 }
 
-/// Read a floating-point field nested under `path`, accepting an integer as
-/// well: the server may render a whole-dollar cost as `0` rather than `0.0`.
+/// Accepts an integer too: the server may send a cost as `0` rather than `0.0`.
 fn float_at(value: &Value, path: &[&str]) -> Option<f64> {
     let mut node = value;
     for key in path {
@@ -593,7 +541,6 @@ fn float_at(value: &Value, path: &[&str]) -> Option<f64> {
     node.as_f64().or_else(|| node.as_i64().map(|n| n as f64))
 }
 
-/// Read a boolean field nested under `path`.
 fn bool_at(value: &Value, path: &[&str]) -> Option<bool> {
     let mut node = value;
     for key in path {
@@ -672,9 +619,6 @@ mod tests {
 
     #[test]
     fn the_id_is_never_shortened_or_dropped() {
-        // UUIDv7 ids share their leading group across a day, so a short id
-        // would make two sessions look like one. Narrow terminals give up
-        // cost and turns first, never the id.
         let rendered = sessions(&listing(), None, &Theme::plain(80), NOW);
         assert!(
             rendered.contains("01a0d365-2f42-77a1-8473-bd2e295244a4"),
