@@ -458,7 +458,7 @@ your output file. The bundle is written verbatim — the console and the importe
 both parse it, so even reserializing the JSON would break them.
 
 **With `-o`, the byte count goes to stderr**, keeping stdout redirection clean —
-the line is `tapesctl: wrote <n> bytes to <path>`. So
+the line is `wrote <n> bytes to <path>`. So
 `tapesctl export <id> -o f.jsonl > log` captures nothing in `log`.
 
 ## seed
@@ -472,7 +472,8 @@ tapesctl seed --api-url http://localhost:8081
 ```
 
 ```
-tapesctl: seeded 4 session(s) (128 raw turns: 128 inserted, 0 deduped) into http://localhost:8081/
+Seeded 4 sessions into http://localhost:8081/
+  ✓ 128 raw turns · 128 inserted · 0 deduped
 ```
 
 Every count is read defensively, so a server that trims a field cannot turn a
@@ -520,7 +521,7 @@ tapesctl: --port does not apply to pi, whose capture plugin is a file copy
 Harnesses captured by redirection report that they need nothing, and exit `0`:
 
 ```
-tapesctl: claude needs no capture plugin — its traffic is captured by redirecting it, which `tapesctl start claude` does.
+claude needs no capture plugin — its traffic is captured by redirecting it, which `tapesctl start claude` does.
 ```
 
 Do not present `plugin install` as a required step for `claude` or `codex`.

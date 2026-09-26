@@ -157,7 +157,7 @@ Three consequences worth stating plainly:
   tells you so and exits `0` — the ordinary answer, not an error:
 
   ```
-  tapesctl: claude needs no capture plugin — its traffic is captured by redirecting it, which `tapesctl start claude` does.
+  claude needs no capture plugin — its traffic is captured by redirecting it, which `tapesctl start claude` does.
   ```
 
 - **`pi` and `opencode` get no transcript lane at all.** Neither keeps a
