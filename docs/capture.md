@@ -79,24 +79,25 @@ tapesctl sync --ingest-url http://localhost:8082
 ```
 
 ```
-tapesctl: swept 2 session(s), 2 file(s): 2 new versions, 0 already present, 0 failed
-tapesctl: projection queued asynchronously for 2 unique session(s)
+Swept 2 sessions (2 files)
+  ✓ 2 new · 0 unchanged
+  2 sessions queued for projection
 ```
 
-The second line is deliberately narrower than "projected." Every session with
+The third line is deliberately narrower than "projected." Every session with
 at least one accepted or already-present file has projection queued by ingest,
 but that work runs asynchronously. `sync` does not poll the read API, and a
 read immediately afterwards may still show the previous projection. An
 already-present file is still a successful upload and requeues projection
 server-side.
 
-Global `-v` adds one line per file with its harness session id, path, the record
-count reported by the server, and outcome (`new`, `already present`, `failed`,
-or `unavailable`). A failed request has no server count. For a successful
-response, the acknowledgement fields are independent: an omitted record count
-prints `server records unavailable` without hiding a known outcome, while an
-omitted dedup status prints `outcome unavailable` without hiding a known count.
-Normal mode omits successful per-file detail. Unlike `start`, `sync` logs to
+Global `-v` adds one line per file, outcome first (`new`, `unchanged`,
+`failed`, or `unknown`), then its harness session id, path, and the record
+count reported by the server. A failed request has no server count and prints
+`? records`. For a successful response, the acknowledgement fields are
+independent: an omitted record count prints `? records` without hiding a known
+outcome, while an omitted dedup status prints `unknown` without hiding a known
+count. Normal mode omits per-file detail. Unlike `start`, `sync` logs to
 stderr as usual — only `start` diverts its diagnostics to a file, and only
 because a harness owns the terminal.
 
@@ -156,7 +157,7 @@ Three consequences worth stating plainly:
   tells you so and exits `0` — the ordinary answer, not an error:
 
   ```
-  tapesctl: claude needs no capture plugin — its traffic is captured by redirecting it, which `tapesctl start claude` does.
+  claude needs no capture plugin — its traffic is captured by redirecting it, which `tapesctl start claude` does.
   ```
 
 - **`pi` and `opencode` get no transcript lane at all.** Neither keeps a
@@ -206,7 +207,7 @@ tapesctl capture codex-app --ingest-url http://localhost:8082
 ```
 
 ```
-tapesctl: capturing codex-app on 127.0.0.1:64513 — start a session in the app; Ctrl-C to stop
+capturing codex-app on 127.0.0.1:64513 — start a session in the app; Ctrl-C to stop
 ```
 
 `plugin install` packages the hook plugin under `~/.tapes/codex-app/`, writes a
@@ -253,7 +254,7 @@ If **nothing** was attributed, there is no session to link, and the summary says
 what did happen instead:
 
 ```
-tapesctl: captured 12 turn(s) (3 unattributed — filed as unknown)
+captured 12 turns (3 unattributed — filed as unknown)
 ```
 
 That is an attribution bug being reported as one, rather than as silence. It is

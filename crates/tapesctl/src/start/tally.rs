@@ -289,7 +289,7 @@ fn turns(count: usize) -> &'static str {
 #[must_use]
 pub fn unattributed_line(counts: CaptureCounts) -> String {
     format!(
-        "tapesctl: captured {} {} ({} unattributed — filed as unknown)",
+        "captured {} {} ({} unattributed — filed as unknown)",
         counts.captured,
         turns(counts.captured),
         counts.unattributed,
@@ -406,10 +406,7 @@ mod tests {
             captured: 4,
             unattributed: 4,
         });
-        assert_eq!(
-            line,
-            "tapesctl: captured 4 turns (4 unattributed — filed as unknown)"
-        );
+        assert_eq!(line, "captured 4 turns (4 unattributed — filed as unknown)");
     }
 
     #[test]
@@ -432,7 +429,7 @@ mod tests {
         };
         assert_eq!(
             unattributed_line(counts),
-            "tapesctl: captured 1 turn (1 unattributed — filed as unknown)"
+            "captured 1 turn (1 unattributed — filed as unknown)"
         );
         assert_eq!(
             unattributed_warning(counts),

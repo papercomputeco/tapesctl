@@ -263,10 +263,7 @@ pub fn run(args: &PluginInstallArgs, machine: &Machine) -> Result<()> {
         write_private(&plan.plugin_root.join(relative), contents.as_bytes(), home)?;
     }
 
-    println!(
-        "tapesctl: packaged the hook plugin at {}",
-        plan.plugin_root.display(),
-    );
+    println!("packaged the hook plugin at {}", plan.plugin_root.display(),);
 
     // `config.toml` is patched before the handoff is replaced, and the two
     // together are the installation: the hook authenticates with the handoff's
@@ -319,10 +316,7 @@ pub fn run(args: &PluginInstallArgs, machine: &Machine) -> Result<()> {
             .build(),
         });
     }
-    println!(
-        "tapesctl: wrote the handoff at {}",
-        plan.handoff_path.display(),
-    );
+    println!("wrote the handoff at {}", plan.handoff_path.display(),);
 
     // Registration is last, and it is the only step that reaches outside this
     // installation. It must follow the handoff: registering copies the plugin
@@ -368,13 +362,13 @@ fn register_with_codex(plan: &Plan) {
         // an install this run is not performing.
         ManagerRun::SkippedDisabled => {
             println!(
-                "tapesctl: left the plugin alone — {}",
+                "left the plugin alone — {}",
                 manager::SKIPPED_DISABLED_REASON
             );
         }
         ManagerRun::CliAbsent => {
             println!();
-            println!("tapesctl: no `codex` CLI found; register the plugin yourself:");
+            println!("no `codex` CLI found; register the plugin yourself:");
             for command in manager.manual_commands() {
                 println!("  {command}");
             }
@@ -383,20 +377,17 @@ fn register_with_codex(plan: &Plan) {
             marketplace,
             install,
         } => {
-            println!(
-                "tapesctl: marketplace registration: {}",
-                marketplace.describe()
-            );
-            println!("tapesctl: plugin install: {}", install.describe());
+            println!("marketplace registration: {}", marketplace.describe());
+            println!("plugin install: {}", install.describe());
             if let InstallOutcome::RemovedNotReinstalled { .. } = &install {
                 println!(
-                    "tapesctl: the previous copy was removed but re-adding it failed; \
+                    "the previous copy was removed but re-adding it failed; \
                      the plugin is currently NOT installed"
                 );
-                println!("tapesctl: restore it with: {}", manager.install_command());
+                println!("restore it with: {}", manager.install_command());
             }
             if marketplace.failed() || install.needs_manual_retry() {
-                println!("tapesctl: retry manually:");
+                println!("retry manually:");
                 for command in manager.manual_commands() {
                     println!("  {command}");
                 }
@@ -423,12 +414,12 @@ pub fn uninstall(args: &PluginUninstallArgs, machine: &Machine) -> Result<()> {
 
     if args.dry_run {
         println!(
-            "tapesctl: would remove the {provider_id:?} provider from {}",
+            "dry run: would remove the {provider_id:?} provider from {}",
             config_path.display()
         );
-        println!("tapesctl: would remove {}", state.display());
+        println!("dry run: would remove {}", state.display());
         println!(
-            "tapesctl: would leave the plugin registered with Codex; remove it with \
+            "dry run: would leave the plugin registered with Codex; remove it with \
              `codex plugin remove {}`",
             manager::plugin_spec(PLUGIN_NAME, MARKETPLACE_NAME),
         );
@@ -444,14 +435,14 @@ pub fn uninstall(args: &PluginUninstallArgs, machine: &Machine) -> Result<()> {
         if cleaned != existing {
             write_config(&config_path, &cleaned)?;
             println!(
-                "tapesctl: removed the {provider_id:?} provider from {}",
+                "removed the {provider_id:?} provider from {}",
                 config_path.display(),
             );
         }
     }
 
     match std::fs::remove_dir_all(&state) {
-        Ok(()) => println!("tapesctl: removed {}", state.display()),
+        Ok(()) => println!("removed {}", state.display()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(err) => {
             return Err(err).context(error::PluginWriteSnafu { path: state });
@@ -460,7 +451,7 @@ pub fn uninstall(args: &PluginUninstallArgs, machine: &Machine) -> Result<()> {
 
     info!(harness = harness.id(), "codex-app capture uninstalled");
     println!(
-        "tapesctl: the plugin is still registered with Codex — remove it with \
+        "the plugin is still registered with Codex — remove it with \
          `codex plugin remove {}`",
         manager::plugin_spec(PLUGIN_NAME, MARKETPLACE_NAME),
     );
@@ -481,7 +472,7 @@ fn patch_config(plan: &Plan) -> Result<()> {
         })?;
     if patched == existing {
         println!(
-            "tapesctl: {} already routes {PROVIDER_ID} through {}",
+            "{} already routes {PROVIDER_ID} through {}",
             plan.config_path.display(),
             plan.proxy_addr,
         );
@@ -489,7 +480,7 @@ fn patch_config(plan: &Plan) -> Result<()> {
     }
     write_config(&plan.config_path, &patched)?;
     println!(
-        "tapesctl: pointed {} at {} — restart the Codex app for it to take effect",
+        "pointed {} at {} — restart the Codex app for it to take effect",
         plan.config_path.display(),
         plan.proxy_addr,
     );
@@ -733,20 +724,20 @@ fn now_rfc3339() -> String {
 
 fn report_plan(plan: &Plan) {
     println!(
-        "tapesctl: would package the hook plugin under {}",
+        "dry run: would package the hook plugin under {}",
         plan.plugin_root.display(),
     );
     println!(
-        "tapesctl: would write the handoff at {}",
+        "dry run: would write the handoff at {}",
         plan.handoff_path.display()
     );
     println!(
-        "tapesctl: would point {} at {}",
+        "dry run: would point {} at {}",
         plan.config_path.display(),
         plan.proxy_addr,
     );
-    println!("tapesctl: each hook would run {}", plan.hook_command);
-    println!("tapesctl: would then register it with the codex CLI when available:");
+    println!("each hook would run {}", plan.hook_command);
+    println!("would then register it with the codex CLI when available:");
     for command in plan.manager().manual_commands() {
         println!("  {command}");
     }

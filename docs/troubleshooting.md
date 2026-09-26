@@ -15,11 +15,11 @@ Ordered by how often they bite and how long they take to diagnose.
 **First check the exit line.** `start` says which of two things happened:
 
 ```
-tapesctl: no turns were captured
+no turns were captured
 ```
 
 That means nothing landed in the server. It is *not* the same as
-`tapesctl: captured session …`, which means it did.
+`✓ captured session …`, which means it did.
 
 **The usual cause is the wrong port.** Ingest and reads are separate listeners
 — `8082` and `8081` on a local `tapes serve`. `start`, `capture`, and `sync`
@@ -262,7 +262,8 @@ causes it is: no embedder or store configured, or no embedding pass has run.
 It surfaces as:
 
 ```
-tapes API returned 503 for …: <body>
+tapesctl: tapes API at localhost:8081 answered 503 unavailable: <message>
+  hint: the server is up but this feature is not ready; try again in a minute
 ```
 
 An empty result set is not an error — that prints `No results found.` and exits

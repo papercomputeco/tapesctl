@@ -47,7 +47,7 @@ Three values, and only three.
 | code | meaning |
 |---|---|
 | `0` | success |
-| `1` | a runtime error — a `tapesctl: ` line on stderr, plus a `caused by:` line per underlying cause |
+| `1` | a runtime error — a `tapesctl: ` line on stderr, plus a `caused by:` line per underlying cause and, when there is one, a `hint:` line |
 | `2` | an argument-parsing error, or help printed because a subcommand was missing |
 
 **A bare `tapesctl` prints help and exits `2`.** So does `tapesctl sessions`,
@@ -124,16 +124,18 @@ survives.
 Before launch, and only when diagnostics went to a file:
 
 ```
-tapesctl: capturing; logs at ~/.tapes/logs/start-20260813-180411-54233.log
+capturing · logs at ~/.tapes/logs/start-20260813-180411-54233.log
 ```
 
 Between spawn and harness exit, nothing at all. At exit, exactly one of:
 
 ```
-tapesctl: no turns were captured
-tapesctl: captured session <id> — <console url>
-tapesctl: captured session <id> (pass --web-url for a console link)
-tapesctl: captured <n> turn(s) (<u> unattributed — filed as unknown)
+no turns were captured
+✓ captured session <id>
+  <console url>
+✓ captured session <id>
+  pass --web-url for a console link
+captured <n> turn(s) (<u> unattributed — filed as unknown)
 ```
 
 then, on stderr when any turn was unattributed:
@@ -148,7 +150,7 @@ then, on stderr only if the shutdown drain gave up:
 tapesctl: warning: <n> turn(s) still being captured at exit; the counts above may be short
 ```
 
-and finally, on stdout, `tapesctl: logs at <path>`.
+and finally, on stdout, an indented dim `logs at <path>`.
 
 The printed session id is the **harness's**, not the one read commands take —
 see [Session ids](./capture.md#session-ids).
@@ -191,9 +193,8 @@ codex-app -- -p hi` is a parse error.
 | `--org-id <UUID>` | `""` | `TAPES_ORG_ID` |
 | `--auth-subject <S>` | `local:<username>` | `TAPES_AUTH_SUBJECT` |
 
-Prints `tapesctl: capturing <harness> on <addr> — start a session in the app;
-Ctrl-C to stop`, then one line per session, then
-`tapesctl: stopped after <n> session(s)`.
+Prints `capturing <harness> on <addr> — start a session in the app; Ctrl-C to
+stop`, then one line per session, then `stopped after <n> session(s)`.
 
 **There is no exit summary** — no turn counts and no unattributed warning,
 because `capture`'s tally is never drained.
@@ -233,34 +234,40 @@ under, nothing else: pointing `--projects-root` at a Codex tree still finds
 zero sessions. To import another harness, first rewrite its history into that
 layout and shape, then sync it with the matching `--harness-id`.
 
-Normal mode prints two lines:
+Normal mode prints three lines:
 
 ```
-tapesctl: swept 2 session(s), 2 file(s): 1 new version, 1 already present, 0 failed
-tapesctl: projection queued asynchronously for 2 unique session(s)
+Swept 2 sessions (2 files)
+  ✓ 1 new · 1 unchanged
+  2 sessions queued for projection
 ```
 
-The first line distinguishes accepted new content versions from files the
-server already held. If a successful response omits dedup status, it adds an
-`outcome(s) unavailable` count rather than treating that file as new. The second line does **not** mean projection completed: ingest
-queued asynchronous projection for each unique session with at least one
-successful response, and `sync` does not poll the read API. Reads may lag.
-Deduplicated uploads are successes and requeue projection server-side; the
-server remains the only source of truth, with no client upload ledger.
+The mark is `✓` when nothing failed and `✗` when something did, with a
+`<n> failed` count added. The second line distinguishes accepted new content
+versions from files the server already held (`unchanged`). If a successful
+response omits dedup status, an `<n> outcome unknown` count is added rather
+than treating that file as new. The third line does **not** mean projection
+completed: ingest queued asynchronous projection for each unique session with
+at least one successful response, and `sync` does not poll the read API. Reads
+may lag. Deduplicated uploads are successes and requeue projection
+server-side; the server remains the only source of truth, with no client
+upload ledger.
 
-Global `-v` adds one line per offered file:
+Global `-v` adds one line per offered file above the summary, outcome first so
+a column of them scans:
 
 ```
-tapesctl: sync file: session sid-1, path /home/me/.claude/projects/-work/sid-1.jsonl, server records 42, outcome new
-tapesctl: sync file: session sid-2, path /home/me/.claude/projects/-work/sid-2.jsonl, server records 18, outcome already present
+  new       sid-1  /home/me/.claude/projects/-work/sid-1.jsonl  42 records
+  unchanged sid-2  /home/me/.claude/projects/-work/sid-2.jsonl  18 records
 ```
 
-The outcomes are `new`, `already present`, `failed`, and `unavailable`. A
-failure has no server-reported record count. Successful acknowledgement fields
-are independent: if `records` is absent only the count is `unavailable`; if
-`deduped` is absent only the outcome is `unavailable`. Sync preserves whichever
-field the server did report rather than guessing or discarding both. Normal
-mode omits successful per-file detail.
+The outcomes are `new`, `unchanged`, `failed`, and `unknown`. A failure has no
+server-reported record count and prints `? records`. Successful
+acknowledgement fields are independent: if `records` is absent only the count
+is `?`; if `deduped` is absent only the outcome is `unknown`. Sync preserves
+whichever field the server did report rather than guessing or discarding
+both. Normal mode omits per-file detail. `-v` also turns tapesctl's own
+`INFO` narration on; without it only warnings reach stderr.
 
 Any failure then exits `1` with `<n> of <m> transcript(s) could not be
 delivered`. Both aggregate lines print before the final error, and everything
@@ -278,15 +285,34 @@ structure.
 
 ## sessions
 
-Read commands. `sessions list` renders its listing as a table by default, with
-`--json` restoring the raw document; every other command prints the server's
-JSON pretty-printed. Responses are never re-modelled on the way through, so
-fields the server grows reach you without a client upgrade.
+Read commands. `list` renders a borderless table and `get` a record view, both
+laid out for the terminal width; `--json` on either restores the raw document.
+`traces` and `raw-turns` are the console's own documents and print JSON.
+Responses are never re-modelled on the way through, so fields the server grows
+reach you without a client upgrade.
+
+```
+TITLE                STATUS     TURNS   COST  LAST ACTIVE  ID
+Add a table view     completed     12  $0.04  5m ago       01a0d365-2f42-77a1-8473-bd2e295244a4
+untitled (f47ac10b)  unknown        —      —  2h ago       01a0d365-2895-77f7-9ac2-dad41f0a1577
+
+2 sessions · more with --cursor eyJzb3J0IjoibGFzdF9…  (full cursor: --json)
+```
+
+The table shows the columns that fit: `HARNESS` and `MODEL` appear from 110
+columns; on a narrow one `COST` and then `TURNS` give way first. `ID` is the
+full id and is never dropped or shortened: ids are time-ordered, so any prefix
+collides across a day's sessions. The time column follows `--sort`:
+`LAST ACTIVE` by default, `STARTED` under `--sort started_at`; any other sort
+is named in the footer (`sorted by total_cost_usd`). Piped, the cursor is
+printed whole, and absent values are `-` so `awk`
+still sees a field. Colour is applied only on a terminal and never when
+`NO_COLOR` is set.
 
 | leaf | route | flags |
 |---|---|---|
 | `list` | `GET /v1/sessions` | `--limit`, `--cursor`, `--sort`, `--direction`, `--since`, `--until`, `--harness-id`, `--harness-session-id`, `--auth-subject`, `--filter`, `--json` |
-| `get <ID>` | `GET /v1/sessions/{id}` | — |
+| `get <ID>` | `GET /v1/sessions/{id}` | `--json` |
 | `traces <ID>` | `GET /v1/sessions/{id}/traces` | `--payload` |
 | `raw-turns <ID>` | `GET /v1/sessions/{id}/raw_turns` | — |
 
@@ -330,20 +356,26 @@ than followed. A base path in `--api-url` is discarded here too.
 
 | leaf | route | flags |
 |---|---|---|
-| `list <SESSION_ID>` | `GET /v1/traces?session_id=` | — |
-| `get <TRACE_ID>` | `GET /v1/traces/{trace_id}` | `--payload` |
+| `list <SESSION_ID>` | `GET /v1/traces?session_id=` | `--json` |
+| `get <TRACE_ID>` | `GET /v1/traces/{trace_id}` | `--payload`, `--json` |
 
 ## spans
 
 | leaf | route | flags |
 |---|---|---|
-| `list <TRACE_ID>` | `GET /v1/traces/{trace_id}`, projected to its `spans` array | `--payload` |
-| `get <TRACE_ID> <SPAN_ID>` | `GET /v1/traces/{trace_id}/spans/{span_id}` | — |
+| `list <TRACE_ID>` | `GET /v1/traces/{trace_id}`, projected to its `spans` array | `--payload`, `--json` |
+| `get <TRACE_ID> <SPAN_ID>` | `GET /v1/traces/{trace_id}/spans/{span_id}` | `--json` |
 
 **`spans list` is a projection, not a route.** The API has no standalone span
 collection — spans exist only inside a trace — so the command fetches the trace
-and prints its `spans`. A trace with no `spans` key prints `[]` rather than
-failing.
+and prints its `spans`. A trace with no `spans` key prints `No spans.` (`[]`
+under `--json`) rather than failing.
+
+`traces list` is one row per turn: status, span count, tokens in → out, cost,
+how long it took, when it started, the prompt, and the trace id last. `spans
+list` is one row per span in sequence order, with child spans indented under
+their parent. `traces get` and `spans get` are records; a span's `input` and
+`output` documents follow its fields when it has any.
 
 `spans get` takes **two** positionals. The trace id is not optional.
 
@@ -362,6 +394,7 @@ tapesctl search "error handling patterns" --top 10 --api-url http://localhost:80
 | `<QUERY>` | required | |
 | `-k`, `--top <N>` | `5` | the server has no ceiling on this |
 | `-q`, `--quiet` | off | one bare session id per line, deduplicated in score order |
+| `--json` | off | the cassette's document, for `jq`; conflicts with `--quiet` |
 
 Route: `GET /v1/cassettes/search/spans?query=&top_k=` — the search cassette's
 serving of the span-search contract. Both parameters are always sent.
@@ -371,18 +404,33 @@ per line, deduplicated in score order, ready for command substitution into
 anything that takes session ids — for example the skills cassette's generate
 operation (`tapesctl skills --help` shows its current shape).
 
-Non-quiet output is a ranked list — rank, score to four decimals, `trace/span`
-ids, the turn's prompt elided at 80 characters, a snippet elided at 100, then
-the start time and session id. A turn with an empty prompt renders as
-`(synthetic turn)`; the server sends the field even when blank precisely so the
-case stays distinguishable. Treat printed scores as display values, not as
-exact numbers to assert on.
+Non-quiet output is a ranked list: the query and a hit count on the first
+line, then one hit per line with its score to two decimals, the turn's prompt, and
+when the turn ran, followed by the matched snippet on a dim `»` line and the
+session, trace, and span ids on a second dim line, so a hit leads straight to
+`sessions get`, `traces get`, or `spans get`.
+
+```
+"how I fixed auth"  ·  2 hits across 2 sessions
+
+0.82  Fix WorkOS redirect on staging                            Sep 17
+      » the redirect URI in the WorkOS dashboard is per-environment
+      session 01a0d365-1a2b-77a1-8473-bd2e295244a4 · trace trc_… · span sp_…
+0.77  (synthetic turn)                                          Sep 12
+      session 01a0d365-9c3d-77a1-8473-bd2e295244a4
+```
+
+A turn with an empty prompt renders as `(synthetic turn)`; the server sends
+the field even when blank precisely so the case stays distinguishable. Treat
+printed scores as display values, not as exact numbers to assert on. `spans get` prints the span's `input` and `output` documents whole after its
+fields, never elided, so they copy as JSON.
 
 **An empty result set is not an error**: non-quiet prints `No results found.`
 and exits `0`; quiet prints nothing and exits `0`.
 
 A deployment without span embeddings answers `503`, and the body says which of
-the two causes it is. It surfaces as `tapes API returned 503 for …: <body>`.
+the two causes it is. It surfaces as `tapes API at <host> answered 503
+unavailable: <message>` with a hint to try again in a minute.
 
 `-k -1` is refused by the parser, with clap's `unexpected argument '-1' found`
 and a `-- -1` tip rather than a range complaint.
@@ -415,7 +463,7 @@ your output file. The bundle is written verbatim — the console and the importe
 both parse it, so even reserializing the JSON would break them.
 
 **With `-o`, the byte count goes to stderr**, keeping stdout redirection clean —
-the line is `tapesctl: wrote <n> bytes to <path>`. So
+the line is `wrote <n> bytes to <path>`. So
 `tapesctl export <id> -o f.jsonl > log` captures nothing in `log`.
 
 ## seed
@@ -429,7 +477,8 @@ tapesctl seed --api-url http://localhost:8081
 ```
 
 ```
-tapesctl: seeded 4 session(s) (128 raw turns: 128 inserted, 0 deduped) into http://localhost:8081/
+Seeded 4 sessions into http://localhost:8081/
+  ✓ 128 raw turns · 128 inserted · 0 deduped
 ```
 
 Every count is read defensively, so a server that trims a field cannot turn a
@@ -477,7 +526,7 @@ tapesctl: --port does not apply to pi, whose capture plugin is a file copy
 Harnesses captured by redirection report that they need nothing, and exit `0`:
 
 ```
-tapesctl: claude needs no capture plugin — its traffic is captured by redirecting it, which `tapesctl start claude` does.
+claude needs no capture plugin — its traffic is captured by redirecting it, which `tapesctl start claude` does.
 ```
 
 Do not present `plugin install` as a required step for `claude` or `codex`.
@@ -505,9 +554,9 @@ registration survives and must be removed by hand; the command prints the
 exact incantation:
 
 ```
-tapesctl: would remove the "tapesctl-codex-app" provider from ~/.codex/config.toml
-tapesctl: would remove ~/.tapes/codex-app
-tapesctl: would leave the plugin registered with Codex; remove it with `codex plugin remove tapesctl-codex-app@tapesctl`
+dry run: would remove the "tapesctl-codex-app" provider from ~/.codex/config.toml
+dry run: would remove ~/.tapes/codex-app
+dry run: would leave the plugin registered with Codex; remove it with `codex plugin remove tapesctl-codex-app@tapesctl`
 ```
 
 Its `--help` says "and any configuration it wrote", which overstates this.
@@ -680,15 +729,12 @@ cause you act on is usually the last line, so read the chain from the bottom.
 
 | family | shape |
 |---|---|
-| unreachable server | `could not reach the tapes API: could not reach the tapes API` |
-| non-success status | `tapes API returned <status> for <endpoint>: <body>` |
+| unreachable server | `could not reach the tapes API`, the OS reason, and a `hint:` naming `tapes serve`, `--api-url`, and `TAPES_API_URL` when the connection was refused |
+| non-success status | `tapes API at <host> answered <status> <reason>: <message> (<code>)` — the `message` and `error` fields of the server's error document; a body that is not that document is shown on one line. A missing cassette adds a hint to run `tapesctl cassettes` |
 | invalid flag value | `invalid --<flag> "<value>" (valid values: …)` — raised before any request |
 | inapplicable flag | `--<flag> does not apply to <harness>, …` — refused, never silently ignored |
 | unknown harness | `unsupported harness "X" (supported: …)` from `start`; `unknown harness "X" (known: …)` from `capture` |
 | missing plugin | `<harness> cannot be captured until its capture plugin is installed: …` |
-
-The doubled clause in the unreachable-server message is real, not a
-transcription error here.
 
 The no-server message names all three sources, and is the main place a user
 learns `config set` exists.

@@ -117,9 +117,13 @@ rm /tmp/zig.tar.xz`
 // Test runs the workspace unit tests. `--locked` fails if Cargo.lock is stale,
 // which subsumes the go.mod-tidy check the Go pipeline had.
 //
+// tapesctl is cleaned first: /src/target is a persistent cache volume, and
+// cargo's mtime check can otherwise leave a stale binary from an earlier commit.
+//
 // +check
 func (t *Tapesctl) Test(ctx context.Context) (string, error) {
 	return t.rustContainer().
+		WithExec([]string{"cargo", "clean", "--package", "tapesctl"}).
 		WithExec([]string{"cargo", "test", "--workspace", "--locked"}).
 		Stdout(ctx)
 }

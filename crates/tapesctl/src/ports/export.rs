@@ -72,7 +72,7 @@ pub async fn run(args: ExportArgs) -> Result<()> {
             let written = stream_to(response, file).await?;
             // The progress note goes to stderr so `tapesctl export -o -` style
             // piping and shell redirection of stdout stay clean.
-            eprintln!("tapesctl: wrote {written} bytes to {}", path.display());
+            eprintln!("wrote {written} bytes to {}", path.display());
             Ok(())
         }
         None => {

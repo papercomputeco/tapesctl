@@ -216,8 +216,8 @@ impl DesktopSessions {
             .as_ref()
             .and_then(|base| base.join(&format!("/sessions/{session_id}")).ok())
         {
-            Some(url) => println!("tapesctl: capturing codex-app session {session_id} — {url}"),
-            None => println!("tapesctl: capturing codex-app session {session_id}"),
+            Some(url) => println!("capturing codex-app session {session_id} — {url}"),
+            None => println!("capturing codex-app session {session_id}"),
         }
     }
 }

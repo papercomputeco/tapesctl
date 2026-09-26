@@ -119,7 +119,7 @@ pub enum Error {
 
     /// The configuration file is not valid TOML, or has a value of the wrong
     /// shape.
-    #[snafu(display("the config at {} is not valid: {source}", path.display()))]
+    #[snafu(display("the config at {} is not valid", path.display()))]
     ConfigParse {
         /// The file that would not parse.
         path: PathBuf,
@@ -369,7 +369,7 @@ pub enum Error {
     /// source is opaque, so a caller cannot recover the detail by matching on
     /// it. It is a transport error rather than a `reqwest::Error` because the
     /// client crate's seam admits transports that have never heard of HTTP.
-    #[snafu(display("could not reach the tapes API: {source}"))]
+    #[snafu(display("{}", api_send_message(source)))]
     ApiSend {
         /// Underlying transport failure.
         source: tapes_client::TransportError,
@@ -377,7 +377,7 @@ pub enum Error {
 
     /// The API answered with a non-success status. The body is carried because
     /// every tapes error body names the offending parameter.
-    #[snafu(display("tapes API returned {status} for {endpoint}: {body}"))]
+    #[snafu(display("{}", api_status_message(*status, endpoint, body)))]
     ApiStatus {
         /// HTTP status returned.
         status: u16,
@@ -911,5 +911,148 @@ impl From<tapes_client::Error> for Error {
                 }
             }
         }
+    }
+}
+
+/// Status, host, and the server's message on one line, plus a hint line when
+/// there is a next thing to try.
+#[must_use]
+pub fn api_status_message(status: u16, endpoint: &str, body: &str) -> String {
+    let mut out = format!(
+        "tapes API at {} answered {}",
+        endpoint_host(endpoint),
+        status_with_reason(status)
+    );
+    let said = body_said(body);
+    if !said.is_empty() {
+        out.push_str(": ");
+        out.push_str(&said);
+    }
+    if let Some(hint) = api_status_hint(status, body) {
+        out.push_str("\n  hint: ");
+        out.push_str(hint);
+    }
+    out
+}
+
+fn endpoint_host(endpoint: &str) -> String {
+    url::Url::parse(endpoint)
+        .ok()
+        .and_then(|u| {
+            u.host_str().map(|h| match u.port() {
+                Some(port) => format!("{h}:{port}"),
+                None => h.to_owned(),
+            })
+        })
+        .unwrap_or_else(|| endpoint.to_owned())
+}
+
+fn status_with_reason(status: u16) -> String {
+    let reason = match status {
+        400 => "bad request",
+        401 => "unauthorized",
+        403 => "forbidden",
+        404 => "not found",
+        409 => "conflict",
+        422 => "unprocessable",
+        429 => "rate limited",
+        500 => "server error",
+        502 => "bad gateway",
+        503 => "unavailable",
+        _ => return status.to_string(),
+    };
+    format!("{status} {reason}")
+}
+
+/// `message (code)` from a tapes error document, else the raw body on one line.
+fn body_said(body: &str) -> String {
+    let parsed: Option<serde_json::Value> = serde_json::from_str(body).ok();
+    let field = |key: &str| {
+        parsed
+            .as_ref()
+            .and_then(|v| v.get(key))
+            .and_then(serde_json::Value::as_str)
+            // JSON decoding un-escapes terminal controls; neutralize them.
+            .map(crate::render::text::one_line)
+    };
+    match (field("message"), field("error")) {
+        (Some(message), Some(code)) => format!("{message} ({code})"),
+        (Some(message), None) => message,
+        (None, Some(code)) => code,
+        (None, None) => {
+            let one_line = crate::render::text::one_line(body);
+            if one_line.chars().count() > 160 {
+                format!("{}…", one_line.chars().take(159).collect::<String>())
+            } else {
+                one_line
+            }
+        }
+    }
+}
+
+/// Avoids repeating the prefix when the transport message already carries it.
+#[must_use]
+pub fn api_send_message(source: &tapes_client::TransportError) -> String {
+    let inner = source.to_string();
+    if inner.starts_with("could not reach the tapes API") {
+        inner
+    } else {
+        format!("could not reach the tapes API: {inner}")
+    }
+}
+
+fn api_status_hint(status: u16, body: &str) -> Option<&'static str> {
+    if body.contains("unknown_cassette") {
+        return Some("`tapesctl cassettes` lists what this server serves");
+    }
+    match status {
+        401 | 403 => Some("check the URL points at a server you can read, or set TAPES_API_URL"),
+        503 => Some("the server is up but this feature is not ready; try again in a minute"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod display_tests {
+    use super::api_status_message;
+
+    #[test]
+    fn a_tapes_error_document_shows_its_message_and_host() {
+        let rendered = api_status_message(
+            404,
+            "http://localhost:8081/v1/cassettes/search/spans?query=auth&top_k=2",
+            r#"{"error":"unknown_cassette","message":"no cassette serves /v1/cassettes/search/spans"}"#,
+        );
+        assert_eq!(
+            rendered,
+            "tapes API at localhost:8081 answered 404 not found: no cassette serves /v1/cassettes/search/spans (unknown_cassette)\n  hint: `tapesctl cassettes` lists what this server serves"
+        );
+    }
+
+    #[test]
+    fn decoded_terminal_controls_never_reach_stderr() {
+        let rendered = api_status_message(
+            500,
+            "http://x/v1/y",
+            r#"{"error":"e\u001b[2J","message":"boom\u001b]0;pwned\u0007\nforged line"}"#,
+        );
+        assert!(
+            rendered.chars().all(|c| !c.is_control() || c == '\n'),
+            "control characters leaked: {rendered:?}"
+        );
+        assert!(!rendered.contains("\nforged"), "got: {rendered:?}");
+    }
+
+    #[test]
+    fn a_body_that_is_not_the_document_is_shown_on_one_line() {
+        let rendered = api_status_message(
+            502,
+            "http://tapes.example/v1/x",
+            "<html>\n bad gateway\n</html>",
+        );
+        assert_eq!(
+            rendered,
+            "tapes API at tapes.example answered 502 bad gateway: <html> bad gateway </html>"
+        );
     }
 }

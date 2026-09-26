@@ -159,7 +159,7 @@ pub async fn run(args: CaptureArgs) -> Result<()> {
         "capture proxy listening",
     );
     println!(
-        "tapesctl: capturing {} on {} — start a session in the app; Ctrl-C to stop",
+        "capturing {} on {} — start a session in the app; Ctrl-C to stop",
         harness.id(),
         handoff.proxy_addr,
     );
@@ -179,7 +179,7 @@ pub async fn run(args: CaptureArgs) -> Result<()> {
     .await
     .context(error::BindSnafu)?;
 
-    println!("tapesctl: stopped after {} session(s)", sessions.len());
+    println!("stopped after {} session(s)", sessions.len());
     Ok(())
 }
 

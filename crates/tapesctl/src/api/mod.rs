@@ -21,14 +21,10 @@
 //!
 //! # Output
 //!
-//! `sessions list` renders its listing as a table by default; `--json` restores
-//! the raw document. Every other command prints the server's JSON,
-//! pretty-printed, and nothing else. See [`client`] for why these particular
-//! responses are not decoded through the shared models on the way through: in
-//! short, a model can only carry the fields the build it shipped in knew about,
-//! and these commands exist to show what the server said. The table view keeps
-//! that spirit by reading its columns off the undecoded document — see
-//! [`table`].
+//! Every command has a human view (see [`view`]) and `--json` for the raw
+//! document. `sessions traces` and `sessions raw-turns` stay JSON: they are the
+//! console's own documents. See [`client`] for why responses are not decoded
+//! through the shared models: a model only carries the fields its build knew.
 //!
 //! # Requests
 //!
@@ -39,7 +35,7 @@
 
 pub mod client;
 pub mod contract;
-pub mod table;
+pub mod view;
 
 use serde_json::Value;
 use snafu::{OptionExt, ResultExt};
@@ -51,8 +47,13 @@ use url::Url;
 
 use crate::cli::{ApiArgs, SessionsCommand, SpansCommand, TracesCommand};
 use crate::error::{Result, error};
+use crate::render::Theme;
 use client::{ApiClient, connect, narrow};
 use contract::ops;
+
+fn now() -> time::OffsetDateTime {
+    time::OffsetDateTime::now_utc()
+}
 
 /// Resolve the API base URL from arguments and the environment.
 pub fn resolve_client(args: &ApiArgs) -> Result<ApiClient> {
@@ -115,7 +116,7 @@ pub async fn sessions(command: SessionsCommand) -> Result<()> {
             let mut values = SessionListParams {
                 limit: args.limit.map(narrow),
                 cursor: args.cursor,
-                sort: args.sort,
+                sort: args.sort.clone(),
                 since: args.since,
                 until: args.until,
                 harness_id: args.harness_id,
@@ -142,14 +143,22 @@ pub async fn sessions(command: SessionsCommand) -> Result<()> {
             if args.json {
                 print_json(&value)
             } else {
-                print!("{}", table::render_sessions(&value));
+                print!(
+                    "{}",
+                    view::sessions(&value, args.sort.as_deref(), &Theme::detect(), now())
+                );
                 Ok(())
             }
         }
         SessionsCommand::Get(args) => {
             let client = resolve_client(&args.api)?;
             let value: Value = client.call(ops::GET_SESSION, vec![("id", args.id)]).await?;
-            print_json(&value)
+            if args.json {
+                print_json(&value)
+            } else {
+                print!("{}", view::session(&value, &Theme::detect(), now()));
+                Ok(())
+            }
         }
         SessionsCommand::Traces(args) => {
             let client = resolve_client(&args.api)?;
@@ -177,7 +186,12 @@ pub async fn traces(command: TracesCommand) -> Result<()> {
             let value: Value = client
                 .call(ops::LIST_TRACES, vec![("session_id", args.session_id)])
                 .await?;
-            print_json(&value)
+            if args.json {
+                print_json(&value)
+            } else {
+                print!("{}", view::traces(&value, &Theme::detect(), now()));
+                Ok(())
+            }
         }
         TracesCommand::Get(args) => {
             let client = resolve_client(&args.api)?;
@@ -185,7 +199,12 @@ pub async fn traces(command: TracesCommand) -> Result<()> {
             let mut values = TraceParams { payload }.values();
             values.push(("trace_id", args.trace_id));
             let value: Value = client.call(ops::GET_TRACE, values).await?;
-            print_json(&value)
+            if args.json {
+                print_json(&value)
+            } else {
+                print!("{}", view::trace(&value, &Theme::detect(), now()));
+                Ok(())
+            }
         }
     }
 }
@@ -206,7 +225,12 @@ pub async fn spans(command: SpansCommand) -> Result<()> {
                 .get("spans")
                 .cloned()
                 .unwrap_or_else(|| Value::Array(Vec::new()));
-            print_json(&spans)
+            if args.json {
+                print_json(&spans)
+            } else {
+                print!("{}", view::spans(&spans, &Theme::detect()));
+                Ok(())
+            }
         }
         SpansCommand::Get(args) => {
             let client = resolve_client(&args.api)?;
@@ -216,7 +240,12 @@ pub async fn spans(command: SpansCommand) -> Result<()> {
                     vec![("trace_id", args.trace_id), ("span_id", args.span_id)],
                 )
                 .await?;
-            print_json(&value)
+            if args.json {
+                print_json(&value)
+            } else {
+                print!("{}", view::span(&value, &Theme::detect(), now()));
+                Ok(())
+            }
         }
     }
 }
@@ -337,6 +366,7 @@ mod tests {
             api: api_args(Some(server.uri())),
             trace_id: "t-1".to_owned(),
             payload: None,
+            json: false,
         }))
         .await;
 
@@ -358,6 +388,7 @@ mod tests {
             api: api_args(Some(server.uri())),
             trace_id: "t-1".to_owned(),
             payload: None,
+            json: false,
         }))
         .await;
 
@@ -372,6 +403,7 @@ mod tests {
             api: api_args(Some(server.uri())),
             trace_id: "t-1".to_owned(),
             payload: Some("hologram".to_owned()),
+            json: false,
         }))
         .await;
 

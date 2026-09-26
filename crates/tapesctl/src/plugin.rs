@@ -172,7 +172,7 @@ fn remove_superseded(artifact: &PluginArtifact, resolved_dir: &Path) -> Result<(
         match std::fs::remove_file(&superseded) {
             Ok(()) => {
                 info!(path = %superseded.display(), "superseded plugin removed");
-                println!("tapesctl: removed superseded {}", superseded.display());
+                println!("removed superseded {}", superseded.display());
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) => return Err(err).context(error::PluginWriteSnafu { path: superseded }),
@@ -290,7 +290,7 @@ fn run_in(args: &PluginInstallArgs, machine: &Machine) -> Result<()> {
     // become a lie without anything failing.
     if artifacts.is_empty() {
         println!(
-            "tapesctl: {} needs no capture plugin — its traffic is captured by \
+            "{} needs no capture plugin — its traffic is captured by \
              redirecting it, which `tapesctl start {}` does.",
             harness.id(),
             harness.id(),
@@ -301,12 +301,12 @@ fn run_in(args: &PluginInstallArgs, machine: &Machine) -> Result<()> {
     if args.dry_run {
         for artifact in artifacts {
             println!(
-                "tapesctl: would install {} to {}",
+                "dry run: would install {} to {}",
                 artifact.file_name(),
                 artifact.install_path(home).display(),
             );
             // The removal is the half of an install a user cannot infer from
-            // "would install", and it is the half that deletes something they
+            // "dry run: would install", and it is the half that deletes something they
             // may not know they have. A dry run that named only the write would
             // be describing a different operation than the one it stands in
             // for. Only what is actually there is listed — an absent superseded
@@ -317,7 +317,7 @@ fn run_in(args: &PluginInstallArgs, machine: &Machine) -> Result<()> {
                 .filter(|superseded| superseded.exists())
             {
                 println!(
-                    "tapesctl: would remove superseded {} (loaded alongside {} by {})",
+                    "dry run: would remove superseded {} (loaded alongside {} by {})",
                     superseded.display(),
                     artifact.file_name(),
                     harness.id(),
@@ -330,13 +330,13 @@ fn run_in(args: &PluginInstallArgs, machine: &Machine) -> Result<()> {
     for artifact in artifacts {
         let written = install(artifact, home)?;
         info!(harness = harness.id(), path = %written.display(), "plugin installed");
-        println!("tapesctl: installed {}", written.display());
+        println!("installed {}", written.display());
     }
     // The artifact is inert until this is set, and it is set by whoever launches
     // the harness — so an install alone captures nothing, and saying so here is
     // cheaper than the user discovering it from an empty session list.
     println!(
-        "tapesctl: {} is loaded by every {} session but stays inactive until \
+        "{} is loaded by every {} session but stays inactive until \
          {GATEWAY_URL_ENV} names a capture proxy.",
         if artifacts.len() == 1 {
             "it"
@@ -372,7 +372,7 @@ fn uninstall_in(args: &PluginUninstallArgs, machine: &Machine) -> Result<()> {
     let artifacts = harness.plugin_artifacts();
     if artifacts.is_empty() {
         println!(
-            "tapesctl: {} has no capture plugin to remove — its traffic is \
+            "{} has no capture plugin to remove — its traffic is \
              captured by redirecting it.",
             harness.id(),
         );
@@ -382,7 +382,7 @@ fn uninstall_in(args: &PluginUninstallArgs, machine: &Machine) -> Result<()> {
     for artifact in artifacts {
         let path = artifact.install_path(home);
         if args.dry_run {
-            println!("tapesctl: would remove {}", path.display());
+            println!("dry run: would remove {}", path.display());
             continue;
         }
         // `remove_file` rather than a look-then-delete: a link at the path is
@@ -390,7 +390,7 @@ fn uninstall_in(args: &PluginUninstallArgs, machine: &Machine) -> Result<()> {
         match std::fs::remove_file(&path) {
             Ok(()) => {
                 info!(harness = harness.id(), path = %path.display(), "plugin removed");
-                println!("tapesctl: removed {}", path.display());
+                println!("removed {}", path.display());
             }
             // Absent is the requested end state, not a failure.
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}

@@ -1082,7 +1082,15 @@ fn spawn_codex_anchor_lane(
 /// watching it, and there is no file to point at.
 fn announce_capture() {
     if let Some(path) = logging::active_log_file() {
-        println!("tapesctl: capturing; logs at {}", path.display());
+        let theme = crate::render::Theme::detect();
+        println!(
+            "{} {}",
+            theme.paint(crate::render::Tone::Good, "capturing"),
+            theme.paint(
+                crate::render::Tone::Secondary,
+                &format!("· logs at {}", path.display())
+            )
+        );
     }
 }
 
@@ -1102,7 +1110,7 @@ fn print_exit_summary(web_url: Option<&Url>, snapshot: &CaptureSnapshot) {
         // Not an error: a harness can be launched and quit without ever calling
         // a model. Saying so beats printing nothing and leaving the user to
         // wonder whether capture was ever on.
-        tally::ExitSummary::NothingCaptured => println!("tapesctl: no turns were captured"),
+        tally::ExitSummary::NothingCaptured => println!("no turns were captured"),
         tally::ExitSummary::Session(id) => print_session_link(web_url, &id),
         tally::ExitSummary::Unattributed(counts) => {
             println!("{}", tally::unattributed_line(counts));
@@ -1124,18 +1132,33 @@ fn print_exit_summary(web_url: Option<&Url>, snapshot: &CaptureSnapshot) {
     }
 
     if let Some(path) = logging::active_log_file() {
-        println!("tapesctl: logs at {}", path.display());
+        let theme = crate::render::Theme::detect();
+        println!(
+            "{}",
+            theme.paint(
+                crate::render::Tone::Secondary,
+                &format!("  logs at {}", path.display())
+            )
+        );
     }
 }
 
 fn print_session_link(web_url: Option<&Url>, session_id: &str) {
+    let theme = crate::render::Theme::detect();
+    use crate::render::Tone;
+    println!(
+        "{} captured session {}",
+        theme.paint(Tone::Good, "✓"),
+        theme.paint(Tone::Command, session_id)
+    );
     match web_url.and_then(|base| base.join(&format!("/sessions/{session_id}")).ok()) {
-        Some(url) => println!("tapesctl: captured session {session_id} — {url}"),
+        Some(url) => println!("  {}", theme.paint(Tone::Secondary, url.as_str())),
         // Without a console base URL there is no link to print; naming the flag
         // beats printing a guessed host that 404s.
-        None => {
-            println!("tapesctl: captured session {session_id} (pass --web-url for a console link)",)
-        }
+        None => println!(
+            "  {}",
+            theme.paint(Tone::Secondary, "pass --web-url for a console link")
+        ),
     }
 }
 

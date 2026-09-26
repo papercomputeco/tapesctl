@@ -116,11 +116,10 @@ tapes-client = { version = "0.5", features = [
 clap = { version = "4", features = ["derive", "env", "string"] }
 anstream = "1"
 anstyle = "1"
-# The table `sessions list` renders by default. Terminal-width handling and
-# unicode-width measurement come free, which a hand-rolled column aligner would
-# have to reimplement (and get subtly wrong on CJK/emoji cells). Plain text: no
-# colour is applied — tapesctl has no style layer (see `ports/search.rs`).
-comfy-table = "7.1"
+# `render/` lays out views by hand; these supply terminal width and CJK/emoji
+# display widths.
+terminal_size = "0.4"
+unicode-width = "0.2"
 
 # --- async runtime ---
 tokio = { version = "1", features = ["full"] }

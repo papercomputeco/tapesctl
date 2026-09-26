@@ -606,6 +606,10 @@ pub struct SessionIdArgs {
 
     /// The session id.
     pub id: String,
+
+    /// Print the raw JSON response instead of the record view.
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// A session id plus the payload grain to fetch it at.
@@ -640,6 +644,10 @@ pub struct TracesListArgs {
 
     /// The session whose traces to list.
     pub session_id: String,
+
+    /// Print the raw JSON response instead of the table.
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// Arguments for `tapesctl traces get`.
@@ -654,6 +662,10 @@ pub struct TracesGetArgs {
     /// `full` (default) or `preview`.
     #[arg(long)]
     pub payload: Option<String>,
+
+    /// Print the raw JSON response instead of the record view.
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// `tapesctl spans` methods.
@@ -680,6 +692,10 @@ pub struct SpansListArgs {
     /// `full` (default) or `preview`.
     #[arg(long)]
     pub payload: Option<String>,
+
+    /// Print the raw JSON response instead of the table.
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// Arguments for `tapesctl spans get`.
@@ -693,6 +709,10 @@ pub struct SpansGetArgs {
 
     /// The span id.
     pub span_id: String,
+
+    /// Print the raw JSON response instead of the record view.
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// Arguments for `tapesctl search`.
@@ -719,6 +739,10 @@ pub struct SearchArgs {
     /// two compose through a shell substitution.
     #[arg(long, short = 'q')]
     pub quiet: bool,
+
+    /// Print the search cassette's JSON response instead of the ranked list.
+    #[arg(long, conflicts_with = "quiet")]
+    pub json: bool,
 }
 
 /// Arguments for `tapesctl export`.

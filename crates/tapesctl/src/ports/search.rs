@@ -5,31 +5,19 @@
 //! parsed and ignored is an artifact, not a contract, so it is dropped here
 //! rather than reproduced.
 //!
-//! What *is* reproduced is the layout, because `--quiet` is a pipe format:
-//! piping `tapesctl search "charm CLI" -q -k 1` into another command depends on
-//! one bare session id per line, deduplicated in score order.
-//!
-//! Two other drops. The Go renderer coloured each field through the CLI's
-//! lipgloss styles; tapesctl has no style layer, so the same columns are
-//! printed plain. And the command reported a result count to product
-//! telemetry, which tapesctl does not have.
+//! What *is* reproduced is the pipe format: `--quiet` prints one bare session
+//! id per line, deduplicated in score order.
 
 use serde::Deserialize;
 use tapes_client::Call;
 use time::OffsetDateTime;
-use time::UtcOffset;
-use time::format_description::well_known::Rfc3339;
 
 use crate::api::client::narrow;
-use crate::api::resolve_client;
+use crate::api::{print_json, resolve_client};
 use crate::cli::SearchArgs;
 use crate::error::Result;
-
-/// Longest turn preview before it is elided.
-const PROMPT_WIDTH: usize = 80;
-
-/// Longest snippet before it is elided.
-const SNIPPET_WIDTH: usize = 100;
+use crate::render::text::{elide, one_line, relative, sanitize};
+use crate::render::{Theme, Tone};
 
 /// The search cassette's span route, called directly. Search is a cassette a
 /// deployment serves, not an operation of the sealed core contract, so the
@@ -101,14 +89,10 @@ pub async fn run(args: SearchArgs) -> Result<()> {
             ..Call::default()
         })
         .await?;
-    let output: SpanSearchOutput = tapes_client::decode::typed(value)?;
-
-    if output.results.is_empty() {
-        if !args.quiet {
-            println!("No results found.");
-        }
-        return Ok(());
+    if args.json {
+        return print_json(&value);
     }
+    let output: SpanSearchOutput = tapes_client::decode::typed(value)?;
 
     if args.quiet {
         for session_id in session_ids(&output.results) {
@@ -124,11 +108,105 @@ pub async fn run(args: SearchArgs) -> Result<()> {
     } else {
         &output.query
     };
-    println!("\nSpan Search Results for: {echoed:?}\n");
-    for (index, hit) in output.results.iter().enumerate() {
-        print_hit(index + 1, hit);
-    }
+    print!(
+        "{}",
+        render(
+            echoed,
+            &output.results,
+            &Theme::detect(),
+            OffsetDateTime::now_utc()
+        )
+    );
     Ok(())
+}
+
+#[must_use]
+pub fn render(
+    query: &str,
+    results: &[SpanSearchResult],
+    theme: &Theme,
+    now: OffsetDateTime,
+) -> String {
+    let mut out = String::new();
+    if results.is_empty() {
+        out.push_str("No results found.\n");
+        return out;
+    }
+    let sessions = session_ids(results).len();
+    let hits = if results.len() == 1 { "hit" } else { "hits" };
+    let across = if sessions == 1 { "session" } else { "sessions" };
+    out.push_str(&theme.paint(Tone::Command, &format!("{:?}", sanitize(query))));
+    out.push_str(&theme.paint(
+        Tone::Secondary,
+        &format!("  ·  {} {hits} across {sessions} {across}", results.len()),
+    ));
+    out.push_str("\n\n");
+
+    // score(4) + 2 + prompt + 2 + when(8)
+    let fixed = 4 + 2 + 2 + 8;
+    let prompt_width = theme.width.saturating_sub(fixed).clamp(16, 80);
+    for hit in results {
+        let prompt = one_line(&hit.user_prompt);
+        let prompt = if prompt.is_empty() && !hit.session_id.is_empty() {
+            "(synthetic turn)".to_owned()
+        } else if prompt.is_empty() {
+            theme.absent().to_owned()
+        } else {
+            prompt
+        };
+        let when = relative(&hit.started_at, now);
+        out.push_str(&theme.paint(Tone::Number, &format!("{:.2}", hit.score)));
+        out.push_str("  ");
+        out.push_str(&theme.paint(
+            Tone::Primary,
+            &format!("{:<prompt_width$}", elide(&prompt, prompt_width)),
+        ));
+        out.push_str("  ");
+        out.push_str(&theme.paint(Tone::Secondary, &when));
+        out.push('\n');
+
+        let snippet = one_line(&hit.snippet);
+        if !snippet.is_empty() {
+            let width = theme.width.saturating_sub(8).max(20);
+            out.push_str("      ");
+            out.push_str(&theme.paint(Tone::Secondary, &format!("» {}", elide(&snippet, width))));
+            out.push('\n');
+        }
+
+        let ids: Vec<String> = [
+            ("session", &hit.session_id),
+            ("trace", &hit.trace_id),
+            ("span", &hit.span_id),
+        ]
+        .iter()
+        .filter(|(_, id)| !id.is_empty())
+        .map(|(name, id)| format!("{name} {}", sanitize(id)))
+        .collect();
+        // Ids are never elided; they wrap between whole `name id` pieces.
+        let indent = "      ";
+        let mut line = String::new();
+        for piece in ids {
+            let joined = if line.is_empty() {
+                piece.clone()
+            } else {
+                format!("{line} · {piece}")
+            };
+            if !line.is_empty() && indent.len() + joined.chars().count() > theme.width {
+                out.push_str(indent);
+                out.push_str(&theme.paint(Tone::Secondary, &line));
+                out.push('\n');
+                line = piece;
+            } else {
+                line = joined;
+            }
+        }
+        if !line.is_empty() {
+            out.push_str(indent);
+            out.push_str(&theme.paint(Tone::Secondary, &line));
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// Session ids of the hits, deduplicated, in score order.
@@ -148,74 +226,6 @@ pub fn session_ids(results: &[SpanSearchResult]) -> Vec<String> {
     seen
 }
 
-/// Render one hit.
-fn print_hit(rank: usize, hit: &SpanSearchResult) {
-    let score = hit.score;
-    println!(
-        "  #{rank}  score: {score:.4}  {}/{}",
-        hit.trace_id, hit.span_id,
-    );
-
-    // An empty prompt is a synthetic turn, not a missing field — the server
-    // sends `user_prompt` even when it is blank, precisely so this case is
-    // distinguishable.
-    let prompt = hit.user_prompt.replace('\n', " ");
-    let prompt = if prompt.is_empty() {
-        "(synthetic turn)".to_owned()
-    } else {
-        elide(&prompt, PROMPT_WIDTH)
-    };
-    println!("  turn: {prompt}");
-
-    let snippet = hit.snippet.replace('\n', " ");
-    if !snippet.is_empty() {
-        println!("   ├─ {}", elide(&snippet, SNIPPET_WIDTH));
-    }
-
-    let mut meta = format_started_at(&hit.started_at);
-    if !hit.session_id.is_empty() {
-        meta.push_str(&format!("  session {}", hit.session_id));
-    }
-    println!("  {meta}\n");
-}
-
-/// Truncate to `width`, marking the cut with an ellipsis.
-///
-/// Counted in characters rather than bytes. The Go original sliced bytes, which
-/// splits a multi-byte rune in half — harmless there because Go tolerates
-/// invalid UTF-8 in a string, but not something Rust can reproduce without
-/// panicking on the same input. A prompt with an accented character is now cut
-/// cleanly instead of mangled.
-#[must_use]
-fn elide(value: &str, width: usize) -> String {
-    if value.chars().count() <= width {
-        return value.to_owned();
-    }
-    let kept: String = value.chars().take(width.saturating_sub(3)).collect();
-    format!("{kept}...")
-}
-
-/// Render a hit's timestamp at second precision, as the Go layout did.
-///
-/// A value that will not parse is printed as it arrived: it is the server's
-/// field, and showing it beats showing nothing.
-#[must_use]
-fn format_started_at(raw: &str) -> String {
-    let Ok(parsed) = OffsetDateTime::parse(raw, &Rfc3339) else {
-        return raw.to_owned();
-    };
-    let utc = parsed.to_offset(UtcOffset::UTC);
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        utc.year(),
-        u8::from(utc.month()),
-        utc.day(),
-        utc.hour(),
-        utc.minute(),
-        utc.second(),
-    )
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
@@ -233,6 +243,7 @@ mod tests {
             query: "charm CLI".to_owned(),
             top: 5,
             quiet,
+            json: false,
         }
     }
 
@@ -255,44 +266,49 @@ mod tests {
     }
 
     #[test]
-    fn a_long_value_is_elided_at_the_documented_width() {
-        let long = "x".repeat(200);
-        let elided = elide(&long, PROMPT_WIDTH);
-        assert_eq!(elided.chars().count(), PROMPT_WIDTH);
-        assert!(elided.ends_with("..."));
-    }
-
-    #[test]
-    fn a_value_at_the_width_is_left_alone() {
-        let exact = "y".repeat(PROMPT_WIDTH);
-        assert_eq!(elide(&exact, PROMPT_WIDTH), exact);
-    }
-
-    #[test]
-    fn eliding_never_splits_a_multibyte_character() {
-        // The Go original sliced bytes here; the same input would have cut a
-        // rune in half.
-        let accented = "é".repeat(200);
-        let elided = elide(&accented, PROMPT_WIDTH);
-        assert_eq!(elided.chars().count(), PROMPT_WIDTH);
-        assert!(elided.starts_with('é'));
-    }
-
-    #[test]
-    fn timestamps_print_at_second_precision() {
-        assert_eq!(
-            format_started_at("2026-07-31T12:34:56.123456789Z"),
-            "2026-07-31T12:34:56Z",
+    fn the_human_view_is_a_ranked_list_with_snippets() {
+        use time::macros::datetime;
+        let results: Vec<SpanSearchResult> = serde_json::from_value(json!([
+            {
+                "score": 0.8231,
+                "session_id": "01a0d365-1a2b-77a1-8473-bd2e295244a4",
+                "trace_id": "t-1",
+                "span_id": "sp-1",
+                "user_prompt": "Fix WorkOS redirect\non staging",
+                "snippet": "the redirect URI in the WorkOS dashboard is per-environment",
+                "started_at": "2026-09-17T10:00:00Z"
+            },
+            {
+                "score": 0.77,
+                "session_id": "01a0d365-9c3d-77a1-8473-bd2e295244a4",
+                "user_prompt": "",
+                "snippet": "",
+                "started_at": "2026-09-12T10:00:00Z"
+            }
+        ]))
+        .unwrap();
+        let now = datetime!(2026-09-26 12:00 UTC);
+        let rendered = render(
+            "how I fixed auth",
+            &results,
+            &crate::render::Theme::plain(100),
+            now,
         );
         assert_eq!(
-            format_started_at("2026-07-31T05:34:56-07:00"),
-            "2026-07-31T12:34:56Z",
+            rendered,
+            "\"how I fixed auth\"  ·  2 hits across 2 sessions\n\
+             \n\
+             0.82  Fix WorkOS redirect on staging                                                    Sep 17\n\
+             \x20     » the redirect URI in the WorkOS dashboard is per-environment\n\
+             \x20     session 01a0d365-1a2b-77a1-8473-bd2e295244a4 · trace t-1 · span sp-1\n\
+             0.77  (synthetic turn)                                                                  Sep 12\n\
+             \x20     session 01a0d365-9c3d-77a1-8473-bd2e295244a4\n",
+            "got:\n{rendered}"
         );
-    }
-
-    #[test]
-    fn an_unparseable_timestamp_is_shown_rather_than_swallowed() {
-        assert_eq!(format_started_at("not a time"), "not a time");
+        assert_eq!(
+            render("q", &[], &crate::render::Theme::plain(100), now),
+            "No results found.\n"
+        );
     }
 
     async fn search_server(body: Value) -> MockServer {
@@ -358,6 +374,7 @@ mod tests {
             query: "x".to_owned(),
             top: 5,
             quiet: false,
+            json: false,
         })
         .await;
         assert!(matches!(result, Err(crate::Error::MissingTapesUrl)));

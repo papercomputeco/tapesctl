@@ -15,6 +15,7 @@ pub mod machine;
 pub mod plugin;
 pub mod ports;
 pub mod rc_block;
+pub mod render;
 pub mod start;
 pub mod transcript;
 pub mod uninstall;
@@ -788,6 +789,7 @@ mod tests {
             command: Command::Sessions(SessionsCommand::Get(SessionIdArgs {
                 api: ApiArgs { api_url: None },
                 id: "s-1".to_owned(),
+                json: false,
             })),
         };
         assert!(matches!(run(cli).await, Err(Error::MissingTapesUrl)));

@@ -46,12 +46,34 @@ async fn main() -> ExitCode {
             // one or two links down. Printing only the top discards exactly the
             // half that says what to do about it.
             eprintln!("tapesctl: {err}");
-            let mut source = std::error::Error::source(&err);
-            while let Some(cause) = source {
-                eprintln!("  caused by: {cause}");
-                source = cause.source();
+            let refused = print_causes(&err);
+            if refused {
+                eprintln!(
+                    "  hint: nothing is listening there; start one with `tapes serve`, or point --api-url or TAPES_API_URL at a running server"
+                );
             }
             ExitCode::FAILURE
         }
     }
+}
+
+/// Print the cause chain, skipping causes that repeat the line above and
+/// reqwest's wrapper lines. Returns whether a connection was refused.
+fn print_causes(err: &dyn std::error::Error) -> bool {
+    let mut previous = err.to_string();
+    let mut source = err.source();
+    let mut refused = false;
+    while let Some(cause) = source {
+        let line = cause.to_string();
+        refused |= line.contains("Connection refused");
+        let boilerplate = line.starts_with("error sending request")
+            || line.starts_with("client error (")
+            || line == "tcp connect error";
+        if !previous.contains(&line) && !boilerplate {
+            eprintln!("  caused by: {line}");
+        }
+        previous = line;
+        source = cause.source();
+    }
+    refused
 }
