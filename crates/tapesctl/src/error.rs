@@ -918,13 +918,30 @@ impl From<tapes_client::Error> for Error {
 
 /// The one-line story of a refused API call: the status, the host it came
 /// from, and what the server said, without the full URL and without the JSON
-/// framing. Every tapes error body is `{"error": "<code>", "message": "<text>"}`;
-/// the message is the part a person acts on, so it is what is shown, with the
-/// code in parentheses when there is one. A body that is not that document is
-/// shown as it arrived, cut short.
+/// framing. A hint follows on its own line when there is a next thing to try.
 #[must_use]
 pub fn api_status_message(status: u16, endpoint: &str, body: &str) -> String {
-    let host = url::Url::parse(endpoint)
+    let mut out = format!(
+        "tapes API at {} answered {}",
+        endpoint_host(endpoint),
+        status_with_reason(status)
+    );
+    let said = body_said(body);
+    if !said.is_empty() {
+        out.push_str(": ");
+        out.push_str(&said);
+    }
+    if let Some(hint) = api_status_hint(status, body) {
+        out.push_str("\n  hint: ");
+        out.push_str(hint);
+    }
+    out
+}
+
+/// `localhost:8081` from a full endpoint URL; the URL itself when it will
+/// not parse.
+fn endpoint_host(endpoint: &str) -> String {
+    url::Url::parse(endpoint)
         .ok()
         .and_then(|u| {
             u.host_str().map(|h| match u.port() {
@@ -932,7 +949,11 @@ pub fn api_status_message(status: u16, endpoint: &str, body: &str) -> String {
                 None => h.to_owned(),
             })
         })
-        .unwrap_or_else(|| endpoint.to_owned());
+        .unwrap_or_else(|| endpoint.to_owned())
+}
+
+/// `404 not found`, or the bare number for a status with no short name.
+fn status_with_reason(status: u16) -> String {
     let reason = match status {
         400 => "bad request",
         401 => "unauthorized",
@@ -944,25 +965,25 @@ pub fn api_status_message(status: u16, endpoint: &str, body: &str) -> String {
         500 => "server error",
         502 => "bad gateway",
         503 => "unavailable",
-        _ => "",
+        _ => return status.to_string(),
     };
-    let status_text = if reason.is_empty() {
-        status.to_string()
-    } else {
-        format!("{status} {reason}")
-    };
+    format!("{status} {reason}")
+}
+
+/// What the server said. Every tapes error body is `{"error": "<code>",
+/// "message": "<text>"}`; the message is the part a person acts on, so it is
+/// what is shown, with the code in parentheses when there is one. A body that
+/// is not that document is shown as it arrived, on one line, cut short.
+fn body_said(body: &str) -> String {
     let parsed: Option<serde_json::Value> = serde_json::from_str(body).ok();
-    let message = parsed
-        .as_ref()
-        .and_then(|v| v.get("message"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned);
-    let code = parsed
-        .as_ref()
-        .and_then(|v| v.get("error"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned);
-    let said = match (message, code) {
+    let field = |key: &str| {
+        parsed
+            .as_ref()
+            .and_then(|v| v.get(key))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    match (field("message"), field("error")) {
         (Some(message), Some(code)) => format!("{message} ({code})"),
         (Some(message), None) => message,
         (None, Some(code)) => code,
@@ -974,17 +995,7 @@ pub fn api_status_message(status: u16, endpoint: &str, body: &str) -> String {
                 one_line
             }
         }
-    };
-    let mut out = format!("tapes API at {host} answered {status_text}");
-    if !said.is_empty() {
-        out.push_str(": ");
-        out.push_str(&said);
     }
-    if let Some(hint) = api_status_hint(status, body) {
-        out.push_str("\n  hint: ");
-        out.push_str(hint);
-    }
-    out
 }
 
 /// The first line for a transport failure. The transport's own message is

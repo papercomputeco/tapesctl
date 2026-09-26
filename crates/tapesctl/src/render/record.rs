@@ -16,6 +16,38 @@ struct Field {
     tone: Tone,
 }
 
+/// The column widths a record's fields are laid out against.
+#[derive(Debug, Clone, Copy)]
+struct Columns {
+    /// Width of the label column, the widest label.
+    label: usize,
+    /// Width left for a value after the label and the gap.
+    value: usize,
+}
+
+impl Field {
+    /// The padded label, then the value. A multi-line value keeps its lines,
+    /// each indented under the value column; a long single line is elided
+    /// rather than wrapped, so the column stays readable.
+    fn render(&self, columns: &Columns, theme: &Theme) -> String {
+        let mut out = String::new();
+        out.push_str(&theme.paint(
+            Tone::Secondary,
+            &format!("{:<width$}", self.label, width = columns.label),
+        ));
+        out.push_str("  ");
+        for (i, line) in self.value.lines().enumerate() {
+            if i > 0 {
+                out.push('\n');
+                out.push_str(&" ".repeat(columns.label + 2));
+            }
+            out.push_str(&theme.paint(self.tone, &elide(&sanitize(line), columns.value)));
+        }
+        out.push('\n');
+        out
+    }
+}
+
 /// A record ready to render.
 #[derive(Debug, Default)]
 pub struct Record {
@@ -82,29 +114,19 @@ impl Record {
         self
     }
 
-    /// One field: the padded label, then the value. A multi-line value keeps
-    /// its lines, each indented under the value column; a long single line is
-    /// elided rather than wrapped, so the column stays readable.
-    fn render_field(
-        &self,
-        field: &Field,
-        label_width: usize,
-        value_width: usize,
-        theme: &Theme,
-    ) -> String {
-        let mut out = String::new();
-        let label = format!("{:<label_width$}", field.label);
-        out.push_str(&theme.paint(Tone::Secondary, &label));
-        out.push_str("  ");
-        for (i, line) in field.value.lines().enumerate() {
-            if i > 0 {
-                out.push('\n');
-                out.push_str(&" ".repeat(label_width + 2));
-            }
-            out.push_str(&theme.paint(field.tone, &elide(&sanitize(line), value_width)));
+    /// The two column widths every field shares, so labels line up and no
+    /// value runs past the terminal.
+    fn columns(&self, theme: &Theme) -> Columns {
+        let label = self
+            .fields
+            .iter()
+            .map(|f| width(f.label))
+            .max()
+            .unwrap_or(0);
+        Columns {
+            label,
+            value: theme.width.saturating_sub(label + 2).max(20),
         }
-        out.push('\n');
-        out
     }
 
     /// Render, every line newline-terminated.
@@ -124,15 +146,9 @@ impl Record {
             if !out.is_empty() {
                 out.push('\n');
             }
-            let label_width = self
-                .fields
-                .iter()
-                .map(|f| width(f.label))
-                .max()
-                .unwrap_or(0);
-            let value_width = theme.width.saturating_sub(label_width + 2).max(20);
+            let columns = self.columns(theme);
             for field in &self.fields {
-                out.push_str(&self.render_field(field, label_width, value_width, theme));
+                out.push_str(&field.render(&columns, theme));
             }
         }
         if !self.next.is_empty() {

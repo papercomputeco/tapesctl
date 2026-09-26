@@ -301,12 +301,12 @@ fn run_in(args: &PluginInstallArgs, machine: &Machine) -> Result<()> {
     if args.dry_run {
         for artifact in artifacts {
             println!(
-                "would install {} to {}",
+                "dry run: would install {} to {}",
                 artifact.file_name(),
                 artifact.install_path(home).display(),
             );
             // The removal is the half of an install a user cannot infer from
-            // "would install", and it is the half that deletes something they
+            // "dry run: would install", and it is the half that deletes something they
             // may not know they have. A dry run that named only the write would
             // be describing a different operation than the one it stands in
             // for. Only what is actually there is listed — an absent superseded
@@ -317,7 +317,7 @@ fn run_in(args: &PluginInstallArgs, machine: &Machine) -> Result<()> {
                 .filter(|superseded| superseded.exists())
             {
                 println!(
-                    "would remove superseded {} (loaded alongside {} by {})",
+                    "dry run: would remove superseded {} (loaded alongside {} by {})",
                     superseded.display(),
                     artifact.file_name(),
                     harness.id(),
@@ -382,7 +382,7 @@ fn uninstall_in(args: &PluginUninstallArgs, machine: &Machine) -> Result<()> {
     for artifact in artifacts {
         let path = artifact.install_path(home);
         if args.dry_run {
-            println!("would remove {}", path.display());
+            println!("dry run: would remove {}", path.display());
             continue;
         }
         // `remove_file` rather than a look-then-delete: a link at the path is

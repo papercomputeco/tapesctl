@@ -414,12 +414,12 @@ pub fn uninstall(args: &PluginUninstallArgs, machine: &Machine) -> Result<()> {
 
     if args.dry_run {
         println!(
-            "would remove the {provider_id:?} provider from {}",
+            "dry run: would remove the {provider_id:?} provider from {}",
             config_path.display()
         );
-        println!("would remove {}", state.display());
+        println!("dry run: would remove {}", state.display());
         println!(
-            "would leave the plugin registered with Codex; remove it with \
+            "dry run: would leave the plugin registered with Codex; remove it with \
              `codex plugin remove {}`",
             manager::plugin_spec(PLUGIN_NAME, MARKETPLACE_NAME),
         );
@@ -724,12 +724,15 @@ fn now_rfc3339() -> String {
 
 fn report_plan(plan: &Plan) {
     println!(
-        "would package the hook plugin under {}",
+        "dry run: would package the hook plugin under {}",
         plan.plugin_root.display(),
     );
-    println!("would write the handoff at {}", plan.handoff_path.display());
     println!(
-        "would point {} at {}",
+        "dry run: would write the handoff at {}",
+        plan.handoff_path.display()
+    );
+    println!(
+        "dry run: would point {} at {}",
         plan.config_path.display(),
         plan.proxy_addr,
     );

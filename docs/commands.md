@@ -548,9 +548,9 @@ registration survives and must be removed by hand; the command prints the
 exact incantation:
 
 ```
-tapesctl: would remove the "tapesctl-codex-app" provider from ~/.codex/config.toml
-tapesctl: would remove ~/.tapes/codex-app
-tapesctl: would leave the plugin registered with Codex; remove it with `codex plugin remove tapesctl-codex-app@tapesctl`
+dry run: would remove the "tapesctl-codex-app" provider from ~/.codex/config.toml
+dry run: would remove ~/.tapes/codex-app
+dry run: would leave the plugin registered with Codex; remove it with `codex plugin remove tapesctl-codex-app@tapesctl`
 ```
 
 Its `--help` says "and any configuration it wrote", which overstates this.

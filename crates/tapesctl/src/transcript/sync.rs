@@ -71,10 +71,11 @@ impl SyncSummary {
         )
     }
 
-    /// The human summary of upload outcomes, as two lines: what was swept,
-    /// then how it went. `✓` when nothing failed, `✗` when something did.
+    /// The human summary of upload outcomes, two lines in one string: what
+    /// was swept, then how it went. `✓` when nothing failed, `✗` when
+    /// something did. One `String`, like every other command's summary.
     #[must_use]
-    pub fn render(&self) -> Vec<String> {
+    pub fn render(&self) -> String {
         let sessions = plural(self.sessions, "session", "sessions");
         let files = plural(self.files, "file", "files");
         let mut outcome = vec![
@@ -89,10 +90,10 @@ impl SyncSummary {
             outcome.push(format!("{unavailable} outcome unknown"));
         }
         let mark = if self.failed == 0 { "✓" } else { "✗" };
-        vec![
-            format!("Swept {sessions} ({files})"),
-            format!("  {mark} {}", outcome.join(" · ")),
-        ]
+        format!(
+            "Swept {sessions} ({files})\n  {mark} {}",
+            outcome.join(" · ")
+        )
     }
 }
 
@@ -191,7 +192,7 @@ impl SyncReport {
         } else {
             Vec::new()
         };
-        lines.extend(self.summary.render());
+        lines.push(self.summary.render());
         lines.push(format!(
             "  {} queued for projection",
             plural(self.queued_sessions, "session", "sessions"),
@@ -521,7 +522,7 @@ mod tests {
             failed: 0,
         };
 
-        let rendered = summary.render().join("\n");
+        let rendered = summary.render();
         assert_eq!(
             rendered,
             "Swept 2 sessions (3 files)\n  ✓ 2 new · 1 unchanged"
@@ -534,7 +535,7 @@ mod tests {
             ..summary
         };
         assert_eq!(
-            failed.render().join("\n"),
+            failed.render(),
             "Swept 2 sessions (3 files)\n  ✗ 2 new · 1 unchanged · 1 failed"
         );
     }
@@ -558,7 +559,7 @@ mod tests {
         assert_eq!(report.summary.stored, 3);
         assert_eq!(report.summary.failed, 0);
         assert_eq!(report.queued_sessions, 2);
-        assert_eq!(report.render(0)[2], "  2 sessions queued for projection");
+        assert_eq!(report.render(0)[1], "  2 sessions queued for projection");
     }
 
     #[test]
@@ -589,7 +590,7 @@ mod tests {
         };
 
         let lines = report.render(1);
-        assert_eq!(lines.len(), 6, "three files plus three summary lines");
+        assert_eq!(lines.len(), 5, "three files, the summary, the queue line");
         assert_eq!(lines[0], "  new       sid-new  /tmp/new.jsonl  3 records");
         assert_eq!(
             lines[1],
@@ -621,7 +622,7 @@ mod tests {
         };
 
         let lines = report.render(0);
-        assert_eq!(lines.len(), 3, "only summary and projection status");
+        assert_eq!(lines.len(), 2, "only summary and projection status");
         assert!(lines.iter().all(|line| !line.contains("/tmp/sid-1.jsonl")));
     }
 
@@ -804,13 +805,7 @@ mod tests {
         assert_eq!(report.summary.deduped, 0, "unknown is not already present");
         assert_eq!(report.summary.failed, 0, "the 2xx remains successful");
         assert_eq!(report.queued_sessions, 1);
-        assert!(
-            report
-                .summary
-                .render()
-                .join("\n")
-                .contains("1 outcome unknown")
-        );
+        assert!(report.summary.render().contains("1 outcome unknown"));
         let detail = report.files[0].render();
         assert!(detail.contains("? records"), "got: {detail}");
         assert!(detail.starts_with("  unknown "), "got: {detail}");
