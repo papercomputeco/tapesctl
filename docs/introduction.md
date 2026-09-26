@@ -134,6 +134,8 @@ untitled (f47ac10b)              unknown        —       —  2h ago       01a0
 2 sessions · more with --cursor eyJzb3J0IjoibGFzdF9…  (full cursor: --json)
 ```
 
+![tapesctl sessions list on a terminal](./images/cli/after-list.png)
+
 On a terminal the `ID` column is the leading group of the tapes session id;
 `--json` carries the full id, and so does the table when it is piped or the
 terminal is wide. The untitled row is a session nothing has derived a title for
@@ -167,6 +169,8 @@ Cwd      ~/code/tapes
 
 next  tapesctl traces list 01a0d365-2f42-77a1-8473-bd2e295244a4
 ```
+
+![tapesctl sessions get on a terminal](./images/cli/after-get.png)
 
 Every read command has a human view like this by default, laid out for the
 terminal it is printed on, and `--json` on any of them restores the server's
