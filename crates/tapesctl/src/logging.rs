@@ -60,10 +60,11 @@ pub fn wants_log_file(hands_over_terminal: bool, verbose: u8) -> bool {
 /// `try_init` fails and the failure is ignored, which is what makes this safe to
 /// call from tests that may already have a subscriber.
 pub fn init(hands_over_terminal: bool, verbose: u8) {
-    let filter = choose_filter(std::env::var("RUST_LOG").ok().as_deref(), verbose);
+    let to_file = wants_log_file(hands_over_terminal, verbose);
+    let filter = choose_filter(std::env::var("RUST_LOG").ok().as_deref(), verbose, to_file);
     let registry = tracing_subscriber::registry().with(filter);
 
-    if !wants_log_file(hands_over_terminal, verbose) {
+    if !to_file {
         let _ = ACTIVE_LOG_FILE.set(None);
         let _ = registry
             .with(fmt::layer().with_writer(io::stderr))
@@ -116,7 +117,7 @@ pub fn default_log_dir() -> Option<PathBuf> {
 /// Precedence is the daemon's: `RUST_LOG` first, then the verbosity flag, then the
 /// default. Pure — the environment is a parameter, not a read — so the whole
 /// chain is testable without racing other tests over a process-global.
-fn choose_filter(env_rust_log: Option<&str>, verbose: u8) -> EnvFilter {
+fn choose_filter(env_rust_log: Option<&str>, verbose: u8, to_file: bool) -> EnvFilter {
     // A set-but-empty `RUST_LOG` is treated as unset. `EnvFilter` parses `""`
     // into a filter that discards everything, so honouring it would produce an
     // empty log file indistinguishable from a session that had nothing to say —
@@ -132,16 +133,19 @@ fn choose_filter(env_rust_log: Option<&str>, verbose: u8) -> EnvFilter {
             }
         }
     }
-    EnvFilter::new(default_directive(verbose))
+    EnvFilter::new(default_directive(verbose, to_file))
 }
 
 /// The filter used when nothing in the environment names one.
 ///
-/// Quiet by default: a command's result is what it prints, and an `INFO`
-/// line about what it is about to do reads as noise next to that. `-v` turns
-/// the narration on, `-vv` the wire.
-fn default_directive(verbose: u8) -> &'static str {
+/// Quiet on a terminal by default: a command's result is what it prints, and
+/// an `INFO` line about what it is about to do reads as noise next to that.
+/// `-v` turns the narration on, `-vv` the wire. A log file is nobody's
+/// terminal, so it keeps `info`: that file is where `start` sends the
+/// diagnostics it keeps off the harness's screen.
+fn default_directive(verbose: u8, to_file: bool) -> &'static str {
     match verbose {
+        0 if to_file => "info",
         0 => "warn",
         1 => "info,tapesctl=debug",
         _ => "trace",
@@ -211,7 +215,7 @@ mod tests {
 
     #[test]
     fn rust_log_wins_over_the_verbosity_flag() {
-        assert_eq!(choose_filter(Some("warn"), 2).to_string(), "warn");
+        assert_eq!(choose_filter(Some("warn"), 2, false).to_string(), "warn");
     }
 
     #[test]
@@ -219,8 +223,8 @@ mod tests {
         // The trap this avoids: `export RUST_LOG=` left in a shell profile
         // yielding an empty log file that looks like a capture with nothing to
         // report.
-        assert_eq!(choose_filter(Some(""), 0).to_string(), "warn");
-        assert_eq!(choose_filter(Some("   "), 0).to_string(), "warn");
+        assert_eq!(choose_filter(Some(""), 0, false).to_string(), "warn");
+        assert_eq!(choose_filter(Some("   "), 0, false).to_string(), "warn");
     }
 
     #[test]
@@ -232,16 +236,21 @@ mod tests {
         // means "trace for the target `nonsense`". Only a broken level, like
         // the one below, actually fails to parse.
         assert_eq!(
-            choose_filter(Some("tapesctl=louder"), 0).to_string(),
+            choose_filter(Some("tapesctl=louder"), 0, false).to_string(),
             "warn"
         );
     }
 
     #[test]
     fn the_verbosity_flag_sets_the_default_when_rust_log_is_absent() {
-        assert_eq!(choose_filter(None, 0).to_string(), "warn");
-        assert_eq!(choose_filter(None, 1).to_string(), "tapesctl=debug,info");
-        assert_eq!(choose_filter(None, 2).to_string(), "trace");
+        assert_eq!(choose_filter(None, 0, false).to_string(), "warn");
+        assert_eq!(
+            choose_filter(None, 1, false).to_string(),
+            "tapesctl=debug,info"
+        );
+        assert_eq!(choose_filter(None, 2, false).to_string(), "trace");
+        // A log file keeps the narration a quiet terminal drops.
+        assert_eq!(choose_filter(None, 0, true).to_string(), "info");
     }
 
     #[test]
