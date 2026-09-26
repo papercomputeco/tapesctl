@@ -13,8 +13,11 @@ break, and every breaking change is recorded here plainly.
   would wrap; `sessions get`, `traces get`, and `spans get` are record views
   that end by naming the command to run next; `search` is a ranked list with
   the matched snippet under each hit. Colour marks status words only, and is
-  applied only on a terminal without `NO_COLOR`. Piped output keeps the
-  alignment, prints full ids and cursors, and writes `-` for absent values.
+  applied only on a terminal without `NO_COLOR`. Ids are always printed
+  whole. Piped output keeps the alignment, prints the full cursor, and writes
+  `-` for absent values. `search` hits carry their session, trace, and span
+  ids; `spans get` prints input and output documents unelided. Decoded API
+  error text is sanitized before it reaches the terminal.
   `--json` on any of them prints the server's document; `sessions get`,
   `traces *`, `spans *`, and `search` gain the flag, and the JSON they print
   under it is byte-for-byte what they printed by default before. The

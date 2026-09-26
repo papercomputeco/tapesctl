@@ -292,18 +292,20 @@ Responses are never re-modelled on the way through, so fields the server grows
 reach you without a client upgrade.
 
 ```
-TITLE                            STATUS     TURNS    COST  LAST ACTIVE  ID
-Add a table view                 completed     12   $0.04  5m ago       01a0d365
-untitled (f47ac10b)              unknown        —       —  2h ago       01a0d365
+TITLE                STATUS     TURNS   COST  LAST ACTIVE  ID
+Add a table view     completed     12  $0.04  5m ago       01a0d365-2f42-77a1-8473-bd2e295244a4
+untitled (f47ac10b)  unknown        —      —  2h ago       01a0d365-2895-77f7-9ac2-dad41f0a1577
 
 2 sessions · more with --cursor eyJzb3J0IjoibGFzdF9…  (full cursor: --json)
 ```
 
 The table shows the columns that fit: `HARNESS` and `MODEL` appear from 110
-columns, and `COST`, `TURNS`, then `ID` give way first on a narrow one. The
-time column follows `--sort`: `LAST ACTIVE` by default, `STARTED` under
-`--sort started_at`. On a terminal the id is its leading group; piped, it is
-the full id, the cursor is printed whole, and absent values are `-` so `awk`
+columns; on a narrow one `COST` and then `TURNS` give way first. `ID` is the
+full id and is never dropped or shortened: ids are time-ordered, so any prefix
+collides across a day's sessions. The time column follows `--sort`:
+`LAST ACTIVE` by default, `STARTED` under `--sort started_at`; any other sort
+is named in the footer (`sorted by total_cost_usd`). Piped, the cursor is
+printed whole, and absent values are `-` so `awk`
 still sees a field. Colour is applied only on a terminal and never when
 `NO_COLOR` is set.
 
@@ -403,22 +405,25 @@ anything that takes session ids — for example the skills cassette's generate
 operation (`tapesctl skills --help` shows its current shape).
 
 Non-quiet output is a ranked list: the query and a hit count on the first
-line, then one hit per line with its score to two decimals, the turn's prompt,
-when the turn ran, and the session id, followed by the matched snippet on a
-dim `»` line when there is one.
+line, then one hit per line with its score to two decimals, the turn's prompt, and
+when the turn ran, followed by the matched snippet on a dim `»` line and the
+session, trace, and span ids on a second dim line, so a hit leads straight to
+`sessions get`, `traces get`, or `spans get`.
 
 ```
 "how I fixed auth"  ·  2 hits across 2 sessions
 
-0.82  Fix WorkOS redirect on staging                      Sep 17    01a0d365
+0.82  Fix WorkOS redirect on staging                            Sep 17
       » the redirect URI in the WorkOS dashboard is per-environment
-0.77  (synthetic turn)                                    Sep 12    01a0d365
+      session 01a0d365-1a2b-77a1-8473-bd2e295244a4 · trace trc_… · span sp_…
+0.77  (synthetic turn)                                          Sep 12
+      session 01a0d365-9c3d-77a1-8473-bd2e295244a4
 ```
 
 A turn with an empty prompt renders as `(synthetic turn)`; the server sends
 the field even when blank precisely so the case stays distinguishable. Treat
-printed scores as display values, not as exact numbers to assert on. The trace
-and span ids of a hit are in `--json`.
+printed scores as display values, not as exact numbers to assert on. `spans get` prints the span's `input` and `output` documents whole after its
+fields, never elided, so they copy as JSON.
 
 **An empty result set is not an error**: non-quiet prints `No results found.`
 and exits `0`; quiet prints nothing and exits `0`.

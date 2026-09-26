@@ -127,18 +127,18 @@ tapesctl sessions list --limit 20 --api-url http://localhost:8081
 ```
 
 ```
-TITLE                            STATUS     TURNS    COST  LAST ACTIVE  ID
-Add a table view                 completed     12   $0.04  5m ago       01a0d365
-untitled (f47ac10b)              unknown        —       —  2h ago       01a0d365
+TITLE                STATUS     TURNS   COST  LAST ACTIVE  ID
+Add a table view     completed     12  $0.04  5m ago       01a0d365-2f42-77a1-8473-bd2e295244a4
+untitled (f47ac10b)  unknown        —      —  2h ago       01a0d365-2895-77f7-9ac2-dad41f0a1577
 
 2 sessions · more with --cursor eyJzb3J0IjoibGFzdF9…  (full cursor: --json)
 ```
 
 ![tapesctl sessions list on a terminal](./images/cli/after-list.png)
 
-On a terminal the `ID` column is the leading group of the tapes session id;
-`--json` carries the full id, and so does the table when it is piped or the
-terminal is wide. The untitled row is a session nothing has derived a title for
+The `ID` column is the full tapes session id, the value every read command
+takes. It is never shortened: ids are time-ordered, so sessions from the same
+day share their leading characters. The untitled row is a session nothing has derived a title for
 yet; the parenthesised value is the leading group of its harness session id.
 
 Note the two ids. The one `start` printed is the `harness_session_id`; the one

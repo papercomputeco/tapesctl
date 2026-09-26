@@ -22,9 +22,6 @@ const TITLE_WIDTH: usize = 48;
 /// Longest a prompt cell grows before eliding.
 const PROMPT_WIDTH: usize = 60;
 
-/// Terminal width at which the full session id replaces the short one.
-const FULL_ID_FROM: usize = 140;
-
 /// Terminal width at which the harness and model columns appear.
 const WIDE_FROM: usize = 110;
 
@@ -45,31 +42,29 @@ pub fn sessions(value: &Value, sort: Option<&str>, theme: &Theme, now: OffsetDat
         return "No sessions.\n".to_owned();
     }
 
+    // Session ids are UUIDv7: the leading group is a timestamp, so any
+    // shortened form collides across sessions started the same day. The id
+    // is always shown whole, never dropped, and is what `sessions get` takes.
     let (time_header, time_path): (&'static str, &[&str]) = match sort {
         Some("started_at") => ("started", &["started_at"]),
         _ => ("last active", &["last_seen_at"]),
     };
 
     let mut table = Table::new(vec![
-        Column::new("title").flex(16).max(TITLE_WIDTH),
+        Column::new("title").flex(28).max(TITLE_WIDTH),
         Column::new("status"),
         Column::new("harness").priority(5).from_width(WIDE_FROM),
         Column::new("model").priority(4).from_width(WIDE_FROM),
         Column::new("turns").right().priority(2),
         Column::new("cost").right().priority(3),
         Column::new(time_header),
-        Column::new("id").priority(1).max(36),
+        Column::new("id").max(36),
     ]);
 
     for item in items {
         let status = status_word(item);
         let derived = status != "unknown";
-        let id = sanitize(string_at(item, &["id"]));
-        let id_shown = if theme.width >= FULL_ID_FROM || !theme.tty {
-            id
-        } else {
-            short_id(&id)
-        };
+        let id_shown = sanitize(string_at(item, &["id"]));
         table.row(vec![
             Cell::new(title(item), Tone::Primary),
             Cell::new(status.clone(), status_tone(&status)),
@@ -106,7 +101,10 @@ pub fn sessions(value: &Value, sort: Option<&str>, theme: &Theme, now: OffsetDat
 
     let mut out = table.render(theme);
     out.push('\n');
-    out.push_str(&theme.paint(Tone::Secondary, &sessions_footer(items.len(), value, theme)));
+    out.push_str(&theme.paint(
+        Tone::Secondary,
+        &sessions_footer(items.len(), sort, value, theme),
+    ));
     out.push('\n');
     out
 }
@@ -115,9 +113,14 @@ pub fn sessions(value: &Value, sort: Option<&str>, theme: &Theme, now: OffsetDat
 ///
 /// On a terminal the cursor is elided, because nobody types it; piped, it is
 /// printed whole, because a script does.
-fn sessions_footer(shown: usize, value: &Value, theme: &Theme) -> String {
+fn sessions_footer(shown: usize, sort: Option<&str>, value: &Value, theme: &Theme) -> String {
     let noun = if shown == 1 { "session" } else { "sessions" };
     let mut footer = format!("{shown} {noun}");
+    // The time column follows a time sort; any other sort is named here, so
+    // the order the rows are in is never a guess.
+    if let Some(sort) = sort.filter(|s| !matches!(*s, "last_active" | "started_at")) {
+        footer.push_str(&format!(" · sorted by {}", sanitize(sort)));
+    }
     if let Some(cursor) = value
         .get("next_cursor")
         .and_then(Value::as_str)
@@ -533,10 +536,12 @@ pub fn span(value: &Value, theme: &Theme, now: OffsetDateTime) -> String {
                 .map(money_exact),
         );
 
+    // Input and output are documents, not values: printed whole after the
+    // fields, never elided, so what is on screen can be copied as JSON.
     for (label, key) in [("Input", "input"), ("Output", "output")] {
         if let Some(doc) = item.get(key).filter(|d| !is_empty_doc(d)) {
             if let Ok(rendered) = serde_json::to_string_pretty(doc) {
-                record = record.field_toned(label, rendered, Tone::Secondary);
+                record = record.block(label, rendered);
             }
         }
     }
@@ -652,15 +657,46 @@ mod tests {
     }
 
     #[test]
-    fn the_sessions_table_at_eighty_columns() {
-        let rendered = sessions(&listing(), None, &Theme::plain(80), NOW);
+    fn the_sessions_table_at_a_hundred_and_ten_columns() {
+        let rendered = sessions(&listing(), None, &Theme::plain(110), NOW);
         assert_eq!(
             rendered,
             "TITLE                          STATUS     TURNS    COST  LAST ACTIVE  ID\n\
-             PLG drip email campaign grove  completed     19  $41.62  2d ago       01a0d365\n\
-             untitled (51cc4b4a)            unknown        —       —  1d ago       01a0d365\n\
+             PLG drip email campaign grove  completed     19  $41.62  2d ago       01a0d365-2f42-77a1-8473-bd2e295244a4\n\
+             untitled (51cc4b4a)            unknown        —       —  1d ago       01a0d365-2895-77f7-9ac2-dad41f0a1577\n\
              \n\
              2 sessions · more with --cursor eyJzb3J0IjoibGFzdF9…  (full cursor: --json)\n",
+            "got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn the_id_is_never_shortened_or_dropped() {
+        // UUIDv7 ids share their leading group across a day, so a short id
+        // would make two sessions look like one. Narrow terminals give up
+        // cost and turns first, never the id.
+        let rendered = sessions(&listing(), None, &Theme::plain(80), NOW);
+        assert!(
+            rendered.contains("01a0d365-2f42-77a1-8473-bd2e295244a4"),
+            "got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("01a0d365-2895-77f7-9ac2-dad41f0a1577"),
+            "got:\n{rendered}"
+        );
+        assert!(
+            rendered
+                .lines()
+                .all(|l| crate::render::text::width(l) <= 80),
+            "got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn a_non_time_sort_is_named_in_the_footer() {
+        let rendered = sessions(&listing(), Some("total_cost_usd"), &Theme::plain(110), NOW);
+        assert!(
+            rendered.contains("sorted by total_cost_usd"),
             "got:\n{rendered}"
         );
     }
@@ -883,7 +919,7 @@ mod tests {
             rendered.starts_with("Read (tool)\nsp · trc_1\n"),
             "got:\n{rendered}"
         );
-        assert!(rendered.contains("Input   [\n"), "got:\n{rendered}");
+        assert!(rendered.contains("\nInput\n[\n"), "got:\n{rendered}");
         assert!(!rendered.contains("Output"), "got:\n{rendered}");
     }
 }

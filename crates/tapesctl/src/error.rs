@@ -981,14 +981,16 @@ fn body_said(body: &str) -> String {
             .as_ref()
             .and_then(|v| v.get(key))
             .and_then(serde_json::Value::as_str)
-            .map(str::to_owned)
+            // Decoding un-escapes whatever the server put in the string, so
+            // terminal controls are neutralized here, before anything prints.
+            .map(crate::render::text::one_line)
     };
     match (field("message"), field("error")) {
         (Some(message), Some(code)) => format!("{message} ({code})"),
         (Some(message), None) => message,
         (None, Some(code)) => code,
         (None, None) => {
-            let one_line: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
+            let one_line = crate::render::text::one_line(body);
             if one_line.chars().count() > 160 {
                 format!("{}…", one_line.chars().take(159).collect::<String>())
             } else {
@@ -1039,6 +1041,20 @@ mod display_tests {
             rendered,
             "tapes API at localhost:8081 answered 404 not found: no cassette serves /v1/cassettes/search/spans (unknown_cassette)\n  hint: `tapesctl cassettes` lists what this server serves"
         );
+    }
+
+    #[test]
+    fn decoded_terminal_controls_never_reach_stderr() {
+        let rendered = api_status_message(
+            500,
+            "http://x/v1/y",
+            r#"{"error":"e\u001b[2J","message":"boom\u001b]0;pwned\u0007\nforged line"}"#,
+        );
+        assert!(
+            rendered.chars().all(|c| !c.is_control() || c == '\n'),
+            "control characters leaked: {rendered:?}"
+        );
+        assert!(!rendered.contains("\nforged"), "got: {rendered:?}");
     }
 
     #[test]

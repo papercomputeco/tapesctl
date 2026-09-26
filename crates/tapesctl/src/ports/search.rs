@@ -22,7 +22,7 @@ use crate::api::client::narrow;
 use crate::api::{print_json, resolve_client};
 use crate::cli::SearchArgs;
 use crate::error::Result;
-use crate::render::text::{elide, one_line, relative, sanitize, short_id};
+use crate::render::text::{elide, one_line, relative, sanitize};
 use crate::render::{Theme, Tone};
 
 /// The search cassette's span route, called directly. Search is a cassette a
@@ -149,8 +149,8 @@ pub fn render(
     ));
     out.push_str("\n\n");
 
-    // score(4) + 2 + prompt + 2 + when(8) + 2 + session(8)
-    let fixed = 4 + 2 + 2 + 8 + 2 + 8;
+    // score(4) + 2 + prompt + 2 + when(8)
+    let fixed = 4 + 2 + 2 + 8;
     let prompt_width = theme.width.saturating_sub(fixed).clamp(16, 80);
     for hit in results {
         let prompt = one_line(&hit.user_prompt);
@@ -162,13 +162,6 @@ pub fn render(
             prompt
         };
         let when = relative(&hit.started_at, now);
-        let session = if hit.session_id.is_empty() {
-            theme.absent().to_owned()
-        } else if theme.tty {
-            short_id(&hit.session_id)
-        } else {
-            sanitize(&hit.session_id)
-        };
         out.push_str(&theme.paint(Tone::Number, &format!("{:.2}", hit.score)));
         out.push_str("  ");
         out.push_str(&theme.paint(
@@ -176,9 +169,7 @@ pub fn render(
             &format!("{:<prompt_width$}", elide(&prompt, prompt_width)),
         ));
         out.push_str("  ");
-        out.push_str(&theme.paint(Tone::Secondary, &format!("{when:<8}")));
-        out.push_str("  ");
-        out.push_str(&theme.paint(Tone::Secondary, &session));
+        out.push_str(&theme.paint(Tone::Secondary, &when));
         out.push('\n');
 
         let snippet = one_line(&hit.snippet);
@@ -186,6 +177,42 @@ pub fn render(
             let width = theme.width.saturating_sub(8).max(20);
             out.push_str("      ");
             out.push_str(&theme.paint(Tone::Secondary, &format!("» {}", elide(&snippet, width))));
+            out.push('\n');
+        }
+
+        // The ids that take a hit to `sessions get`, `traces get`, and
+        // `spans get`, whole, on their own dim line.
+        let ids: Vec<String> = [
+            ("session", &hit.session_id),
+            ("trace", &hit.trace_id),
+            ("span", &hit.span_id),
+        ]
+        .iter()
+        .filter(|(_, id)| !id.is_empty())
+        .map(|(name, id)| format!("{name} {}", sanitize(id)))
+        .collect();
+        // Ids are never elided, so they wrap between pieces instead: each
+        // line holds as many whole `name id` pieces as fit.
+        let indent = "      ";
+        let mut line = String::new();
+        for piece in ids {
+            let joined = if line.is_empty() {
+                piece.clone()
+            } else {
+                format!("{line} · {piece}")
+            };
+            if !line.is_empty() && indent.len() + joined.chars().count() > theme.width {
+                out.push_str(indent);
+                out.push_str(&theme.paint(Tone::Secondary, &line));
+                out.push('\n');
+                line = piece;
+            } else {
+                line = joined;
+            }
+        }
+        if !line.is_empty() {
+            out.push_str(indent);
+            out.push_str(&theme.paint(Tone::Secondary, &line));
             out.push('\n');
         }
     }
@@ -281,9 +308,11 @@ mod tests {
             rendered,
             "\"how I fixed auth\"  ·  2 hits across 2 sessions\n\
              \n\
-             0.82  Fix WorkOS redirect on staging                                              Sep 17    01a0d365\n\
+             0.82  Fix WorkOS redirect on staging                                                    Sep 17\n\
              \x20     » the redirect URI in the WorkOS dashboard is per-environment\n\
-             0.77  (synthetic turn)                                                            Sep 12    01a0d365\n",
+             \x20     session 01a0d365-1a2b-77a1-8473-bd2e295244a4 · trace t-1 · span sp-1\n\
+             0.77  (synthetic turn)                                                                  Sep 12\n\
+             \x20     session 01a0d365-9c3d-77a1-8473-bd2e295244a4\n",
             "got:\n{rendered}"
         );
         assert_eq!(

@@ -225,7 +225,9 @@ impl Table {
             let over = total - theme.width;
             if let Some(pos) = shown.iter().position(|&i| self.columns[i].flex) {
                 let min = self.columns[shown[pos]].min;
-                widths[pos] = widths[pos].saturating_sub(over).max(min);
+                // `min` decides when a column is dropped instead; once nothing is
+                // left to drop, the flex column gives way down to a hard floor.
+                widths[pos] = widths[pos].saturating_sub(over).max(min.min(8));
             }
         }
         widths

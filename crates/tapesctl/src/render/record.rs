@@ -54,6 +54,7 @@ pub struct Record {
     title: String,
     subtitle: Vec<String>,
     fields: Vec<Field>,
+    blocks: Vec<(&'static str, String)>,
     next: Vec<String>,
 }
 
@@ -107,6 +108,17 @@ impl Record {
         }
     }
 
+    /// A document printed whole after the fields: a dim label on its own
+    /// line, then the text as it is. Never elided, so it can be copied.
+    #[must_use]
+    pub fn block(mut self, label: &'static str, text: impl Into<String>) -> Self {
+        let text = text.into();
+        if !text.is_empty() {
+            self.blocks.push((label, text));
+        }
+        self
+    }
+
     /// Name a command the reader could run next.
     #[must_use]
     pub fn next(mut self, command: impl Into<String>) -> Self {
@@ -149,6 +161,17 @@ impl Record {
             let columns = self.columns(theme);
             for field in &self.fields {
                 out.push_str(&field.render(&columns, theme));
+            }
+        }
+        for (label, text) in &self.blocks {
+            out.push('\n');
+            out.push_str(&theme.paint(Tone::Secondary, label));
+            out.push('\n');
+            // Control characters are neutralized line by line; the document
+            // itself is otherwise printed as it is.
+            for line in text.lines() {
+                out.push_str(&sanitize(line));
+                out.push('\n');
             }
         }
         if !self.next.is_empty() {
