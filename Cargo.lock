@@ -1814,9 +1814,9 @@ dependencies = [
 
 [[package]]
 name = "tapes-harnesses"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c85a9cd83307d424717f9fe5dd7fb9e2e69174d4e44d1a358f716f8326fc35a"
+checksum = "91e9b9f541ba1447175b99df1b3a8223e6269506d6b789cb13b4227f0d67c1df"
 dependencies = [
  "arc-swap",
  "dirs",
