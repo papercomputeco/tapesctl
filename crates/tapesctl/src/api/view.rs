@@ -326,11 +326,15 @@ pub fn trace(value: &Value, theme: &Theme, now: OffsetDateTime) -> String {
     let item = value.get("trace").unwrap_or(value);
     let id = sanitize(string_at(item, &["trace_id"]));
     let status = sanitize(string_at(item, &["status"]));
-    let span_count = value
-        .get("spans")
-        .and_then(Value::as_array)
-        .map(|s| s.len() as i64)
-        .or_else(|| number_at(item, &["span_count"]));
+    // The header's span_count is the trace's total; the document's spans
+    // array is one page of them, so it only stands in when the header
+    // carries no count.
+    let span_count = number_at(item, &["span_count"]).or_else(|| {
+        value
+            .get("spans")
+            .and_then(Value::as_array)
+            .map(|s| s.len() as i64)
+    });
 
     let started = string_at(item, &["started_at"]);
     let ended = string_at(item, &["ended_at"]);

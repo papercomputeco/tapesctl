@@ -7,6 +7,14 @@ break, and every breaking change is recorded here plainly.
 
 ### Changed
 
+- `tapes-client` 0.6.0, the release that follows tapes v0.49.0's paging of
+  the composite, trace and raw-turn reads. `sessions traces`, `sessions
+  raw-turns` and `traces get` now print **one page** of the server's
+  document — the whole document with `next_cursor` on every page but the
+  last — and take `--limit` and `--cursor` to page; `traces get`'s record
+  view names the command that fetches the next page. `spans list` keeps
+  printing the whole trace: it walks every page before it prints.
+
 - Every read command has a human view, and every human view is laid out for
   the terminal it prints on. `sessions list`, `traces list`, and `spans list`
   are borderless tables that drop their least important columns before they

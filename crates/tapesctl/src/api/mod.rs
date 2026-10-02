@@ -41,7 +41,7 @@ use serde_json::Value;
 use snafu::{OptionExt, ResultExt};
 use tapes_client::core::models::params::ContractParams;
 use tapes_client::core::models::{
-    PayloadDetail, SessionListParams, SessionTracesParams, TraceParams,
+    PayloadDetail, RawTurnListParams, SessionListParams, SessionTracesParams, TraceParams,
 };
 use url::Url;
 
@@ -163,16 +163,25 @@ pub async fn sessions(command: SessionsCommand) -> Result<()> {
         SessionsCommand::Traces(args) => {
             let client = resolve_client(&args.api)?;
             let payload = payload_of(args.payload.as_deref())?;
-            let mut values = SessionTracesParams { payload }.values();
+            let mut values = SessionTracesParams {
+                payload,
+                limit: args.limit,
+                cursor: args.cursor,
+            }
+            .values();
             values.push(("id", args.id));
             let value: Value = client.call(ops::GET_SESSION_TRACES, values).await?;
             print_json(&value)
         }
         SessionsCommand::RawTurns(args) => {
             let client = resolve_client(&args.api)?;
-            let value: Value = client
-                .call(ops::LIST_RAW_TURNS, vec![("id", args.id)])
-                .await?;
+            let mut values = RawTurnListParams {
+                limit: args.limit,
+                cursor: args.cursor,
+            }
+            .values();
+            values.push(("id", args.id));
+            let value: Value = client.call(ops::LIST_RAW_TURNS, values).await?;
             print_json(&value)
         }
     }
@@ -196,17 +205,132 @@ pub async fn traces(command: TracesCommand) -> Result<()> {
         TracesCommand::Get(args) => {
             let client = resolve_client(&args.api)?;
             let payload = payload_of(args.payload.as_deref())?;
-            let mut values = TraceParams { payload }.values();
-            values.push(("trace_id", args.trace_id));
+            let mut values = TraceParams {
+                payload,
+                limit: args.limit,
+                cursor: args.cursor,
+            }
+            .values();
+            values.push(("trace_id", args.trace_id.clone()));
             let value: Value = client.call(ops::GET_TRACE, values).await?;
             if args.json {
                 print_json(&value)
             } else {
                 print!("{}", view::trace(&value, &Theme::detect(), now()));
+                // The server pages a trace's spans; a page that is not the
+                // last says so, the same way a record view names the command
+                // to run next.
+                if let Some(cursor) = next_cursor(&value) {
+                    println!(
+                        "more  {}",
+                        next_page_command(
+                            &args.api,
+                            &args.trace_id,
+                            args.payload.as_deref(),
+                            args.limit,
+                            cursor
+                        )
+                    );
+                }
                 Ok(())
             }
         }
     }
+}
+
+/// The cursor a paged document ends with, when it is not the last page.
+/// Absent, `null` and `""` are the three spellings of "no more pages".
+fn next_cursor(value: &Value) -> Option<&str> {
+    value
+        .get("next_cursor")
+        .and_then(Value::as_str)
+        .filter(|cursor| !cursor.is_empty())
+}
+
+/// The `traces get` invocation that fetches the page after `cursor`: the same
+/// server, payload grain and page size as the call that printed it, so the
+/// next page continues the same request rather than a different one.
+fn next_page_command(
+    api: &ApiArgs,
+    trace_id: &str,
+    payload: Option<&str>,
+    limit: Option<u32>,
+    cursor: &str,
+) -> String {
+    let mut command = String::from("tapesctl traces get");
+    if let Some(url) = api.api_url.as_deref() {
+        command.push_str(&format!(" --api-url {url}"));
+    }
+    command.push(' ');
+    command.push_str(trace_id);
+    if let Some(payload) = payload {
+        command.push_str(&format!(" --payload {payload}"));
+    }
+    if let Some(limit) = limit {
+        command.push_str(&format!(" --limit {limit}"));
+    }
+    command.push_str(&format!(" --cursor {cursor}"));
+    command
+}
+
+/// `GET /v1/traces/{trace_id}` walked to its last page: the first page's
+/// document with every later page's `spans` appended and the cursor removed.
+/// The server pages a trace's spans, so a projection of "the trace's spans"
+/// must not stop at the first page. A cursor the server serves twice would
+/// loop the walk and, if merged, print the same page twice as though the
+/// walk had completed, so it is refused before its page is taken.
+async fn whole_trace(
+    client: &ApiClient,
+    trace_id: String,
+    payload: Option<PayloadDetail>,
+) -> Result<Value> {
+    let mut whole: Option<Value> = None;
+    let mut cursor: Option<String> = None;
+    let mut seen: Vec<String> = Vec::new();
+    loop {
+        let mut values = TraceParams {
+            payload,
+            limit: None,
+            cursor: cursor.clone(),
+        }
+        .values();
+        values.push(("trace_id", trace_id.clone()));
+        let mut page: Value = client.call(ops::GET_TRACE, values).await?;
+        let next = next_cursor(&page).map(str::to_owned);
+        if let Some(next) = next.as_deref()
+            && seen.iter().any(|prior| prior == next)
+        {
+            return error::ApiPageRepeatedSnafu {
+                endpoint: format!("/v1/traces/{trace_id}"),
+                cursor: next.to_owned(),
+            }
+            .fail();
+        }
+        if let Some(doc) = whole.as_mut() {
+            let more = page
+                .get_mut("spans")
+                .and_then(Value::as_array_mut)
+                .map(std::mem::take)
+                .unwrap_or_default();
+            if let Some(spans) = doc.get_mut("spans").and_then(Value::as_array_mut) {
+                spans.extend(more);
+            }
+        } else {
+            whole = Some(page);
+        }
+        match next {
+            Some(next) => {
+                seen.push(next.clone());
+                cursor = Some(next);
+            }
+            None => break,
+        }
+    }
+    let mut doc = whole.unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+    if let Some(object) = doc.as_object_mut() {
+        object.remove("next_cursor");
+    }
+    Ok(doc)
 }
 
 /// Dispatch `tapesctl spans <method>`.
@@ -215,9 +339,7 @@ pub async fn spans(command: SpansCommand) -> Result<()> {
         SpansCommand::List(args) => {
             let client = resolve_client(&args.api)?;
             let payload = payload_of(args.payload.as_deref())?;
-            let mut values = TraceParams { payload }.values();
-            values.push(("trace_id", args.trace_id));
-            let trace: Value = client.call(ops::GET_TRACE, values).await?;
+            let trace = whole_trace(&client, args.trace_id, payload).await?;
             // The trace document nests its spans; a missing key means the server
             // returned a trace with none, which prints as an empty array rather
             // than as an error.
@@ -371,6 +493,85 @@ mod tests {
         .await;
 
         assert!(result.is_ok(), "got: {result:?}");
+    }
+
+    #[tokio::test]
+    async fn the_span_projection_walks_every_page_of_the_trace() {
+        // Page one ends with a cursor; page two is fetched with exactly that
+        // cursor and ends without one. The projection is both pages' spans,
+        // in order, with the cursor gone from the document.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/traces/t-1"))
+            .and(query_param_is_missing("cursor"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"trace":{"trace_id":"t-1","span_count":3},"spans":[{"span_id":"s-1"},{"span_id":"s-2"}],"next_cursor":"c-2"}"#,
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/traces/t-1"))
+            .and(query_param("cursor", "c-2"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"trace":{"trace_id":"t-1","span_count":3},"spans":[{"span_id":"s-3"}]}"#,
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = resolve_client(&api_args(Some(server.uri()))).unwrap();
+        let whole = whole_trace(&client, "t-1".to_owned(), None).await.unwrap();
+        let ids: Vec<&str> = whole["spans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["span_id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["s-1", "s-2", "s-3"]);
+        assert!(
+            whole.get("next_cursor").is_none(),
+            "the cursor must not survive the walk"
+        );
+        assert_eq!(whole["trace"]["span_count"], 3);
+    }
+
+    #[tokio::test]
+    async fn a_repeated_cursor_fails_the_walk_instead_of_duplicating_a_page() {
+        // Every page, with or without a cursor, answers with the same cursor:
+        // a server that loops. The second request must not be merged and the
+        // walk must say it is incomplete rather than print twice the spans.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/traces/t-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"trace":{"trace_id":"t-1"},"spans":[{"span_id":"s-1"}],"next_cursor":"again"}"#,
+            ))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let client = resolve_client(&api_args(Some(server.uri()))).unwrap();
+        let err = whole_trace(&client, "t-1".to_owned(), None)
+            .await
+            .unwrap_err();
+        let shown = err.to_string();
+        assert!(
+            shown.contains("again") && shown.contains("incomplete"),
+            "got: {shown}"
+        );
+    }
+
+    #[test]
+    fn the_next_page_command_continues_the_same_request() {
+        let api = api_args(Some("http://tapes.example:8081".to_owned()));
+        assert_eq!(
+            next_page_command(&api, "t-1", Some("preview"), Some(50), "c-2"),
+            "tapesctl traces get --api-url http://tapes.example:8081 t-1 --payload preview --limit 50 --cursor c-2"
+        );
+        assert_eq!(
+            next_page_command(&api_args(None), "t-1", None, None, "c-2"),
+            "tapesctl traces get t-1 --cursor c-2"
+        );
     }
 
     #[tokio::test]

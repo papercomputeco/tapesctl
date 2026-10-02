@@ -387,6 +387,18 @@ pub enum Error {
         body: String,
     },
 
+    /// A paged read handed back a cursor it had already served, so walking it
+    /// would loop forever and the pages collected so far are not the whole.
+    #[snafu(display(
+        "the tapes API repeated page cursor {cursor:?} for {endpoint}; the walk is incomplete"
+    ))]
+    ApiPageRepeated {
+        /// The route being walked.
+        endpoint: String,
+        /// The cursor the server served twice.
+        cursor: String,
+    },
+
     /// The API answered with something that is not JSON.
     #[snafu(display("could not decode the tapes API response"))]
     ApiDecode {

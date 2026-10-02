@@ -528,7 +528,7 @@ pub enum SessionsCommand {
     /// Fetch a session's derived traces — what the console renders.
     Traces(SessionPayloadArgs),
     /// List the raw wire turns behind a session's derivation.
-    RawTurns(SessionIdArgs),
+    RawTurns(SessionRawTurnsArgs),
 }
 
 /// Arguments for `tapesctl sessions list`.
@@ -625,6 +625,32 @@ pub struct SessionPayloadArgs {
     /// server-side.
     #[arg(long)]
     pub payload: Option<String>,
+
+    /// Traces per page; the server defaults to 50 and clamps at 200.
+    #[arg(long)]
+    pub limit: Option<u32>,
+
+    /// The `next_cursor` of the previous page.
+    #[arg(long)]
+    pub cursor: Option<String>,
+}
+
+/// A session id plus the page of its raw turns to fetch.
+#[derive(Debug, Args)]
+pub struct SessionRawTurnsArgs {
+    #[command(flatten)]
+    pub api: ApiArgs,
+
+    /// The session id.
+    pub id: String,
+
+    /// Raw turns per page; the server defaults to 200 and clamps at 1000.
+    #[arg(long)]
+    pub limit: Option<u32>,
+
+    /// The `next_cursor` of the previous page.
+    #[arg(long)]
+    pub cursor: Option<String>,
 }
 
 /// `tapesctl traces` methods.
@@ -662,6 +688,14 @@ pub struct TracesGetArgs {
     /// `full` (default) or `preview`.
     #[arg(long)]
     pub payload: Option<String>,
+
+    /// Spans per page; the server defaults to 200 and clamps at 1000.
+    #[arg(long)]
+    pub limit: Option<u32>,
+
+    /// The `next_cursor` of the previous page.
+    #[arg(long)]
+    pub cursor: Option<String>,
 
     /// Print the raw JSON response instead of the record view.
     #[arg(long)]
