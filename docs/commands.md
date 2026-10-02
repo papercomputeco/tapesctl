@@ -313,8 +313,8 @@ still sees a field. Colour is applied only on a terminal and never when
 |---|---|---|
 | `list` | `GET /v1/sessions` | `--limit`, `--cursor`, `--sort`, `--direction`, `--since`, `--until`, `--harness-id`, `--harness-session-id`, `--auth-subject`, `--filter`, `--json` |
 | `get <ID>` | `GET /v1/sessions/{id}` | `--json` |
-| `traces <ID>` | `GET /v1/sessions/{id}/traces` | `--payload` |
-| `raw-turns <ID>` | `GET /v1/sessions/{id}/raw_turns` | — |
+| `traces <ID>` | `GET /v1/sessions/{id}/traces` | `--payload`, `--limit`, `--cursor` |
+| `raw-turns <ID>` | `GET /v1/sessions/{id}/raw_turns` | `--limit`, `--cursor` |
 
 ```bash
 tapesctl sessions list --limit 20 --api-url http://localhost:8081
@@ -347,7 +347,11 @@ tapesctl: invalid --payload "bogus" (valid values: full, preview)
 ```
 
 `sessions traces` is what the console renders; `sessions raw-turns` is the wire
-turns behind that derivation.
+turns behind that derivation. Both are paged by the server (50 traces and 200
+raw turns per page by default) and print one page: a page that is not the last
+ends with `next_cursor`, which `--cursor` passes back. `traces get` pages its
+spans the same way (200 per page) and, in the record view, names the command
+that fetches the next page.
 
 The read API carries **no authentication**, and redirects are refused rather
 than followed. A base path in `--api-url` is discarded here too.
@@ -357,7 +361,7 @@ than followed. A base path in `--api-url` is discarded here too.
 | leaf | route | flags |
 |---|---|---|
 | `list <SESSION_ID>` | `GET /v1/traces?session_id=` | `--json` |
-| `get <TRACE_ID>` | `GET /v1/traces/{trace_id}` | `--payload`, `--json` |
+| `get <TRACE_ID>` | `GET /v1/traces/{trace_id}` | `--payload`, `--limit`, `--cursor`, `--json` |
 
 ## spans
 
@@ -368,7 +372,8 @@ than followed. A base path in `--api-url` is discarded here too.
 
 **`spans list` is a projection, not a route.** The API has no standalone span
 collection — spans exist only inside a trace — so the command fetches the trace
-and prints its `spans`. A trace with no `spans` key prints `No spans.` (`[]`
+and prints its `spans`. The server pages a trace's spans (200 per page), and
+`spans list` walks every page before printing, so the list is the whole trace. A trace with no `spans` key prints `No spans.` (`[]`
 under `--json`) rather than failing.
 
 `traces list` is one row per turn: status, span count, tokens in → out, cost,
