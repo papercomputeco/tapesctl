@@ -68,7 +68,7 @@ repository = "https://github.com/papercomputeco/tapesctl"
 # regression — but it is a loan, repaid by re-pointing at the next published
 # version once the burst lands. See .github/dependabot.yml for the fuller
 # note.
-tapes-harnesses = { version = "0.1.2" }
+tapes-harnesses = { version = "0.2" }
 
 # The harness-agnostic half of capture — the X-Tapes-* envelope, the
 # capture-gateway environment contract, and the peer-trust ancestry check — in
@@ -76,7 +76,7 @@ tapes-harnesses = { version = "0.1.2" }
 # rather than through a re-export: the envelope and the peer check are protocol,
 # and reaching them through the harness registry would say they were harness
 # knowledge.
-tapes-capture = { version = "0.1" }
+tapes-capture = { version = "0.2" }
 
 # One client for the whole tapes read surface: the vendored `tapes-api.yaml`
 # with its provenance and seal check, the reduction of any OpenAPI document

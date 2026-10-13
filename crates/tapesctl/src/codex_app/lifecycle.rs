@@ -86,6 +86,7 @@ impl DesktopSession {
             // everywhere else. A parent *session* id would say something
             // different and untrue: that this session forked from another.
             parent_sid: None,
+            parent_harness_id: None,
             metadata: serde_json::Map::new(),
         }
     }

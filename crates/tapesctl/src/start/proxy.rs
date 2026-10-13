@@ -602,7 +602,13 @@ fn trusted_inbound_envelope(
     if !state.self_attributing {
         return None;
     }
-    let claimed = inbound_envelope(headers)?;
+    // The completeness rule — a harness id that is present and not the
+    // `unknown` sentinel, plus a non-blank session id — is the crate's, and the
+    // crate applies the same rule when deciding whether to *preserve* an
+    // inbound envelope on the outbound request. Reading through it rather than
+    // restating it is what keeps a request whose headers say `pi` from filing
+    // under `unknown`.
+    let claimed = envelope::TapesAttribution::from_headers(headers)?;
     let presented_nonce = headers
         .get(GATEWAY_NONCE_HEADER)
         .and_then(|value| value.to_str().ok())
@@ -634,47 +640,6 @@ fn trusted_inbound_envelope(
          harness; filing the turn as unattributed",
     );
     None
-}
-
-/// Read a session identity out of an envelope the harness stamped on itself.
-///
-/// The completeness rule — a harness id that is present and not the `unknown`
-/// sentinel, plus a non-blank session id — is the crate's, restated because it
-/// is private there. It has to be the same rule: the crate applies it when
-/// deciding whether to *preserve* an inbound envelope on the outbound request,
-/// and this decides whether to file the turn under one. Two different rules
-/// would produce a request whose headers say `pi` and whose ingest row says
-/// `unknown`.
-///
-/// Only the plain-text fields are read. `cwd`, session name, and metadata are
-/// percent-encoded or base64url on the wire, and decoding them here would be a
-/// second, drifting implementation of an encoder the crate owns — so a harness
-/// that sends them wants a `TapesAttribution::from_headers` in the crate rather
-/// than more parsing here. Nothing is lost today: pi's extension stamps exactly
-/// the two headers this reads.
-fn inbound_envelope(headers: &HeaderMap) -> Option<envelope::TapesAttribution> {
-    let harness_id = envelope_field(headers, envelope::X_TAPES_HARNESS_ID)
-        .filter(|id| id != envelope::HARNESS_ID_UNKNOWN)?;
-    let session_id = envelope_field(headers, envelope::X_TAPES_HARNESS_SESSION_ID)?;
-    Some(envelope::TapesAttribution {
-        harness_id,
-        session_id: Some(session_id),
-        version: envelope_field(headers, envelope::X_TAPES_HARNESS_VERSION),
-        cwd: None,
-        name: None,
-        parent_sid: envelope_field(headers, envelope::X_TAPES_PARENT_HARNESS_SESSION_ID),
-        metadata: serde_json::Map::new(),
-    })
-}
-
-/// One `X-Tapes-*` header, trimmed, absent when blank.
-fn envelope_field(headers: &HeaderMap, name: &'static str) -> Option<String> {
-    headers
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
 }
 
 fn header_string(headers: &HeaderMap, name: http::header::HeaderName) -> Option<String> {
