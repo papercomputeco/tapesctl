@@ -226,13 +226,21 @@ tapesctl start hermes --ingest-url http://localhost:8082 --model <model-id>
   `/v1/models` for a default, which the upstream may or may not answer.
 
 hermes's plugin stamps the envelope and echoes the launch nonce exactly as pi's
-extension does, so its turns are filed under the session hermes names. Two
-things escape that:
+extension does, so its turns are filed under the session hermes names. That
+includes hermes's auxiliary calls — title generation, compression, vision, web
+extraction, session search, and the rest — which bypass hermes's request
+middleware; the plugin attributes them separately, with the same envelope and
+nonce plus `x-tapes-harness-metadata` naming the task (`{"aux_task": …}`).
+Three caveats:
 
-- **Auxiliary calls are filed as `unknown`.** hermes's title generation and
-  compression summaries do not run through the request middleware the plugin
-  hooks, so they reach the proxy with no envelope. They are captured; they are
-  just not attributable.
+- **An auxiliary call can attach to the wrong session in a busy process.** It is
+  given the session the plugin last saw in its context, or the process's most
+  recent one when it runs on a thread that inherited none (title generation
+  does). In a hermes process running several sessions at once, such a call may
+  be filed under the most recent rather than its own.
+- **The task name stays on the forwarded request.** `tapesctl` files an
+  auxiliary turn under its session but does not decode the metadata header, so
+  `aux_task` is not in the ingest row's harness metadata.
 - **Switching provider inside hermes leaves capture.** Only the `custom`
   provider points at the proxy.
 
