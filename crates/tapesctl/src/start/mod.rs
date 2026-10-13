@@ -2,10 +2,12 @@
 //!
 //! The proxy is *just in time* in the literal sense: it is bound when the
 //! command starts, it exists only to serve one harness process, and it dies
-//! with that process. There is no daemon, no port to reserve, and no state that
-//! outlives the session — the listener takes an ephemeral port, the harness is
-//! pointed at it by a launch recipe, and when the harness exits the server is
-//! shut down and any config the recipe asked for is removed.
+//! with that process. There is no daemon and no port to reserve — the listener
+//! takes an ephemeral port, the harness is pointed at it by a launch recipe,
+//! and when the harness exits the server is shut down and any config the recipe
+//! asked for is removed. What does outlive a launch is deliberate and small:
+//! hermes's capture home (see [`HERMES_HOME_DIR`]), and, only while the harness
+//! runs, this launch's lineage record (see [`lineage`]).
 //!
 //! # Where each piece of knowledge lives
 //!
@@ -34,6 +36,14 @@
 //! belongs to, and opencode publishes no PID-indexed session file for the peer
 //! lookup to read. Taking the plugin road gets the redirect and the identity
 //! from one artifact, and makes this arm identical to pi's.
+//!
+//! hermes is the third shape. It has a base-URL knob, but the knob is its
+//! config file, so `start hermes` takes the crate's `HermesRecipe`: a
+//! relocated `HERMES_HOME` under this client's state directory whose
+//! `config.yaml` points a `custom` provider at the proxy and whose plugin
+//! directory carries the capture plugin. Redirect and attribution therefore
+//! arrive together, as opencode's would through its recipe, and nothing has
+//! to be installed first. See [`HermesLaunch`].
 //!
 //! `start opencode` is nonetheless refused today: the arm is intact and the
 //! harness is registered, but the verb is withdrawn pending rework — see
@@ -65,6 +75,7 @@
 
 pub mod content_encoding;
 pub mod ingest;
+pub mod lineage;
 pub mod peek;
 pub mod proxy;
 pub mod tally;
@@ -78,8 +89,9 @@ use std::sync::atomic::{AtomicI32, Ordering};
 
 use snafu::{OptionExt, ResultExt};
 use tapes_capture::envelope::{
-    HARNESS_ID_CLAUDE, HARNESS_ID_CODEX, HARNESS_ID_OPENCODE, HARNESS_ID_PI,
+    HARNESS_ID_CLAUDE, HARNESS_ID_CODEX, HARNESS_ID_HERMES, HARNESS_ID_OPENCODE, HARNESS_ID_PI,
 };
+use tapes_capture::launch::LaunchContext;
 use tapes_harnesses::attribution::{
     AttributionConfig, AttributionState, CodexProviderFilter, claude::session as claude_session,
     codex::session as codex_session, spawn_codex_watcher, spawn_watcher,
@@ -87,7 +99,7 @@ use tapes_harnesses::attribution::{
 use tapes_harnesses::harness as registry;
 use tapes_harnesses::harness::RegistryUserAgents;
 use tapes_harnesses::launch::{
-    ClaudeRecipe, CodexAuth, CodexRecipe, LaunchPlan, LaunchRecipe, ProxyEndpoint,
+    ClaudeRecipe, CodexAuth, CodexRecipe, HermesRecipe, LaunchPlan, LaunchRecipe, ProxyEndpoint,
     resolve_codex_auth,
 };
 use tapes_harnesses::plugin::pi::GATEWAY_LABEL_SUFFIX_ENV;
@@ -105,6 +117,7 @@ use crate::transcript::client::TranscriptClient;
 use crate::transcript::codex_anchors;
 use crate::transcript::tailer::{self, SessionTracker};
 use ingest::IngestClient;
+use lineage::{LaunchLineage, LaunchRegistry};
 use proxy::ProxyState;
 use tally::{CaptureSnapshot, CaptureTally};
 
@@ -310,6 +323,23 @@ pub const DEFAULT_PI_SCHEMA: UpstreamSchema = UpstreamSchema::Anthropic;
 /// provider opencode ships selected can move without pi's having moved.
 pub const DEFAULT_OPENCODE_SCHEMA: UpstreamSchema = UpstreamSchema::Anthropic;
 
+/// The schema a hermes capture fronts when the user names none.
+///
+/// OpenAI, meaning chat completions, because that is the wire protocol
+/// hermes's `custom` provider speaks unless told otherwise — and the one every
+/// OpenAI-compatible gateway a hermes user points `--upstream` at answers.
+pub const DEFAULT_HERMES_SCHEMA: UpstreamSchema = UpstreamSchema::OpenAi;
+
+/// Where the hermes capture home lives, relative to the home directory.
+///
+/// Persistent on purpose and beside this client's other state, which
+/// `tapesctl uninstall` already removes. hermes keeps its sessions, memories,
+/// and skills in its home, so a fresh directory per launch would make every
+/// captured hermes session start from nothing; a fixed one keeps them across
+/// captured launches. It is never the user's own `~/.hermes`, and nothing is
+/// ever copied out of that — no `.env`, no `auth.json`.
+pub const HERMES_HOME_DIR: [&str; 2] = [".tapes", "hermes-home"];
+
 /// Which harness is being launched, and everything that differs between them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Harness {
@@ -321,6 +351,9 @@ pub enum Harness {
     OpenCode,
     /// pi, captured from inside by the crate's gateway extension.
     Pi,
+    /// hermes-agent, redirected through a planned `HERMES_HOME` whose plugin
+    /// stamps its own envelope.
+    Hermes,
 }
 
 /// Every harness `start` will launch, in the order they should be offered.
@@ -334,7 +367,12 @@ pub enum Harness {
 /// It is also what [`Harness::parse`] gates on, so this list is the surface
 /// itself rather than a description of it: a harness [`Harness`] has an arm for
 /// but that is absent here cannot be launched at all.
-pub const SUPPORTED: &[Harness] = &[Harness::Claude, Harness::Codex, Harness::Pi];
+pub const SUPPORTED: &[Harness] = &[
+    Harness::Claude,
+    Harness::Codex,
+    Harness::Pi,
+    Harness::Hermes,
+];
 
 /// Harnesses this binary has a working arm for and deliberately does not offer.
 ///
@@ -377,6 +415,7 @@ impl Harness {
                 HARNESS_ID_CODEX => Some(Self::Codex),
                 HARNESS_ID_OPENCODE => Some(Self::OpenCode),
                 HARNESS_ID_PI => Some(Self::Pi),
+                HARNESS_ID_HERMES => Some(Self::Hermes),
                 _ => None,
             })
             .filter(|harness| SUPPORTED.contains(harness));
@@ -394,6 +433,7 @@ impl Harness {
             Self::Codex => HARNESS_ID_CODEX,
             Self::OpenCode => HARNESS_ID_OPENCODE,
             Self::Pi => HARNESS_ID_PI,
+            Self::Hermes => HARNESS_ID_HERMES,
         }
     }
 
@@ -405,6 +445,7 @@ impl Harness {
             Self::Codex => "codex",
             Self::OpenCode => "opencode",
             Self::Pi => "pi",
+            Self::Hermes => "hermes",
         }
     }
 
@@ -421,6 +462,7 @@ impl Harness {
             Self::Claude | Self::Codex => None,
             Self::OpenCode => Some(DEFAULT_OPENCODE_SCHEMA),
             Self::Pi => Some(DEFAULT_PI_SCHEMA),
+            Self::Hermes => Some(DEFAULT_HERMES_SCHEMA),
         }
     }
 
@@ -437,6 +479,7 @@ impl Harness {
             Self::Codex => "openai",
             Self::OpenCode => schema.unwrap_or(DEFAULT_OPENCODE_SCHEMA).as_str(),
             Self::Pi => schema.unwrap_or(DEFAULT_PI_SCHEMA).as_str(),
+            Self::Hermes => schema.unwrap_or(DEFAULT_HERMES_SCHEMA).as_str(),
         }
     }
 
@@ -457,6 +500,7 @@ impl Harness {
             (Self::Codex, _) => DEFAULT_OPENAI_UPSTREAM,
             (Self::OpenCode, _) => schema.unwrap_or(DEFAULT_OPENCODE_SCHEMA).default_upstream(),
             (Self::Pi, _) => schema.unwrap_or(DEFAULT_PI_SCHEMA).default_upstream(),
+            (Self::Hermes, _) => schema.unwrap_or(DEFAULT_HERMES_SCHEMA).default_upstream(),
         }
     }
 
@@ -498,9 +542,24 @@ impl Harness {
 
     /// The plugin artifacts that must already be installed for this harness's
     /// traffic to be captured at all. Empty for a harness captured by redirect.
+    ///
+    /// Empty for hermes too, although the registry lists its plugin: the
+    /// recipe writes that plugin into the planned home on every launch, so a
+    /// copy under the user's `~/.hermes` would never be loaded and is not
+    /// a precondition.
     #[must_use]
     pub fn required_plugin_artifacts(self) -> &'static [tapes_harnesses::plugin::PluginArtifact] {
+        if self == Self::Hermes {
+            return &[];
+        }
         registry::find(self.id()).map_or(&[], |harness| harness.plugin_artifacts())
+    }
+
+    /// Whether `--model` means anything for this harness — whether this launch
+    /// writes the harness's provider config, and so must write its model too.
+    #[must_use]
+    pub fn takes_model(self) -> bool {
+        matches!(self, Self::Hermes)
     }
 
     /// Build the endpoint the harness should be pointed at.
@@ -521,14 +580,28 @@ impl Harness {
     /// would make [`tapes_harnesses::plugin::GATEWAY_URL_ENV`] mean a different
     /// thing for opencode than it means for pi. The variable stays "the proxy's
     /// origin" for every harness that reads it.
+    ///
+    /// hermes's endpoint follows the schema. Its OpenAI client appends
+    /// `/chat/completions` to the base URL, so chat completions needs the `/v1`
+    /// here; its Anthropic client appends `/v1/messages` itself, as Claude
+    /// does, and needs nothing.
     #[must_use]
-    pub fn endpoint_for(self, addr: SocketAddr, auth: Option<CodexAuth>) -> ProxyEndpoint {
+    pub fn endpoint_for(
+        self,
+        addr: SocketAddr,
+        auth: Option<CodexAuth>,
+        schema: Option<UpstreamSchema>,
+    ) -> ProxyEndpoint {
         match (self, auth) {
             (Self::Claude | Self::OpenCode | Self::Pi, _)
             | (Self::Codex, Some(CodexAuth::ChatGpt)) => {
                 ProxyEndpoint::new(&format!("http://{addr}"))
             }
             (Self::Codex, _) => ProxyEndpoint::new(&format!("http://{addr}/v1")),
+            (Self::Hermes, _) => match schema.unwrap_or(DEFAULT_HERMES_SCHEMA) {
+                UpstreamSchema::OpenAi => ProxyEndpoint::new(&format!("http://{addr}/v1")),
+                UpstreamSchema::Anthropic => ProxyEndpoint::new(&format!("http://{addr}")),
+            },
         }
     }
 
@@ -539,6 +612,11 @@ impl Harness {
     /// session, so it has nothing to prove — but it is a parameter rather than
     /// generated inside so the same value ends up in the launched environment
     /// and in the proxy that validates the echo.
+    ///
+    /// `hermes` is the hermes home and model, and only the hermes arm reads
+    /// it; launching hermes without one is refused rather than defaulted,
+    /// because the only safe default would be a path this function has no
+    /// business choosing.
     // Seven arguments because a launch plan genuinely has seven independent
     // inputs; bundling them into a struct would name a type with exactly one
     // constructor and one caller, which is ceremony rather than clarity.
@@ -551,6 +629,7 @@ impl Harness {
         schema: Option<UpstreamSchema>,
         nonce: &str,
         provider_routes: bool,
+        hermes: Option<&HermesLaunch>,
     ) -> Result<LaunchPlan> {
         match self {
             Self::Claude => ClaudeRecipe::new(endpoint).plan(),
@@ -578,6 +657,10 @@ impl Harness {
                     nonce,
                     provider_routes,
                 ));
+            }
+            Self::Hermes => {
+                let hermes = hermes.context(error::NoHermesHomeSnafu)?;
+                return hermes.plan(endpoint, schema.unwrap_or(DEFAULT_HERMES_SCHEMA), nonce);
             }
         }
         .context(error::LaunchPlanSnafu)
@@ -690,6 +773,182 @@ fn gateway_plan(
     }
 }
 
+/// What a hermes launch needs beyond what every launch has.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HermesLaunch {
+    /// The `HERMES_HOME` the plan is written into and hermes runs in.
+    pub home: PathBuf,
+    /// The model hermes starts on, from `--model`.
+    pub model: Option<String>,
+    /// The credential hermes presents to the proxy, which forwards it. See
+    /// [`hermes_api_key`] for where it comes from.
+    pub api_key: Option<String>,
+}
+
+impl HermesLaunch {
+    /// The hermes capture home under `home`.
+    #[must_use]
+    pub fn default_home(home: &Path) -> PathBuf {
+        HERMES_HOME_DIR
+            .iter()
+            .fold(home.to_path_buf(), |path, part| path.join(part))
+    }
+
+    /// Whether the plan's files hold a secret and must be private.
+    #[must_use]
+    pub fn holds_secret(&self) -> bool {
+        self.api_key.is_some()
+    }
+
+    /// The recipe's plan, plus the per-launch nonce the plugin echoes.
+    ///
+    /// The recipe leaves the nonce to the consumer because it is the
+    /// consumer's proxy that validates it. The plugin reads it once at load
+    /// and deletes it from hermes's environment, as pi's extension does, so
+    /// hermes's own tools never inherit it.
+    ///
+    /// `api_mode` is stated for both schemas rather than left to hermes's
+    /// default for `custom`: the proxy fronts one wire format, and a config
+    /// that only implied it would follow hermes's default wherever it moved.
+    fn plan(
+        &self,
+        endpoint: ProxyEndpoint,
+        schema: UpstreamSchema,
+        nonce: &str,
+    ) -> Result<LaunchPlan> {
+        let mut recipe = HermesRecipe::new(&self.home, endpoint).with_api_mode(match schema {
+            UpstreamSchema::OpenAi => "chat_completions",
+            UpstreamSchema::Anthropic => "anthropic_messages",
+        });
+        if let Some(model) = &self.model {
+            recipe = recipe.with_model(model);
+        }
+        if let Some(api_key) = &self.api_key {
+            recipe = recipe.with_api_key(api_key);
+        }
+        let mut plan = recipe.plan().context(error::LaunchPlanSnafu)?;
+        plan.env
+            .push((GATEWAY_NONCE_ENV.to_owned(), nonce.to_owned()));
+        Ok(plan)
+    }
+}
+
+/// A hermes launch's hold on the home it runs in.
+///
+/// The capture home is one directory, and hermes reads its endpoint from a
+/// file in it, so two live launches cannot share it: the second would rewrite
+/// the first's `config.yaml` to point at the second proxy, then delete it at
+/// exit while the first hermes was still running. That is not exotic — hermes
+/// started from a shell tool inside a captured hermes session is exactly the
+/// nesting launch lineage exists for.
+///
+/// So the shared home is taken under an exclusive lock held for the launch,
+/// and a launch that finds it held runs in a private temporary home instead,
+/// removed at exit. That launch starts without the shared home's sessions and
+/// memories — the price of not corrupting a live one.
+#[derive(Debug)]
+pub enum HermesHomeClaim {
+    /// The persistent capture home, locked for this launch.
+    Shared {
+        /// The capture home.
+        home: PathBuf,
+        /// The open lock file; the lock is released when it closes.
+        _lock: std::fs::File,
+    },
+    /// A temporary home, because another live launch holds the shared one.
+    Private(tempfile::TempDir),
+}
+
+impl HermesHomeClaim {
+    /// The `HERMES_HOME` this launch runs in.
+    #[must_use]
+    pub fn home(&self) -> &Path {
+        match self {
+            Self::Shared { home, .. } => home,
+            Self::Private(dir) => dir.path(),
+        }
+    }
+}
+
+/// The lock file inside a hermes capture home.
+const HERMES_HOME_LOCK: &str = ".tapesctl-launch.lock";
+
+/// Claim `shared` for this launch, or a private home beside it if a live
+/// launch already holds it. See [`HermesHomeClaim`].
+pub fn claim_hermes_home(shared: &Path) -> std::io::Result<HermesHomeClaim> {
+    create_private_dir(shared)?;
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(shared.join(HERMES_HOME_LOCK))?;
+    if try_lock_exclusive(&lock)? {
+        return Ok(HermesHomeClaim::Shared {
+            home: shared.to_path_buf(),
+            _lock: lock,
+        });
+    }
+    let parent = shared.parent().unwrap_or(shared);
+    let private = tempfile::Builder::new()
+        .prefix("hermes-home-")
+        .tempdir_in(parent)?;
+    // As private as the shared home, which `create_private_dir` made `0o700`.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(private.path(), std::fs::Permissions::from_mode(0o700))?;
+    }
+    info!(
+        home = %private.path().display(),
+        "the hermes capture home is in use by another launch; using a private one",
+    );
+    Ok(HermesHomeClaim::Private(private))
+}
+
+/// Take a non-blocking exclusive advisory lock. `Ok(false)` when another
+/// process holds it.
+#[cfg(unix)]
+fn try_lock_exclusive(file: &std::fs::File) -> std::io::Result<bool> {
+    use std::os::fd::AsRawFd as _;
+    // SAFETY: `flock` takes a file descriptor and flags and touches no memory;
+    // the descriptor is valid for the borrow of `file`.
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if rc == 0 {
+        return Ok(true);
+    }
+    let err = std::io::Error::last_os_error();
+    if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
+        Ok(false)
+    } else {
+        Err(err)
+    }
+}
+
+/// Without `flock`, every launch takes the shared home, as before locking.
+#[cfg(not(unix))]
+fn try_lock_exclusive(_file: &std::fs::File) -> std::io::Result<bool> {
+    Ok(true)
+}
+
+/// The credential a hermes launch writes into its planned config.
+///
+/// hermes in a relocated home has no `.env` and no `auth.json`, and this
+/// client copies neither out of `~/.hermes`. What it has is the environment
+/// `tapesctl` was started in, and the conventional variable for the schema
+/// this capture fronts is the one a user already has set for that provider.
+/// Read from the process environment at the CLI boundary, through `lookup`
+/// so a test can say what the environment holds. A blank value is absent.
+pub fn hermes_api_key(
+    schema: UpstreamSchema,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Option<String> {
+    let name = match schema {
+        UpstreamSchema::OpenAi => "OPENAI_API_KEY",
+        UpstreamSchema::Anthropic => "ANTHROPIC_API_KEY",
+    };
+    lookup(name).filter(|value| !value.trim().is_empty())
+}
+
 /// Refuse to launch a harness whose capture plugin is not installed.
 ///
 /// The check is against the artifacts the *registry* declares, not a path
@@ -732,6 +991,11 @@ pub struct StartConfig {
     pub schema: Option<UpstreamSchema>,
     /// Arguments passed through to the harness verbatim.
     pub harness_args: Vec<String>,
+    /// The model a harness that takes `--model` starts on.
+    pub model: Option<String>,
+    /// The credential a hermes launch writes into its config. `None` for
+    /// every other harness, which authenticates itself.
+    pub hermes_api_key: Option<String>,
     /// Where forwarded LLM traffic goes.
     pub upstream: Url,
     /// Whether the launched extension labels each registration with its
@@ -761,6 +1025,19 @@ impl StartConfig {
         let harness = Harness::parse(&args.harness)?;
         let codex_auth = harness.codex_auth();
         let schema = resolve_schema(harness, args.schema.as_deref())?;
+        snafu::ensure!(
+            args.model.is_none() || harness.takes_model(),
+            error::ModelNotApplicableSnafu {
+                harness: harness.id(),
+            }
+        );
+        let hermes_api_key = (harness == Harness::Hermes)
+            .then(|| {
+                hermes_api_key(schema.unwrap_or(DEFAULT_HERMES_SCHEMA), |name| {
+                    std::env::var(name).ok()
+                })
+            })
+            .flatten();
         let ingest_url = args
             .ingest_url
             .as_deref()
@@ -780,6 +1057,8 @@ impl StartConfig {
             codex_auth,
             schema,
             harness_args: args.harness_args,
+            model: args.model,
+            hermes_api_key,
             provider_routes: harness.registers_several_providers() && args.upstream.is_none(),
             upstream: Url::parse(upstream).context(error::UpstreamUrlSnafu)?,
             ingest_url,
@@ -857,7 +1136,27 @@ pub async fn run(args: StartArgs) -> Result<()> {
     // from the OS RNG — a secret, not a tag, so it must never be logged and
     // never leave this process except through the launched environment.
     let gateway_nonce = uuid::Uuid::new_v4().to_string();
-    let endpoint = config.harness.endpoint_for(addr, config.codex_auth);
+    let endpoint = config
+        .harness
+        .endpoint_for(addr, config.codex_auth, config.schema);
+    // Held until the harness has exited and its files are removed: the claim
+    // is what keeps a second live hermes launch out of this one's home.
+    let (hermes, _hermes_claim) = match config.harness {
+        Harness::Hermes => {
+            let home = dirs::home_dir().context(error::NoHermesHomeSnafu)?;
+            let shared = HermesLaunch::default_home(&home);
+            let claim = claim_hermes_home(&shared).context(error::ConfigFileSnafu {
+                path: shared.clone(),
+            })?;
+            let launch = HermesLaunch {
+                home: claim.home().to_path_buf(),
+                model: config.model.clone(),
+                api_key: config.hermes_api_key.clone(),
+            };
+            (Some(launch), Some(claim))
+        }
+        _ => (None, None),
+    };
     let plan = config.harness.plan(
         endpoint.clone(),
         &provider_id,
@@ -865,7 +1164,15 @@ pub async fn run(args: StartArgs) -> Result<()> {
         config.schema,
         &gateway_nonce,
         config.provider_routes,
+        hermes.as_ref(),
     )?;
+
+    // This launch's place in a launch tree. The parent, if any, is read from
+    // the environment this process inherited — a harness captured by an outer
+    // `tapesctl start` exports its launch to every subprocess — and this
+    // launch's own id is exported to the harness below so a launch nested
+    // inside *it* can find it in turn. See [`lineage`].
+    let lineage = launch_lineage(config.harness);
 
     // Published once and read by two consumers: the attribution pipeline, and
     // the Codex anchor lane. A second watcher would be a second answer to
@@ -919,6 +1226,7 @@ pub async fn run(args: StartArgs) -> Result<()> {
         // by a route this command does not serve, so leaving it empty here
         // would only add a lane that always misses.
         desktop_sessions: None,
+        lineage: lineage.clone(),
     };
 
     let app = axum::Router::new()
@@ -949,13 +1257,20 @@ pub async fn run(args: StartArgs) -> Result<()> {
     let tailer = spawn_tailer(&config, tracker)?;
     let anchors = spawn_codex_anchor_lane(&config, codex_snapshot)?;
 
-    let written = materialise_config_files(&plan)?;
+    let written = materialise_config_files(
+        &plan,
+        hermes.as_ref().is_some_and(HermesLaunch::holds_secret),
+    )?;
 
     // The last thing this process writes to the terminal until the harness
     // gives it back.
     announce_capture();
 
-    let status = spawn_harness(&config, &plan, &launched_pid).await;
+    let launch_env = lineage
+        .as_ref()
+        .map(|lineage| lineage.context().child_env().to_vec())
+        .unwrap_or_default();
+    let status = spawn_harness(&config, &plan, &launch_env, &launched_pid).await;
 
     // Dying with the session: stop accepting, then clean up whatever the recipe
     // asked to have on disk. Cleanup is the consumer's job precisely because
@@ -963,6 +1278,10 @@ pub async fn run(args: StartArgs) -> Result<()> {
     let _ = shutdown_tx.send(());
     let _ = server.await;
     remove_config_files(&written);
+    // Nothing can be nested inside a harness that has exited.
+    if let Some(lineage) = &lineage {
+        lineage.finish();
+    }
 
     // The tailer is *awaited*, not aborted. Its shutdown pass is the
     // `PushReason::Exit` push that delivers the completed transcript set —
@@ -1174,15 +1493,23 @@ pub const NO_LAUNCHED_PID: i32 = 0;
 /// compares a request's peer against, so it has to be published while the
 /// process is running, not returned after it exits. Stdio is inherited either
 /// way, which is what keeps the harness's TUI attached to the terminal.
+///
+/// `launch_env` is applied after the plan's environment, so the lineage
+/// variables always name this launch: a parent's values inherited from this
+/// process's own environment are overwritten, never passed through.
 async fn spawn_harness(
     config: &StartConfig,
     plan: &LaunchPlan,
+    launch_env: &[(&'static str, String)],
     launched_pid: &AtomicI32,
 ) -> Result<std::process::ExitStatus> {
     let mut command = tokio::process::Command::new(config.harness.program());
     command.args(&plan.args);
     command.args(&config.harness_args);
     for (key, value) in &plan.env {
+        command.env(key, value);
+    }
+    for (key, value) in launch_env {
         command.env(key, value);
     }
     let mut child = command.spawn().context(error::SpawnHarnessSnafu {
@@ -1198,20 +1525,87 @@ async fn spawn_harness(
     })
 }
 
-fn materialise_config_files(plan: &LaunchPlan) -> Result<Vec<PathBuf>> {
+/// The lineage for a launch of `harness`, minted here and read from this
+/// process's environment.
+///
+/// `None` only without a home directory, where there is nowhere to publish a
+/// record. Lineage is an enrichment, so its absence must not cost the launch:
+/// the session is captured exactly as before, just without a parent.
+fn launch_lineage(harness: Harness) -> Option<Arc<LaunchLineage>> {
+    let Some(home) = dirs::home_dir() else {
+        warn!("no home directory; this launch records no lineage");
+        return None;
+    };
+    let context = LaunchContext::from_env(uuid::Uuid::new_v4().to_string(), harness.id());
+    if let Some(parent) = &context.parent {
+        info!(
+            parent_launch = %parent.launch_id,
+            parent_harness = %parent.harness_id,
+            "launched inside another capture",
+        );
+    }
+    Some(Arc::new(LaunchLineage::new(
+        context,
+        LaunchRegistry::new(LaunchRegistry::default_dir(&home)),
+    )))
+}
+
+/// Write the plan's files. `private` makes each one `0o600`, which a plan
+/// carrying a credential needs.
+///
+/// A private file is truncated and narrowed *before* its contents are
+/// written, so a file left behind by an earlier launch with a wider mode
+/// never holds the secret at that mode, even briefly.
+fn materialise_config_files(plan: &LaunchPlan, private: bool) -> Result<Vec<PathBuf>> {
     let mut written = Vec::new();
     for file in &plan.config_files {
-        if let Some(parent) = file.path.parent() {
-            std::fs::create_dir_all(parent).context(error::ConfigFileSnafu {
-                path: file.path.clone(),
-            })?;
-        }
-        std::fs::write(&file.path, &file.contents).context(error::ConfigFileSnafu {
+        let context = || error::ConfigFileSnafu {
             path: file.path.clone(),
-        })?;
+        };
+        if let Some(parent) = file.path.parent() {
+            std::fs::create_dir_all(parent).context(context())?;
+        }
+        if private {
+            write_private(&file.path, file.contents.as_bytes()).context(context())?;
+        } else {
+            std::fs::write(&file.path, &file.contents).context(context())?;
+        }
         written.push(file.path.clone());
     }
     Ok(written)
+}
+
+fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+        options.mode(0o600);
+        let mut file = options.open(path)?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        file.write_all(contents)
+    }
+    #[cfg(not(unix))]
+    {
+        options.open(path)?.write_all(contents)
+    }
+}
+
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(dir)
+    }
 }
 
 fn remove_config_files(paths: &[PathBuf]) {
@@ -1248,6 +1642,7 @@ mod tests {
             ingest_url: Some("http://127.0.0.1:8090".to_owned()),
             upstream: None,
             schema: None,
+            model: None,
             web_url: None,
             org_id: None,
             auth_subject: None,
@@ -1292,12 +1687,12 @@ mod tests {
         // Codex appends `/responses`, so an API-key endpoint must already end
         // at the `/v1` segment for OpenAI's `/v1/responses` route to resolve.
         assert_eq!(
-            Harness::Claude.endpoint_for(addr(), None).as_str(),
+            Harness::Claude.endpoint_for(addr(), None, None).as_str(),
             "http://127.0.0.1:51000",
         );
         assert_eq!(
             Harness::Codex
-                .endpoint_for(addr(), Some(CodexAuth::ApiKey))
+                .endpoint_for(addr(), Some(CodexAuth::ApiKey), None)
                 .as_str(),
             "http://127.0.0.1:51000/v1",
         );
@@ -1309,7 +1704,7 @@ mod tests {
         // codex to a route that does not exist.
         assert_eq!(
             Harness::Codex
-                .endpoint_for(addr(), Some(CodexAuth::ChatGpt))
+                .endpoint_for(addr(), Some(CodexAuth::ChatGpt), None)
                 .as_str(),
             "http://127.0.0.1:51000",
         );
@@ -1333,12 +1728,13 @@ mod tests {
     fn the_claude_plan_points_the_harness_at_the_proxy() {
         let plan = Harness::Claude
             .plan(
-                Harness::Claude.endpoint_for(addr(), None),
+                Harness::Claude.endpoint_for(addr(), None, None),
                 "unused",
                 None,
                 None,
                 "unused-nonce",
                 false,
+                None,
             )
             .unwrap();
         let env = plan_env(&plan);
@@ -1360,12 +1756,13 @@ mod tests {
         let provider_id = format!("{CODEX_PROVIDER_PREFIX}-abc");
         let plan = Harness::Codex
             .plan(
-                Harness::Codex.endpoint_for(addr(), Some(CodexAuth::ApiKey)),
+                Harness::Codex.endpoint_for(addr(), Some(CodexAuth::ApiKey), None),
                 &provider_id,
                 Some(CodexAuth::ApiKey),
                 None,
                 "unused-nonce",
                 false,
+                None,
             )
             .unwrap();
         let joined = plan.args.join(" ");
@@ -1462,7 +1859,10 @@ mod tests {
         let message = format!("{err}");
         assert!(message.contains("codex-app"), "got: {message}");
         // And the message advertises exactly what `start` will launch.
-        assert!(message.contains("claude, codex, pi"), "got: {message}");
+        assert!(
+            message.contains("claude, codex, pi, hermes"),
+            "got: {message}"
+        );
     }
 
     #[test]
@@ -1471,12 +1871,13 @@ mod tests {
         // proxy is the environment its already-installed extension reads.
         let plan = Harness::Pi
             .plan(
-                Harness::Pi.endpoint_for(addr(), None),
+                Harness::Pi.endpoint_for(addr(), None, None),
                 "unused",
                 None,
                 Some(UpstreamSchema::Anthropic),
                 "per-launch-secret",
                 false,
+                None,
             )
             .unwrap();
         let env = plan_env(&plan);
@@ -1509,7 +1910,7 @@ mod tests {
         // pi's providers each append their own full path, so a `/v1` here would
         // land every request one segment deep.
         assert_eq!(
-            Harness::Pi.endpoint_for(addr(), None).as_str(),
+            Harness::Pi.endpoint_for(addr(), None, None).as_str(),
             "http://127.0.0.1:51000",
         );
     }
@@ -1608,12 +2009,13 @@ mod tests {
     fn the_pi_plan_asks_the_extension_to_label_only_when_this_launch_routes() {
         let plan = Harness::Pi
             .plan(
-                Harness::Pi.endpoint_for(addr(), None),
+                Harness::Pi.endpoint_for(addr(), None, None),
                 "unused",
                 None,
                 Some(UpstreamSchema::Anthropic),
                 "per-launch-secret",
                 true,
+                None,
             )
             .unwrap();
         let env = plan_env(&plan);
@@ -1630,12 +2032,13 @@ mod tests {
 
         let unrouted = Harness::Pi
             .plan(
-                Harness::Pi.endpoint_for(addr(), None),
+                Harness::Pi.endpoint_for(addr(), None, None),
                 "unused",
                 None,
                 Some(UpstreamSchema::Anthropic),
                 "per-launch-secret",
                 false,
+                None,
             )
             .unwrap();
         assert!(!plan_env(&unrouted).contains_key(GATEWAY_PROVIDER_ROUTES_ENV));
@@ -1778,12 +2181,13 @@ mod tests {
         // names, and nothing else points opencode at this proxy.
         let plan = Harness::OpenCode
             .plan(
-                Harness::OpenCode.endpoint_for(addr(), None),
+                Harness::OpenCode.endpoint_for(addr(), None, None),
                 "unused",
                 None,
                 Some(UpstreamSchema::Anthropic),
                 "per-launch-secret",
                 false,
+                None,
             )
             .unwrap();
         let env = plan_env(&plan);
@@ -1813,7 +2217,7 @@ mod tests {
         // here — so GATEWAY_URL_ENV means the same thing for opencode as for pi.
         // A suffix here would double it.
         assert_eq!(
-            Harness::OpenCode.endpoint_for(addr(), None).as_str(),
+            Harness::OpenCode.endpoint_for(addr(), None, None).as_str(),
             "http://127.0.0.1:51000",
         );
     }
@@ -1917,6 +2321,290 @@ mod tests {
         assert_eq!(
             registry::find("opencode").map(tapes_harnesses::harness::Harness::transcripts),
             Some(registry::TranscriptSource::None),
+        );
+    }
+
+    // --- hermes ---------------------------------------------------------------
+
+    fn hermes_launch(home: &Path, api_key: Option<&str>) -> HermesLaunch {
+        HermesLaunch {
+            home: home.to_path_buf(),
+            model: Some("mock-model".to_owned()),
+            api_key: api_key.map(str::to_owned),
+        }
+    }
+
+    fn hermes_plan(launch: &HermesLaunch, schema: UpstreamSchema) -> LaunchPlan {
+        Harness::Hermes
+            .plan(
+                Harness::Hermes.endpoint_for(addr(), None, Some(schema)),
+                "unused",
+                None,
+                Some(schema),
+                "per-launch-secret",
+                false,
+                Some(launch),
+            )
+            .unwrap()
+    }
+
+    fn hermes_config(plan: &LaunchPlan) -> serde_json::Value {
+        serde_json::from_str(&plan.config_files[0].contents).unwrap()
+    }
+
+    #[test]
+    fn hermes_is_offered_and_resolves_through_the_registry_alias() {
+        assert!(SUPPORTED.contains(&Harness::Hermes));
+        assert_eq!(Harness::parse("hermes").unwrap(), Harness::Hermes);
+        assert_eq!(Harness::parse("hermes-agent").unwrap(), Harness::Hermes);
+        assert_eq!(Harness::Hermes.id(), "hermes");
+        assert_eq!(Harness::Hermes.program(), "hermes");
+        assert!(Harness::Hermes.is_self_attributing());
+    }
+
+    #[test]
+    fn the_hermes_plan_relocates_its_home_and_carries_the_nonce() {
+        let plan = hermes_plan(
+            &hermes_launch(Path::new("/h/.tapes/hermes-home"), None),
+            UpstreamSchema::OpenAi,
+        );
+        let env = plan_env(&plan);
+        assert_eq!(
+            env.get("HERMES_HOME").map(String::as_str),
+            Some("/h/.tapes/hermes-home")
+        );
+        assert_eq!(
+            env.get(GATEWAY_URL_ENV).map(String::as_str),
+            Some("http://127.0.0.1:51000/v1"),
+        );
+        // The secret the proxy demands echoed in `x-tapes-gateway-nonce`.
+        // Without it every hermes envelope would be refused and every turn
+        // would file under `unknown`.
+        assert_eq!(
+            env.get(GATEWAY_NONCE_ENV).map(String::as_str),
+            Some("per-launch-secret"),
+        );
+        assert!(plan.args.is_empty());
+    }
+
+    #[test]
+    fn the_hermes_plan_writes_its_config_and_plugin_under_the_capture_home() {
+        let plan = hermes_plan(
+            &hermes_launch(Path::new("/h/.tapes/hermes-home"), None),
+            UpstreamSchema::OpenAi,
+        );
+        let paths: Vec<_> = plan.config_files.iter().map(|f| f.path.clone()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/h/.tapes/hermes-home/config.yaml"),
+                PathBuf::from("/h/.tapes/hermes-home/plugins/tapes-gateway/__init__.py"),
+                PathBuf::from("/h/.tapes/hermes-home/plugins/tapes-gateway/plugin.yaml"),
+            ]
+        );
+        let config = hermes_config(&plan);
+        assert_eq!(config["model"]["provider"], "custom");
+        assert_eq!(config["model"]["base_url"], "http://127.0.0.1:51000/v1");
+        assert_eq!(config["model"]["default"], "mock-model");
+        assert_eq!(config["model"]["api_mode"], "chat_completions");
+        assert!(config["model"].get("api_key").is_none());
+    }
+
+    #[test]
+    fn the_hermes_anthropic_schema_takes_a_bare_endpoint_and_the_messages_mode() {
+        let plan = hermes_plan(
+            &hermes_launch(Path::new("/h"), None),
+            UpstreamSchema::Anthropic,
+        );
+        let config = hermes_config(&plan);
+        assert_eq!(config["model"]["base_url"], "http://127.0.0.1:51000");
+        assert_eq!(config["model"]["api_mode"], "anthropic_messages");
+    }
+
+    #[test]
+    fn the_hermes_capture_home_is_tapesctl_state_not_the_users_hermes_home() {
+        let home = HermesLaunch::default_home(Path::new("/home/u"));
+        assert_eq!(home, Path::new("/home/u/.tapes/hermes-home"));
+        assert!(!home.starts_with("/home/u/.hermes"));
+    }
+
+    #[test]
+    fn hermes_needs_nothing_installed_because_its_plan_carries_the_plugin() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(Harness::Hermes.required_plugin_artifacts().is_empty());
+        ensure_plugin_installed(Harness::Hermes, home.path()).unwrap();
+    }
+
+    #[test]
+    fn hermes_takes_a_schema_and_defaults_to_openai() {
+        let config = StartConfig::resolve(args("hermes")).unwrap();
+        assert_eq!(config.schema, Some(UpstreamSchema::OpenAi));
+        assert_eq!(config.upstream.as_str(), "https://api.openai.com/");
+        assert_eq!(config.harness.provider(config.schema), "openai");
+        assert!(!config.provider_routes);
+
+        let mut anthropic = args("hermes");
+        anthropic.schema = Some("anthropic".to_owned());
+        let config = StartConfig::resolve(anthropic).unwrap();
+        assert_eq!(config.upstream.as_str(), "https://api.anthropic.com/");
+        assert_eq!(config.harness.provider(config.schema), "anthropic");
+    }
+
+    #[test]
+    fn model_is_accepted_for_hermes_and_refused_elsewhere() {
+        let mut hermes = args("hermes");
+        hermes.model = Some("hermes-4".to_owned());
+        assert_eq!(
+            StartConfig::resolve(hermes).unwrap().model.as_deref(),
+            Some("hermes-4")
+        );
+        for name in ["claude", "codex", "pi"] {
+            let mut other = args(name);
+            other.model = Some("m".to_owned());
+            let message = format!("{}", StartConfig::resolve(other).unwrap_err());
+            assert!(message.contains("--model does not apply"), "got: {message}");
+        }
+    }
+
+    #[test]
+    fn the_hermes_key_is_the_schemas_conventional_variable_and_blank_is_absent() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(k, _)| *k == name)
+                    .map(|(_, v)| (*v).to_owned())
+            }
+        };
+        let both = &[("OPENAI_API_KEY", "sk-o"), ("ANTHROPIC_API_KEY", "sk-a")];
+        assert_eq!(
+            hermes_api_key(UpstreamSchema::OpenAi, env(both)).as_deref(),
+            Some("sk-o")
+        );
+        assert_eq!(
+            hermes_api_key(UpstreamSchema::Anthropic, env(both)).as_deref(),
+            Some("sk-a")
+        );
+        assert_eq!(
+            hermes_api_key(UpstreamSchema::OpenAi, env(&[("OPENAI_API_KEY", "  ")])),
+            None
+        );
+        assert_eq!(hermes_api_key(UpstreamSchema::OpenAi, env(&[])), None);
+    }
+
+    #[test]
+    fn a_hermes_plan_with_a_key_carries_it_and_is_marked_secret() {
+        let launch = hermes_launch(Path::new("/h"), Some("sk-not-real"));
+        assert!(launch.holds_secret());
+        assert!(!hermes_launch(Path::new("/h"), None).holds_secret());
+        let config = hermes_config(&hermes_plan(&launch, UpstreamSchema::OpenAi));
+        assert_eq!(config["model"]["api_key"], "sk-not-real");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_secret_plan_is_materialised_private_even_over_a_wider_leftover() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = tempfile::tempdir().unwrap();
+        let launch = hermes_launch(root.path(), Some("sk-not-real"));
+        let plan = hermes_plan(&launch, UpstreamSchema::OpenAi);
+        // A config an earlier launch left world-readable.
+        std::fs::write(&plan.config_files[0].path, "old").unwrap();
+        std::fs::set_permissions(
+            &plan.config_files[0].path,
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+
+        let written = materialise_config_files(&plan, launch.holds_secret()).unwrap();
+        assert_eq!(written.len(), 3);
+        for path in &written {
+            let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "{} is {mode:o}", path.display());
+        }
+        assert!(
+            std::fs::read_to_string(&written[0])
+                .unwrap()
+                .contains("sk-not-real")
+        );
+        remove_config_files(&written);
+        assert!(written.iter().all(|path| !path.exists()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_plan_without_a_secret_keeps_ordinary_modes() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = tempfile::tempdir().unwrap();
+        let launch = hermes_launch(root.path(), None);
+        let plan = hermes_plan(&launch, UpstreamSchema::OpenAi);
+        let written = materialise_config_files(&plan, launch.holds_secret()).unwrap();
+        let mode = std::fs::metadata(&written[0]).unwrap().permissions().mode() & 0o777;
+        assert_ne!(mode, 0o600, "only a plan holding a key is narrowed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_capture_home_is_created_private() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = tempfile::tempdir().unwrap();
+        let home = HermesLaunch::default_home(root.path());
+        create_private_dir(&home).unwrap();
+        let mode = std::fs::metadata(&home).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+    }
+
+    #[test]
+    fn launching_hermes_without_a_home_is_refused() {
+        let err = Harness::Hermes
+            .plan(
+                Harness::Hermes.endpoint_for(addr(), None, None),
+                "unused",
+                None,
+                None,
+                "n",
+                false,
+                None,
+            )
+            .unwrap_err();
+        assert!(format!("{err}").contains("hermes"), "got: {err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_second_live_hermes_launch_gets_a_private_home() {
+        let root = tempfile::tempdir().unwrap();
+        let shared = HermesLaunch::default_home(root.path());
+
+        let first = claim_hermes_home(&shared).unwrap();
+        assert_eq!(first.home(), shared);
+        assert!(matches!(first, HermesHomeClaim::Shared { .. }));
+
+        let second = claim_hermes_home(&shared).unwrap();
+        assert_ne!(
+            second.home(),
+            shared,
+            "a live launch's home must not be shared"
+        );
+        assert!(second.home().starts_with(root.path().join(".tapes")));
+        let private = second.home().to_path_buf();
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(&private).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700);
+        }
+        drop(second);
+        assert!(
+            !private.exists(),
+            "a private home is removed with its launch"
+        );
+
+        drop(first);
+        let third = claim_hermes_home(&shared).unwrap();
+        assert_eq!(
+            third.home(),
+            shared,
+            "the shared home is free once its launch ends"
         );
     }
 }

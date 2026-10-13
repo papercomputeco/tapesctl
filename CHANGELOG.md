@@ -5,7 +5,33 @@ break, and every breaking change is recorded here plainly.
 
 ## Unreleased
 
+### Added
+
+- `tapesctl start hermes` (alias `hermes-agent`). hermes runs in a capture
+  home at `~/.tapes/hermes-home` — persistent, so its sessions, memories and
+  skills survive between captured launches, and never your own `~/.hermes`,
+  from which nothing is copied. Each launch writes a `config.yaml` there whose
+  `custom` provider points at the capture proxy, plus the capture plugin, and
+  removes both at exit; a second hermes launch while one is live gets a
+  private temporary home instead. `--schema openai` (the default, chat completions) or
+  `--schema anthropic` picks the wire format; the new `--model` flag names the
+  model hermes starts on and applies to hermes only. When `OPENAI_API_KEY` (or
+  `ANTHROPIC_API_KEY` for `--schema anthropic`) is set, it is written into that
+  config, which is then created `0600`. hermes's own title-generation and
+  compression calls do not pass through its plugin, so they are captured but
+  filed as `unknown`.
+- Launch lineage. Every `start` exports `TAPES_LAUNCH_ID` and
+  `TAPES_LAUNCH_HARNESS_ID` to the harness and records the session that launch
+  is running in `~/.tapes/launches/<launch-id>.json` while it runs. A `start`
+  run from inside a captured session finds that record and stamps the outer
+  session on its own turns as `x-tapes-parent-harness-session-id` and
+  `x-tapes-parent-harness-id`. The parent reaches the ingest row only when both
+  launches are the same harness, because the ingest envelope cannot yet say
+  which harness a parent belongs to.
+
 ### Changed
+
+- `tapes-capture` 0.2 and `tapes-harnesses` 0.2.
 
 - `tapes-client` 0.6.0, the release that follows tapes v0.49.0's paging of
   the composite, trace and raw-turn reads. `sessions traces`, `sessions

@@ -22,6 +22,10 @@
 //!
 //! * `parent_harness_session_id` must be **omitted**, never sent as `""` — the
 //!   server rejects the empty string rather than treating it as absent.
+//!   It is also omitted when the parent belongs to a *different* harness: the
+//!   server resolves it inside the child's own harness namespace and
+//!   placeholder-inserts a parent it cannot find, so a cross-harness parent
+//!   would mint a phantom session rather than link a real one.
 //! * `org_id` and `auth_subject` carry no `omitempty` on the Go side, so they
 //!   are always emitted, empty string included.
 //! * `raw_response` is a Go `[]byte`, which is standard **padded** base64 in
@@ -190,7 +194,9 @@ impl SessionEnvelope {
             cwd: attribution.cwd.clone(),
             name: attribution.name.clone(),
             // Filtered rather than cloned: an empty parent id is a 400, and
-            // the only safe representation of "no parent" is omission.
+            // the only safe representation of "no parent" is omission — which
+            // is also the only safe one for a parent in another harness. See
+            // the module docs.
             parent_harness_session_id: parent_session_id_of(attribution),
             harness_metadata: (!attribution.metadata.is_empty())
                 .then(|| attribution.metadata.clone()),
@@ -199,6 +205,19 @@ impl SessionEnvelope {
 }
 
 fn parent_session_id_of(attribution: &TapesAttribution) -> Option<String> {
+    // The ingest envelope carries no parent harness, and the server reads a
+    // parent session id as one of the child's own harness. Until the contract
+    // can say otherwise, a parent that is known to be another harness's is
+    // left off the row; it still travels on the outbound
+    // `x-tapes-parent-harness-*` headers, which can say which harness it is.
+    let cross_harness = attribution
+        .parent_harness_id
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|parent| !parent.is_empty() && parent != attribution.harness_id);
+    if cross_harness {
+        return None;
+    }
     attribution
         .parent_sid
         .as_deref()
@@ -316,6 +335,31 @@ mod tests {
             "local:test",
         ));
         assert_eq!(got["parent_harness_session_id"], "sid-parent");
+    }
+
+    #[test]
+    fn a_parent_in_the_same_harness_is_carried() {
+        let attribution =
+            attribution_with_parent(Some("sid-parent")).with_parent_harness_id("claude");
+        let got = json_of(&SessionEnvelope::from_attribution(
+            &attribution,
+            "",
+            "local:test",
+        ));
+        assert_eq!(got["parent_harness_session_id"], "sid-parent");
+    }
+
+    #[test]
+    fn a_parent_in_another_harness_is_left_off_the_row() {
+        // The server would look `sid-parent` up as a *claude* session and
+        // placeholder-insert one when it found none.
+        let attribution = attribution_with_parent(Some("sid-parent")).with_parent_harness_id("pi");
+        let got = json_of(&SessionEnvelope::from_attribution(
+            &attribution,
+            "",
+            "local:test",
+        ));
+        assert!(got.get("parent_harness_session_id").is_none(), "got: {got}");
     }
 
     #[test]

@@ -148,6 +148,7 @@ There are three capture mechanisms, and a harness is eligible for exactly one.
 | `claude` | endpoint redirect (`ANTHROPIC_BASE_URL`) | none | yes | supported |
 | `codex` | argv provider overrides | none | yes | supported |
 | `pi` | installed extension | **yes** — `plugin install pi` | no | supported |
+| `hermes` | planned `HERMES_HOME` (config + plugin) | none | no | supported |
 | `codex-app` | lifecycle hooks | **yes** — `plugin install codex-app` | no | use `capture` |
 | `opencode` | installed plugin | `plugin install opencode` | no | **withdrawn** |
 
@@ -194,6 +195,46 @@ tapesctl start pi --ingest-url http://localhost:8082 -- --provider anthropic --m
 Pass both or neither: pi only honours them as a pair, and given one it falls
 back to a saved default that may be a provider this capture does not front — so
 the session runs and records nothing.
+
+### Capturing hermes
+
+hermes keeps its endpoint in `$HERMES_HOME/config.yaml`, so `start hermes`
+runs it in a home of its own rather than redirecting a flag:
+
+```bash
+tapesctl start hermes --ingest-url http://localhost:8082 --model <model-id>
+```
+
+- The home is `~/.tapes/hermes-home`, created `0700`. It persists between
+  launches, so hermes's sessions, memories, and skills carry over from one
+  captured run to the next — but it is not your `~/.hermes`, and nothing is
+  copied from there: no `.env`, no `auth.json`, no history.
+- One live launch holds that home at a time. A second hermes launch while the
+  first is running — including hermes started from inside a captured hermes
+  session — runs in a private temporary home under `~/.tapes` instead, removed
+  at exit, because sharing would rewrite the running hermes's endpoint.
+- Each launch writes `config.yaml` (a `custom` provider at the capture proxy,
+  no other provider and no fallback) and the capture plugin into it, and
+  removes them at exit. Nothing has to be installed first.
+- The credential is the one your environment already holds for the schema:
+  `OPENAI_API_KEY` for `--schema openai` (the default) or `ANTHROPIC_API_KEY`
+  for `--schema anthropic`. When one is set it is written into `config.yaml`,
+  and every file the launch writes is then created `0600`. With neither, hermes
+  sends `no-key-required`, which is right only for an `--upstream` that
+  authenticates on its own.
+- `--model` is written to `model.default`. Without it hermes asks the endpoint's
+  `/v1/models` for a default, which the upstream may or may not answer.
+
+hermes's plugin stamps the envelope and echoes the launch nonce exactly as pi's
+extension does, so its turns are filed under the session hermes names. Two
+things escape that:
+
+- **Auxiliary calls are filed as `unknown`.** hermes's title generation and
+  compression summaries do not run through the request middleware the plugin
+  hooks, so they reach the proxy with no envelope. They are captured; they are
+  just not attributable.
+- **Switching provider inside hermes leaves capture.** Only the `custom`
+  provider points at the proxy.
 
 ### Capturing an app that launches itself
 
@@ -261,6 +302,33 @@ That is an attribution bug being reported as one, rather than as silence. It is
 distinct from `tapesctl: no turns were captured`, which means the wire lane saw
 nothing eligible — a harness launched and quit without calling a model.
 
+## Launch lineage
+
+A captured harness can start another one — a shell tool in a Claude session
+runs `tapesctl start hermes`. Every `start` exports `TAPES_LAUNCH_ID` and
+`TAPES_LAUNCH_HARNESS_ID` to its harness, and a `start` that finds them in its
+own environment knows which launch it is running inside.
+
+To turn that launch into a session, each launch writes
+`~/.tapes/launches/<launch-id>.json` (`0600`, in a `0700` directory) naming the
+session its harness is currently using, rewrites it when that changes, and
+deletes it when the harness exits. A file rather than a socket because every
+`start` has its own short-lived proxy and there is no daemon to ask; the file
+needs no listener and cannot stall the outer capture.
+
+A nested launch reads its parent's record when its first attributed turn
+lands and stamps that session on its turns as
+`x-tapes-parent-harness-session-id`, with `x-tapes-parent-harness-id` naming
+the parent's harness. A turn whose own envelope already names a parent — a
+hermes or Codex subagent — keeps its own. The ingest row carries the parent
+only when parent and child are the same harness: the ingest envelope has no
+field for a parent's harness, and the server would look a cross-harness
+parent up as one of the child's own.
+
+None of this is a trust signal: the variables and the record are readable and
+forgeable by anything running as you. A forged lineage can only name a wrong
+parent; it never changes which session a turn is filed under.
+
 ## Session ids
 
 **The session id `start` prints is not the id read commands take.** This is a
@@ -307,6 +375,10 @@ If a subagent's turn lands ahead of the main thread's, the printed id names the
 sub-thread. Listing sessions is reliable where the printed line is not.
 
 ## What a capture writes locally
+
+Beyond the log file below: `~/.tapes/launches/<launch-id>.json` while a
+harness runs (see [Launch lineage](#launch-lineage)), and for hermes the
+capture home `~/.tapes/hermes-home` (see [Capturing hermes](#capturing-hermes)).
 
 While a harness holds the terminal, nothing may reach stdout or stderr — a
 stray log line lands in the middle of a TUI frame. So `start` at default

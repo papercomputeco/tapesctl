@@ -73,6 +73,24 @@ pub enum Error {
         provider: &'static str,
     },
 
+    /// `--model` was passed for a harness that chooses its own model.
+    ///
+    /// Refused rather than ignored, for `--schema`'s reason: a flag that does
+    /// nothing reads exactly like one that worked.
+    #[snafu(display(
+        "--model does not apply to {harness}; pass the harness's own model flag \
+         after `--` instead (it is for a harness whose provider config tapesctl \
+         writes, such as hermes)"
+    ))]
+    ModelNotApplicable {
+        /// The harness being launched.
+        harness: &'static str,
+    },
+
+    /// No home directory, so the hermes capture home cannot be placed.
+    #[snafu(display("could not locate a home directory for the hermes capture home"))]
+    NoHermesHome,
+
     /// A harness whose capture needs an in-harness plugin was launched before
     /// that plugin was installed.
     ///

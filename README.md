@@ -99,7 +99,7 @@ forwarded to its own provider API by default — and the proxy dies with it.
 tapesctl start claude --ingest-url http://localhost:8082
 ```
 
-The supported harnesses are `claude`, `codex`, and `pi`. Anything after the
+The supported harnesses are `claude`, `codex`, `pi`, and `hermes`. Anything after the
 harness name is passed through verbatim, so your usual flags still work:
 
 ```bash

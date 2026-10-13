@@ -210,6 +210,16 @@ pub struct ProxyState {
     /// from "captured turns and could not say whose they were" — and keeps it
     /// from claiming either while a capture is still running.
     pub tally: Arc<crate::start::tally::CaptureTally>,
+    /// This launch's lineage, when the proxy fronts a launched harness.
+    ///
+    /// Two jobs, both best-effort. Every attributed session is published as
+    /// this launch's live one, so a `tapesctl start` run from inside the
+    /// harness can find the session it runs inside. And when this launch is
+    /// itself nested, a turn whose own envelope names no parent gains the
+    /// outer launch's session as one. See [`super::lineage`].
+    ///
+    /// `None` under `tapesctl capture`, which launches nothing.
+    pub lineage: Option<Arc<super::lineage::LaunchLineage>>,
 }
 
 /// Axum fallback handler — every method and path forwards through here.
@@ -386,6 +396,25 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
     let envelope_attribution = desktop
         .or_else(|| trusted_inbound_envelope(&state, peer, &parts.headers))
         .or_else(|| attributed.envelope());
+
+    // Launch lineage, after attribution has decided whose turn this is and
+    // never instead of it: the session is published as this launch's live
+    // one, and a nested launch's turn that names no parent of its own gains
+    // the session the outer launch was running.
+    let (envelope_attribution, lineage_parent) = match (&state.lineage, envelope_attribution) {
+        (Some(lineage), Some(attribution)) => {
+            lineage.observe(&attribution);
+            let (attribution, added) = lineage.apply(attribution);
+            let parent = added.then(|| {
+                (
+                    attribution.parent_sid.clone().unwrap_or_default(),
+                    attribution.parent_harness_id.clone(),
+                )
+            });
+            (Some(attribution), parent)
+        }
+        (_, attribution) => (attribution, None),
+    };
     let session = envelope_attribution
         .as_ref()
         .map(|a| SessionEnvelope::from_attribution(a, &state.org_id, &state.auth_subject));
@@ -409,6 +438,9 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
         _ => attributed
             .stamp(&mut out_headers)
             .context(error::EnvelopeSnafu)?,
+    }
+    if let Some((parent_session, parent_harness)) = lineage_parent {
+        stamp_lineage_parent(&mut out_headers, &parent_session, parent_harness.as_deref());
     }
 
     let thread_id = envelope::thread_id(&parts.headers).map(str::to_owned);
@@ -640,6 +672,28 @@ fn trusted_inbound_envelope(
          harness; filing the turn as unattributed",
     );
     None
+}
+
+/// Add a launch-lineage parent to an outbound envelope that names none.
+///
+/// Two headers rather than a re-stamp of the whole envelope, because the
+/// envelope already on the request is the one attribution chose — the
+/// pipeline's, or a self-attributing harness's own, which carries encoded
+/// fields this process never decodes. Only the parent is new. The parent
+/// harness rides on the parent session's success, as the crate's producer
+/// does: a harness id beside no session id describes nothing.
+fn stamp_lineage_parent(
+    headers: &mut HeaderMap,
+    parent_session: &str,
+    parent_harness: Option<&str>,
+) {
+    let Ok(session) = http::HeaderValue::from_str(parent_session) else {
+        return;
+    };
+    headers.insert(envelope::X_TAPES_PARENT_HARNESS_SESSION_ID, session);
+    if let Some(harness) = parent_harness.and_then(|h| http::HeaderValue::from_str(h).ok()) {
+        headers.insert(envelope::X_TAPES_PARENT_HARNESS_ID, harness);
+    }
 }
 
 fn header_string(headers: &HeaderMap, name: http::header::HeaderName) -> Option<String> {
