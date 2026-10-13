@@ -115,11 +115,16 @@ components:
             HarnessID == "unknown"), ingest derives a synthetic id from
             the captured turn's Merkle root prefix.
           - ParentHarnessSessionID: fork-lineage hint, resolved server-side
-            to the parent's `sessions.id` within this envelope's harness
-            namespace. Parent and child are assumed to share a harness_id;
-            cross-harness forks are not supported (the envelope carries no
-            parent harness_id). When the parent's first turn hasn't landed
-            yet, ingest placeholder-inserts the parent so the FK can be set.
+            to the parent's `sessions.id` within the parent's harness
+            namespace (see ParentHarnessIDOrChild). When the parent's first
+            turn hasn't landed yet, ingest placeholder-inserts the parent so
+            the FK can be set.
+          - ParentHarnessID: the parent session's harness_id, set when the
+            parent ran under a different harness than this envelope's (a
+            claude session that launched a codex child). Absent means the
+            parent shares HarnessID. Verbatim, no closed list — the same rule
+            as HarnessID — and meaningful only beside ParentHarnessSessionID;
+            on its own it names no session and is ignored for linkage.
           - HarnessMetadata: arbitrary JSON object merged into the
             `sessions.harness_metadata` column last-write-wins per key.
       properties:
@@ -137,6 +142,8 @@ components:
         name:
           type: string
         org_id:
+          type: string
+        parent_harness_id:
           type: string
         parent_harness_session_id:
           type: string
@@ -198,9 +205,10 @@ components:
       description: |-
         TurnMeta mirrors the capture adapter's meta block (tapes-extproc
         TurnMeta). Every field is optional; adapters that predate a field
-        simply omit it. Ingest only reads RequestID directly (raw-turn
-        dedup) — the rest ride along verbatim in the raw layer and become
-        queryable post-derive.
+        simply omit it. Ingest reads the two request IDs and ThreadID for
+        asynchronous processing; the full block rides along verbatim in the raw
+        layer and becomes queryable post-derive. RequestID is Paper's canonical attempt ID;
+        UpstreamRequestID, when present, is issued independently by the provider.
       properties:
         captured_at:
           description: |-
@@ -254,6 +262,8 @@ components:
             Ingest parses it here so a server-side reduction can date itself
             from the same source the deriver uses, rather than a second,
             silently different clock.
+          type: string
+        upstream_request_id:
           type: string
         upstream_status:
           format: int32
@@ -470,6 +480,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Malformed envelope or invalid session block
+        "413":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Body exceeds the ingest size limit
         "422":
           content:
             application/json:
@@ -513,6 +529,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Malformed body, invalid session block, or records not a JSON
             array
+        "413":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Body exceeds the ingest size limit
         "500":
           content:
             application/json:

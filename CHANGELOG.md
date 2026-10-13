@@ -25,9 +25,11 @@ break, and every breaking change is recorded here plainly.
   is running in `~/.tapes/launches/<launch-id>.json` while it runs. A `start`
   run from inside a captured session finds that record and stamps the outer
   session on its own turns as `x-tapes-parent-harness-session-id` and
-  `x-tapes-parent-harness-id`. The parent reaches the ingest row only when both
-  launches are the same harness, because the ingest envelope cannot yet say
-  which harness a parent belongs to.
+  `x-tapes-parent-harness-id`. The ingest row carries the parent session and,
+  when it belongs to another harness, `parent_harness_id`.
+- The vendored ingest contract moves to tapes `0b41c3e`, which adds the
+  envelope's optional `parent_harness_id`. That commit is not in a tapes
+  release yet; the pin must move to the first release that carries it.
 
 ### Changed
 

@@ -127,8 +127,10 @@ fn full_turn_json(request: &RawValue) -> Value {
         raw_response: Some(encode_raw_response(b"event: ping\n\n")),
         raw_response_encoding: Some("gzip".to_owned()),
         meta: full_meta(),
+        // A cross-harness parent, so `parent_harness_id` is among the keys
+        // the declared-fields check below holds to the contract.
         session: Some(SessionEnvelope::from_attribution(
-            &attribution(),
+            &attribution().with_parent_harness_id("pi"),
             "0ea3c2cc-fe9d-41ff-aab1-4134ad00c350",
             "local:test",
         )),
@@ -274,6 +276,34 @@ fn an_absent_parent_is_omitted_because_omission_is_the_contracts_absent() {
     ))
     .unwrap();
     assert_eq!(json["parent_harness_session_id"], "sid-0");
+}
+
+#[test]
+fn a_parent_harness_is_declared_optional_and_sent_only_across_harnesses() {
+    // Same shape as `parent_harness_session_id`: declared, never required,
+    // and `""` is a 400 — so a same-harness parent, whose harness absence
+    // already implies, omits it.
+    let document = contract();
+    assert!(schema_properties(&document, "IngestEnvelope").contains("parent_harness_id"));
+    assert!(!schema_required(&document, "IngestEnvelope").contains("parent_harness_id"));
+
+    let json = serde_json::to_value(SessionEnvelope::from_attribution(
+        &attribution().with_parent_harness_id("pi"),
+        "",
+        "local:test",
+    ))
+    .unwrap();
+    assert_eq!(json["parent_harness_session_id"], "sid-0");
+    assert_eq!(json["parent_harness_id"], "pi");
+
+    let json = serde_json::to_value(SessionEnvelope::from_attribution(
+        &attribution().with_parent_harness_id("claude"),
+        "",
+        "local:test",
+    ))
+    .unwrap();
+    assert_eq!(json["parent_harness_session_id"], "sid-0");
+    assert!(json.get("parent_harness_id").is_none(), "got: {json}");
 }
 
 #[test]

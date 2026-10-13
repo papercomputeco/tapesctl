@@ -1547,11 +1547,15 @@ async fn a_launch_nested_in_a_captured_claude_session_names_it_as_parent() {
     let turn = await_captured_turn(&inner_proxy.ingest).await;
     assert_eq!(turn["session"]["harness_id"], "hermes");
     assert_eq!(turn["session"]["harness_session_id"], "hermes-session-1");
-    // The ingest envelope cannot say which harness a parent belongs to, and
-    // the server reads it as the child's own, so a cross-harness parent stays
-    // off the row rather than minting a phantom hermes session.
-    assert!(
-        turn["session"].get("parent_harness_session_id").is_none(),
+    // The row carries the parent and, because it is another harness's, names
+    // that harness — without it the server would resolve the parent as a
+    // hermes session.
+    assert_eq!(
+        turn["session"]["parent_harness_session_id"], LAUNCHED_CLAUDE_SID,
+        "got: {turn}"
+    );
+    assert_eq!(
+        turn["session"]["parent_harness_id"], "claude",
         "got: {turn}"
     );
     // And the inner launch published itself for anything nested inside it.
@@ -1607,6 +1611,11 @@ async fn a_launch_nested_in_the_same_harness_files_its_parent_on_the_row() {
     let turn = await_captured_turn(&inner_proxy.ingest).await;
     assert_eq!(turn["session"]["harness_session_id"], "pi-inner");
     assert_eq!(turn["session"]["parent_harness_session_id"], "pi-outer");
+    // Same harness: absence already says so.
+    assert!(
+        turn["session"].get("parent_harness_id").is_none(),
+        "got: {turn}"
+    );
     let seen = upstream_request(&inner_proxy).await;
     assert_eq!(seen.headers.get("x-tapes-parent-harness-id").unwrap(), "pi");
 }
@@ -1628,6 +1637,7 @@ async fn a_launch_with_no_parent_is_captured_exactly_as_before() {
     let turn = await_captured_turn(&harness.ingest).await;
     assert_eq!(turn["session"]["harness_session_id"], LAUNCHED_CLAUDE_SID);
     assert!(turn["session"].get("parent_harness_session_id").is_none());
+    assert!(turn["session"].get("parent_harness_id").is_none());
     let seen = upstream_request(&harness).await;
     assert!(
         seen.headers

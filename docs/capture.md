@@ -321,9 +321,10 @@ lands and stamps that session on its turns as
 `x-tapes-parent-harness-session-id`, with `x-tapes-parent-harness-id` naming
 the parent's harness. A turn whose own envelope already names a parent — a
 hermes or Codex subagent — keeps its own. The ingest row carries the parent
-only when parent and child are the same harness: the ingest envelope has no
-field for a parent's harness, and the server would look a cross-harness
-parent up as one of the child's own.
+as `parent_harness_session_id`, and for a parent in another harness also
+`parent_harness_id`, so the server resolves it in the parent's own harness.
+A same-harness parent omits `parent_harness_id`: absence means "the child's
+harness".
 
 None of this is a trust signal: the variables and the record are readable and
 forgeable by anything running as you. A forged lineage can only name a wrong
