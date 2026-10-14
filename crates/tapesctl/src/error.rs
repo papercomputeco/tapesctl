@@ -80,11 +80,26 @@ pub enum Error {
     #[snafu(display(
         "--model does not apply to {harness}; pass the harness's own model flag \
          after `--` instead (it is for a harness whose provider config tapesctl \
-         writes, such as hermes)"
+         writes: hermes, and pi for a model it does not ship)"
     ))]
     ModelNotApplicable {
         /// The harness being launched.
         harness: &'static str,
+    },
+
+    /// `--model` for pi named one of pi's own providers' models, or nothing.
+    ///
+    /// For pi, `--model` declares a model the upstream serves under pi's
+    /// `openai` provider; `anthropic/…` and `openai-codex/…` are pi's own and
+    /// are chosen with pi's flags instead.
+    #[snafu(display(
+        "--model {model:?} does not name a model to declare for pi; pass a model id the \
+         upstream serves (optionally as openai/<id>), or choose one of pi's own models \
+         with pi's flags after `--`"
+    ))]
+    PiModelNotDeclarable {
+        /// The refused value.
+        model: String,
     },
 
     /// No home directory, so the hermes capture home cannot be placed.

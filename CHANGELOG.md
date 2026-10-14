@@ -7,6 +7,18 @@ break, and every breaking change is recorded here plainly.
 
 ### Added
 
+- `tapesctl start pi --model <id>` declares a model the upstream serves that
+  pi does not ship. pi runs in `~/.tapes/pi-agent` (persistent; a second live
+  launch gets a private temporary directory), where each launch writes a
+  `models.json` declaring the model under `openai` with
+  `api: "openai-completions"` at the capture proxy, plus the capture
+  extension, selects it with `--model openai/<id>`, and removes both at exit.
+  Your `settings.json`, `keybindings.json` and user-level instruction files are
+  copied in; `auth.json`, `mcp.json` and your `models.json` never are. The
+  credential is `$OPENAI_API_KEY` by reference when set, otherwise a
+  placeholder. `anthropic/…` and `openai-codex/…` are refused.
+- pi turns carry the working directory and pi's version.
+
 - `tapesctl start hermes` (alias `hermes-agent`). hermes runs in a capture
   home at `~/.tapes/hermes-home` — persistent, so its sessions, memories and
   skills survive between captured launches, and never your own `~/.hermes`,
@@ -34,6 +46,11 @@ break, and every breaking change is recorded here plainly.
 
 ### Changed
 
+- A captured pi session refuses a model whose requests would not reach the
+  capture proxy — a provider the extension does not redirect, or a
+  `models.json` provider with its own `baseUrl` — with one line naming the
+  provider and host, where it used to warn and send the request uncaptured.
+  `TAPES_ALLOW_UNCAPTURED=1` restores the old behaviour.
 - `tapes-capture` 0.2 and `tapes-harnesses` 0.2.
 
 - `tapes-client` 0.6.0, the release that follows tapes v0.49.0's paging of

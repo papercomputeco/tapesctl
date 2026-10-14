@@ -193,8 +193,42 @@ tapesctl start pi --ingest-url http://localhost:8082 -- --provider anthropic --m
 
 `--provider` and `--model` are pi's own flags, which is why they follow `--`.
 Pass both or neither: pi only honours them as a pair, and given one it falls
-back to a saved default that may be a provider this capture does not front — so
-the session runs and records nothing.
+back to a saved default that may be a provider this capture does not front.
+
+While captured, pi refuses any model whose requests would not reach the capture
+proxy — a provider the extension does not redirect, or a `models.json` provider
+with its own `baseUrl` — with one line naming the provider and host, rather than
+letting the session run uncaptured. Set `TAPES_ALLOW_UNCAPTURED=1` to let such
+requests go to their own endpoint, uncaptured, with a warning.
+
+### Capturing pi on a model it does not ship
+
+An upstream serving a self-hosted OpenAI-compatible model has an id no pi
+catalog carries, and pi's `openai` provider speaks the Responses API by default.
+`tapesctl`'s own `--model` declares the model for the session:
+
+```bash
+tapesctl start pi --ingest-url http://localhost:8082 --schema openai \
+  --upstream http://localhost:8000/v1 --model <model-id>
+```
+
+- pi runs in an agent directory of its own, `~/.tapes/pi-agent` (`0700`,
+  persistent, so its sessions carry over), never your `~/.pi/agent`. A second
+  live launch gets a private temporary directory beside it.
+- Each launch writes `models.json` there — the model under `openai`, with
+  `api: "openai-completions"`, at the capture proxy — and the capture
+  extension, selects the model with `--model openai/<id>`, and removes both at
+  exit. The installed plugin is not needed for this launch.
+- Your `settings.json`, `keybindings.json` and user-level instruction files
+  (`AGENTS.md` and friends) are copied in from your agent directory
+  (`$PI_CODING_AGENT_DIR` or `~/.pi/agent`). `auth.json`, `mcp.json` and your
+  own `models.json` are not, so pi's saved logins are not available in this
+  session; pi's other providers still read their environment variables.
+- The credential is `$OPENAI_API_KEY` by reference when that variable is set —
+  pi reads it itself and the value is never written — otherwise a placeholder,
+  which is right for an upstream that authenticates on its own.
+- An `openai/` prefix and a `:<thinking>` suffix are accepted and dropped;
+  `anthropic/…` and `openai-codex/…` name pi's own models and are refused.
 
 ### Capturing hermes
 

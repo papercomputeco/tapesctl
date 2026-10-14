@@ -137,10 +137,13 @@ binds or spawns, so nothing was half-started:
 tapesctl plugin install pi
 ```
 
-**A pi session that runs but records nothing** is a different problem: pass
-`--provider` and `--model` together or not at all. They are pi's own flags, so
-they follow `--`. Given only one, pi ignores it and falls back to a saved
-default that may be a provider this capture does not front.
+**A pi turn that fails with `This model provider bypasses capture (…)`** is the
+capture refusing a model whose requests would not reach the proxy. Pick a model
+on one of pi's Anthropic, OpenAI or OpenAI Codex providers, declare an upstream
+model with `tapesctl start pi --model <id>`, or set `TAPES_ALLOW_UNCAPTURED=1`
+to let it run uncaptured. Pass pi's `--provider` and `--model` together or not
+at all: they are pi's own flags, so they follow `--`, and given only one pi
+falls back to a saved default.
 
 ```bash
 tapesctl start pi --ingest-url http://localhost:8082 -- --provider anthropic --model <model-id>

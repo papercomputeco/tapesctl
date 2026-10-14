@@ -98,7 +98,7 @@ Anything after `--` is passed to the harness verbatim.
 | `--ingest-url <URL>` | `http://localhost:8082` | `TAPES_INGEST_URL` |
 | `--upstream <URL>` | the harness's own provider API | `TAPES_UPSTREAM` |
 | `--schema <SCHEMA>` | the harness's own | — |
-| `--model <MODEL>` | none — hermes asks the endpoint | — |
+| `--model <MODEL>` | none — hermes asks the endpoint; pi declares nothing | — |
 | `--web-url <URL>` | none | `TAPES_WEB_URL` |
 | `--org-id <UUID>` | `""` — the server's local sentinel org | `TAPES_ORG_ID` |
 | `--auth-subject <S>` | `local:<username>` | `TAPES_AUTH_SUBJECT` |
@@ -109,9 +109,12 @@ speaks more than one — `pi` (default `anthropic`) and `hermes` (default
 `openai`, meaning chat completions). On `claude` or `codex` it is an error, not
 a no-op.
 
-`--model` applies to `hermes` only, whose provider config `start` writes; every
-other harness takes its model from its own flag after `--`, and passing
-`--model` to one is an error.
+`--model` applies to `hermes`, whose provider config `start` writes, and to
+`pi`, where it declares a model the upstream serves that pi does not ship (see
+[capture](./capture.md#capturing-pi-on-a-model-it-does-not-ship)); pi's own
+models are still chosen with pi's flags after `--`. Every other harness takes
+its model from its own flag after `--`, and passing `--model` to one is an
+error.
 
 `--web-url` is used only to build the printed console link.
 
@@ -170,7 +173,8 @@ All exit `1`.
 | `unsupported harness "X" (supported: claude, codex, pi, hermes)` | unknown name, or `opencode` |
 | `--schema does not apply to claude, which speaks anthropic only (it is for a harness that redirects several providers to one endpoint, such as pi)` | `--schema` on `claude` or `codex` |
 | `invalid --schema "X" (valid values: anthropic, openai)` | bad `--schema` value |
-| `--model does not apply to claude; pass the harness's own model flag after `--` instead (…)` | `--model` on anything but `hermes` |
+| `--model does not apply to claude; pass the harness's own model flag after `--` instead (…)` | `--model` on anything but `hermes` or `pi` |
+| `--model "anthropic/…" does not name a model to declare for pi; …` | `pi --model` naming one of pi's own providers' models |
 | `pi cannot be captured until its capture plugin is installed: no plugin at <path>. Run `tapesctl plugin install pi` first.` | the pi extension is absent — checked before anything binds or spawns |
 | `could not bind the capture proxy` / `could not start <harness>` | loopback bind or spawn failure |
 

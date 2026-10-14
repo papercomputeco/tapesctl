@@ -6,7 +6,8 @@
 //! takes an ephemeral port, the harness is pointed at it by a launch recipe,
 //! and when the harness exits the server is shut down and any config the recipe
 //! asked for is removed. What does outlive a launch is deliberate and small:
-//! hermes's capture home (see [`HERMES_HOME_DIR`]), and, only while the harness
+//! hermes's capture home (see [`HERMES_HOME_DIR`]), the pi agent directory a
+//! `start pi --model` launch runs in (see [`PI_AGENT_DIR`]), and, only while the harness
 //! runs, this launch's lineage record (see [`lineage`]).
 //!
 //! # Where each piece of knowledge lives
@@ -99,8 +100,9 @@ use tapes_harnesses::attribution::{
 use tapes_harnesses::harness as registry;
 use tapes_harnesses::harness::RegistryUserAgents;
 use tapes_harnesses::launch::{
-    ClaudeRecipe, CodexAuth, CodexRecipe, HermesRecipe, LaunchPlan, LaunchRecipe, ProxyEndpoint,
-    resolve_codex_auth,
+    ClaudeRecipe, CodexAuth, CodexRecipe, HermesRecipe, LaunchPlan, LaunchRecipe, PI_AGENT_DIR_ENV,
+    PI_CARRIED_FILES, PLACEHOLDER_API_KEY, PiRecipe, ProxyEndpoint, pi_gateway_model,
+    pi_user_agent_dir, resolve_codex_auth,
 };
 use tapes_harnesses::plugin::pi::GATEWAY_LABEL_SUFFIX_ENV;
 use tapes_harnesses::plugin::{
@@ -340,6 +342,15 @@ pub const DEFAULT_HERMES_SCHEMA: UpstreamSchema = UpstreamSchema::OpenAi;
 /// ever copied out of that — no `.env`, no `auth.json`.
 pub const HERMES_HOME_DIR: [&str; 2] = [".tapes", "hermes-home"];
 
+/// Where a pi launch with `--model` keeps its agent directory, relative to the
+/// home directory.
+///
+/// pi reads `models.json` only from its agent directory, so declaring a model
+/// for one capture means running pi in a directory of its own. Persistent for
+/// hermes's reason — pi writes its sessions beneath it — and never the user's
+/// `~/.pi/agent`, whose `models.json` the plan would otherwise overwrite.
+pub const PI_AGENT_DIR: [&str; 2] = [".tapes", "pi-agent"];
+
 /// Which harness is being launched, and everything that differs between them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Harness {
@@ -557,9 +568,13 @@ impl Harness {
 
     /// Whether `--model` means anything for this harness — whether this launch
     /// writes the harness's provider config, and so must write its model too.
+    ///
+    /// For pi it declares a model the upstream serves and pi does not ship (see
+    /// [`PiLaunch`]); pi's own models are still chosen with pi's flags after
+    /// `--`.
     #[must_use]
     pub fn takes_model(self) -> bool {
-        matches!(self, Self::Hermes)
+        matches!(self, Self::Hermes | Self::Pi)
     }
 
     /// Build the endpoint the harness should be pointed at.
@@ -833,6 +848,95 @@ impl HermesLaunch {
     }
 }
 
+/// What a pi launch with `--model` needs beyond what every pi launch has.
+///
+/// The model is declared under pi's `openai` provider, speaking Chat
+/// Completions, in a `models.json` written to an agent directory of this
+/// launch's own; the capture extension is written beside it, because pi run
+/// there no longer discovers the one installed under `~/.pi`. The user's
+/// preferences listed in [`PI_CARRIED_FILES`] are copied in on each launch;
+/// `auth.json`, `mcp.json`, and their own `models.json` never are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PiLaunch {
+    /// The `PI_CODING_AGENT_DIR` the plan is written into and pi runs in.
+    pub agent_dir: PathBuf,
+    /// The declared model id, from `--model`.
+    pub model: String,
+    /// The `openai` provider credential written to `models.json`: a reference
+    /// to `OPENAI_API_KEY`, which pi resolves itself, or a placeholder. Never a
+    /// key's value. See [`pi_api_key`].
+    pub api_key: String,
+    /// `(file name, contents)` of each carried preference file.
+    pub carried: Vec<(String, String)>,
+}
+
+impl PiLaunch {
+    /// The pi capture agent directory under `home`.
+    #[must_use]
+    pub fn default_agent_dir(home: &Path) -> PathBuf {
+        PI_AGENT_DIR
+            .iter()
+            .fold(home.to_path_buf(), |path, part| path.join(part))
+    }
+
+    /// `plan` — the ordinary pi plan, whose environment wakes the extension —
+    /// with the recipe's agent directory, `models.json`, extension copy and
+    /// `--model` selection added.
+    fn extend(
+        &self,
+        mut plan: LaunchPlan,
+        endpoint: &ProxyEndpoint,
+        provider_routes: bool,
+    ) -> Result<LaunchPlan> {
+        let mut recipe = PiRecipe::new(&self.agent_dir, endpoint.clone())
+            .with_provider_routes(provider_routes)
+            .with_model(&self.model)
+            .with_api_key(&self.api_key);
+        for (name, contents) in &self.carried {
+            recipe = recipe.with_carried_file(name, contents);
+        }
+        let planned = recipe.plan().context(error::LaunchPlanSnafu)?;
+        plan.args.extend(planned.args);
+        plan.env.extend(planned.env);
+        plan.config_files.extend(planned.config_files);
+        Ok(plan)
+    }
+}
+
+/// The credential a pi `--model` launch names for the declared model.
+///
+/// `$OPENAI_API_KEY` — a reference pi resolves at request time, so the key is
+/// forwarded without being written anywhere — when the environment holds one;
+/// otherwise the crate's non-secret placeholder, which is enough for pi to
+/// list the model and right for an upstream that authenticates on its own.
+pub fn pi_api_key(lookup: impl Fn(&str) -> Option<String>) -> String {
+    const NAME: &str = "OPENAI_API_KEY";
+    if lookup(NAME).is_some_and(|value| !value.trim().is_empty()) {
+        format!("${NAME}")
+    } else {
+        PLACEHOLDER_API_KEY.to_owned()
+    }
+}
+
+/// The user's pi preference files to carry into a planned agent directory:
+/// each of [`PI_CARRIED_FILES`] that exists, is UTF-8, and is readable in the
+/// user's own agent directory. Nothing when that directory *is* the planned
+/// one — a capture started from inside a captured pi — since there is then
+/// nothing of the user's to read.
+pub fn read_pi_carried_files(user_agent_dir: &Path, planned: &Path) -> Vec<(String, String)> {
+    if user_agent_dir == planned {
+        return Vec::new();
+    }
+    PI_CARRIED_FILES
+        .iter()
+        .filter_map(|name| {
+            std::fs::read_to_string(user_agent_dir.join(name))
+                .ok()
+                .map(|contents| ((*name).to_owned(), contents))
+        })
+        .collect()
+}
+
 /// A hermes launch's hold on the home it runs in.
 ///
 /// The capture home is one directory, and hermes reads its endpoint from a
@@ -876,6 +980,14 @@ const HERMES_HOME_LOCK: &str = ".tapesctl-launch.lock";
 /// Claim `shared` for this launch, or a private home beside it if a live
 /// launch already holds it. See [`HermesHomeClaim`].
 pub fn claim_hermes_home(shared: &Path) -> std::io::Result<HermesHomeClaim> {
+    claim_capture_home(shared, "hermes-home-")
+}
+
+/// Claim `shared` for this launch, or a private directory beside it named
+/// with `prefix` if a live launch already holds it. The one locking scheme
+/// behind both relocated homes: hermes's, and a pi `--model` launch's agent
+/// directory, whose `models.json` a second live launch would rewrite.
+pub fn claim_capture_home(shared: &Path, prefix: &str) -> std::io::Result<HermesHomeClaim> {
     create_private_dir(shared)?;
     let lock = std::fs::OpenOptions::new()
         .create(true)
@@ -889,9 +1001,7 @@ pub fn claim_hermes_home(shared: &Path) -> std::io::Result<HermesHomeClaim> {
         });
     }
     let parent = shared.parent().unwrap_or(shared);
-    let private = tempfile::Builder::new()
-        .prefix("hermes-home-")
-        .tempdir_in(parent)?;
+    let private = tempfile::Builder::new().prefix(prefix).tempdir_in(parent)?;
     // As private as the shared home, which `create_private_dir` made `0o700`.
     #[cfg(unix)]
     {
@@ -900,7 +1010,7 @@ pub fn claim_hermes_home(shared: &Path) -> std::io::Result<HermesHomeClaim> {
     }
     info!(
         home = %private.path().display(),
-        "the hermes capture home is in use by another launch; using a private one",
+        "the capture home is in use by another launch; using a private one",
     );
     Ok(HermesHomeClaim::Private(private))
 }
@@ -1031,6 +1141,14 @@ impl StartConfig {
                 harness: harness.id(),
             }
         );
+        if harness == Harness::Pi
+            && let Some(model) = args.model.as_deref()
+        {
+            snafu::ensure!(
+                pi_gateway_model(model).is_some(),
+                error::PiModelNotDeclarableSnafu { model }
+            );
+        }
         let hermes_api_key = (harness == Harness::Hermes)
             .then(|| {
                 hermes_api_key(schema.unwrap_or(DEFAULT_HERMES_SCHEMA), |name| {
@@ -1116,7 +1234,10 @@ pub async fn run(args: StartArgs) -> Result<()> {
     // Before anything is bound or spawned: a harness whose capture depends on an
     // installed extension cannot be captured without it, and the session would
     // otherwise run to completion and record nothing.
-    if !config.harness.required_plugin_artifacts().is_empty() {
+    // A pi `--model` launch writes the extension into its own agent directory,
+    // so the installed copy is not a precondition there.
+    let pi_declares_model = config.harness == Harness::Pi && config.model.is_some();
+    if !config.harness.required_plugin_artifacts().is_empty() && !pi_declares_model {
         let home = dirs::home_dir().context(error::NoHomeDirSnafu)?;
         ensure_plugin_installed(config.harness, &home)?;
     }
@@ -1157,7 +1278,7 @@ pub async fn run(args: StartArgs) -> Result<()> {
         }
         _ => (None, None),
     };
-    let plan = config.harness.plan(
+    let mut plan = config.harness.plan(
         endpoint.clone(),
         &provider_id,
         config.codex_auth,
@@ -1166,6 +1287,32 @@ pub async fn run(args: StartArgs) -> Result<()> {
         config.provider_routes,
         hermes.as_ref(),
     )?;
+    // Held like the hermes claim, for the same reason: the agent directory's
+    // `models.json` names this launch's proxy.
+    let _pi_claim = match (
+        config.harness,
+        config.model.as_deref().and_then(pi_gateway_model),
+    ) {
+        (Harness::Pi, Some(model)) => {
+            let home = dirs::home_dir().context(error::NoHomeDirSnafu)?;
+            let shared = PiLaunch::default_agent_dir(&home);
+            let claim =
+                claim_capture_home(&shared, "pi-agent-").context(error::ConfigFileSnafu {
+                    path: shared.clone(),
+                })?;
+            let user_agent_dir =
+                pi_user_agent_dir(&home, std::env::var_os(PI_AGENT_DIR_ENV).as_deref());
+            let launch = PiLaunch {
+                agent_dir: claim.home().to_path_buf(),
+                model,
+                api_key: pi_api_key(|name| std::env::var(name).ok()),
+                carried: read_pi_carried_files(&user_agent_dir, claim.home()),
+            };
+            plan = launch.extend(plan, &endpoint, config.provider_routes)?;
+            Some(claim)
+        }
+        _ => None,
+    };
 
     // This launch's place in a launch tree. The parent, if any, is read from
     // the environment this process inherited — a harness captured by an outer
@@ -2451,19 +2598,188 @@ mod tests {
     }
 
     #[test]
-    fn model_is_accepted_for_hermes_and_refused_elsewhere() {
+    fn model_is_accepted_for_hermes_and_pi_and_refused_elsewhere() {
         let mut hermes = args("hermes");
         hermes.model = Some("hermes-4".to_owned());
         assert_eq!(
             StartConfig::resolve(hermes).unwrap().model.as_deref(),
             Some("hermes-4")
         );
-        for name in ["claude", "codex", "pi"] {
+        let mut pi = args("pi");
+        pi.model = Some("openai/self-hosted-v4".to_owned());
+        assert_eq!(
+            StartConfig::resolve(pi).unwrap().model.as_deref(),
+            Some("openai/self-hosted-v4")
+        );
+        for name in ["claude", "codex"] {
             let mut other = args(name);
             other.model = Some("m".to_owned());
             let message = format!("{}", StartConfig::resolve(other).unwrap_err());
             assert!(message.contains("--model does not apply"), "got: {message}");
         }
+    }
+
+    /// `--model` for pi declares a model; one of pi's own is refused, so the
+    /// flag never silently shadows a built-in model.
+    #[test]
+    fn a_pi_model_that_names_a_pi_provider_is_refused() {
+        for model in [
+            "anthropic/claude-sonnet-4-5",
+            "openai-codex/gpt-5.4",
+            " ",
+            "openai/",
+        ] {
+            let mut pi = args("pi");
+            pi.model = Some(model.to_owned());
+            let message = format!("{}", StartConfig::resolve(pi).unwrap_err());
+            assert!(
+                message.contains("does not name a model to declare for pi"),
+                "{model:?}: {message}"
+            );
+        }
+    }
+
+    fn pi_launch(dir: &Path) -> PiLaunch {
+        PiLaunch {
+            agent_dir: dir.to_path_buf(),
+            model: "self-hosted-v4".to_owned(),
+            api_key: "$OPENAI_API_KEY".to_owned(),
+            carried: vec![(
+                "settings.json".to_owned(),
+                "{\"theme\":\"dark\"}".to_owned(),
+            )],
+        }
+    }
+
+    /// The fix for a hand-written `models.json`: the ordinary pi environment,
+    /// plus an agent directory of the launch's own holding the declared model,
+    /// the extension, and the carried preferences — and the model selected.
+    #[test]
+    fn a_pi_model_launch_declares_the_model_in_its_own_agent_dir() {
+        let endpoint = Harness::Pi.endpoint_for(addr(), None, None);
+        let base = Harness::Pi
+            .plan(
+                endpoint.clone(),
+                "unused",
+                None,
+                Some(UpstreamSchema::OpenAi),
+                "nonce",
+                true,
+                None,
+            )
+            .unwrap();
+        let dir = PathBuf::from("/tmp/tapes-pi-agent");
+        let plan = pi_launch(&dir).extend(base, &endpoint, true).unwrap();
+        let env = plan_env(&plan);
+        assert_eq!(
+            env.get(GATEWAY_URL_ENV).map(String::as_str),
+            Some("http://127.0.0.1:51000")
+        );
+        assert_eq!(
+            env.get(GATEWAY_NONCE_ENV).map(String::as_str),
+            Some("nonce")
+        );
+        assert_eq!(
+            env.get(GATEWAY_PROVIDER_ROUTES_ENV).map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            env.get(PI_AGENT_DIR_ENV).map(String::as_str),
+            Some("/tmp/tapes-pi-agent")
+        );
+        assert_eq!(plan.args, vec!["--model", "openai/self-hosted-v4"]);
+
+        let file = |name: &str| {
+            plan.config_files
+                .iter()
+                .find(|file| file.path == dir.join(name))
+                .unwrap_or_else(|| panic!("the plan does not write {name}"))
+                .contents
+                .clone()
+        };
+        let models: serde_json::Value = serde_json::from_str(&file("models.json")).unwrap();
+        assert_eq!(
+            models,
+            serde_json::json!({ "providers": { "openai": {
+                "apiKey": "$OPENAI_API_KEY",
+                "models": [{
+                    "id": "self-hosted-v4", "name": "self-hosted-v4",
+                    "api": "openai-completions",
+                    "baseUrl": "http://127.0.0.1:51000/_tapes/provider/openai",
+                }],
+            }}})
+        );
+        assert_eq!(
+            file("extensions/tapes-gateway.ts"),
+            tapes_harnesses::plugin::PI_GATEWAY_EXTENSION.contents()
+        );
+        assert_eq!(file("settings.json"), "{\"theme\":\"dark\"}");
+        assert!(
+            plan.config_files
+                .iter()
+                .all(|file| file.path.starts_with(&dir))
+        );
+    }
+
+    #[test]
+    fn a_pi_model_launch_names_the_users_key_by_reference_never_by_value() {
+        assert_eq!(
+            pi_api_key(|_| Some("sk-not-real".to_owned())),
+            "$OPENAI_API_KEY"
+        );
+        assert_eq!(pi_api_key(|_| Some("  ".to_owned())), PLACEHOLDER_API_KEY);
+        assert_eq!(pi_api_key(|_| None), PLACEHOLDER_API_KEY);
+    }
+
+    /// Preferences are carried; credentials and endpoint-bearing config are not.
+    #[test]
+    fn only_the_users_preference_files_are_carried() {
+        let user = tempfile::tempdir().unwrap();
+        for (name, contents) in [
+            ("settings.json", "{}"),
+            ("AGENTS.md", "be brief"),
+            ("auth.json", "{\"openai\":{\"key\":\"sk\"}}"),
+            ("models.json", "{}"),
+            ("mcp.json", "{}"),
+        ] {
+            std::fs::write(user.path().join(name), contents).unwrap();
+        }
+        let planned = tempfile::tempdir().unwrap();
+        let mut carried = read_pi_carried_files(user.path(), planned.path());
+        carried.sort();
+        assert_eq!(
+            carried,
+            vec![
+                ("AGENTS.md".to_owned(), "be brief".to_owned()),
+                ("settings.json".to_owned(), "{}".to_owned()),
+            ]
+        );
+        assert!(read_pi_carried_files(planned.path(), planned.path()).is_empty());
+    }
+
+    #[test]
+    fn the_pi_capture_agent_dir_is_tapesctl_state_not_the_users_pi_dir() {
+        let dir = PiLaunch::default_agent_dir(Path::new("/home/u"));
+        assert_eq!(dir, PathBuf::from("/home/u/.tapes/pi-agent"));
+        assert_ne!(dir, pi_user_agent_dir(Path::new("/home/u"), None));
+    }
+
+    #[test]
+    fn a_held_pi_agent_dir_sends_the_second_launch_to_a_private_one() {
+        let root = tempfile::tempdir().unwrap();
+        let shared = root.path().join("pi-agent");
+        let first = claim_capture_home(&shared, "pi-agent-").unwrap();
+        assert_eq!(first.home(), shared);
+        let second = claim_capture_home(&shared, "pi-agent-").unwrap();
+        assert_ne!(second.home(), shared);
+        assert!(
+            second
+                .home()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("pi-agent-")
+        );
     }
 
     #[test]

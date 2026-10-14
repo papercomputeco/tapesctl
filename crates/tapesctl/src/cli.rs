@@ -434,10 +434,12 @@ pub struct StartArgs {
 
     /// The model a harness whose endpoint this launch writes should start on.
     ///
-    /// Only `hermes` takes it: its provider lives in a config file this launch
-    /// writes, so the model has to be written there too. Without it hermes
-    /// asks the endpoint for a default. Every other harness picks its model
-    /// with its own flag after `--`, and passing this to one is an error.
+    /// `hermes` takes it because its provider lives in a config file this
+    /// launch writes; without it hermes asks the endpoint for a default. `pi`
+    /// takes it to declare a model the upstream serves that pi does not ship,
+    /// under pi's `openai` provider speaking Chat Completions. Every other
+    /// harness picks its model with its own flag after `--`, and passing this
+    /// to one is an error.
     #[arg(long)]
     pub model: Option<String>,
 
