@@ -37,7 +37,7 @@ fidelity is supposed to be identical whichever path a session took:
 | Implementation | Where |
 | --- | --- |
 | Go, reference | `tapes` `pkg/capture/contentencoding.go` |
-| Go, gateway lane | `tapes-extproc` — calls the same function, deliberately |
+| Go, gateway lane | `tapes` `extproc/` (the capture extproc) — calls the same function, deliberately |
 | Rust, client (here) | `crates/tapesctl/src/start/content_encoding.rs` |
 
 Drift between them is invisible until turns stop being recorded. That failure
