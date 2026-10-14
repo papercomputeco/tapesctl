@@ -51,6 +51,11 @@ break, and every breaking change is recorded here plainly.
   `models.json` provider with its own `baseUrl` — with one line naming the
   provider and host, where it used to warn and send the request uncaptured.
   `TAPES_ALLOW_UNCAPTURED=1` restores the old behaviour.
+- A captured hermes session refuses a main-loop or auxiliary model call whose
+  base URL is not the capture proxy — a provider switched to inside the
+  session, an auxiliary task on its own endpoint — with one line naming the
+  host, instead of sending it uncaptured. `TAPES_ALLOW_UNCAPTURED=1` lets such
+  calls through.
 - `tapes-capture` 0.2 and `tapes-harnesses` 0.2.
 
 - `tapes-client` 0.6.0, the release that follows tapes v0.49.0's paging of

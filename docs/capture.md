@@ -275,8 +275,10 @@ Three caveats:
 - **The task name stays on the forwarded request.** `tapesctl` files an
   auxiliary turn under its session but does not decode the metadata header, so
   `aux_task` is not in the ingest row's harness metadata.
-- **Switching provider inside hermes leaves capture.** Only the `custom`
-  provider points at the proxy.
+- **Switching provider inside hermes is refused, not uncaptured.** Only the
+  `custom` provider points at the proxy, and the plugin refuses any main-loop or
+  auxiliary call whose base URL is elsewhere, with one line naming the host.
+  Set `TAPES_ALLOW_UNCAPTURED=1` to let such calls through, uncaptured.
 
 ### Capturing an app that launches itself
 
