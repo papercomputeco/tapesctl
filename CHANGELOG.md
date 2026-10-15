@@ -40,7 +40,7 @@ break, and every breaking change is recorded here plainly.
   session on its own turns as `x-tapes-parent-harness-session-id` and
   `x-tapes-parent-harness-id`. The ingest row carries the parent session and,
   when it belongs to another harness, `parent_harness_id`.
-- The vendored ingest contract moves to tapes `0b41c3e`, which adds the
+- The vendored ingest contract moves to tapes `40c9034` (papercomputeco/tapes#393), which adds the
   envelope's optional `parent_harness_id`. That commit is not in a tapes
   release yet; the pin must move to the first release that carries it.
 
