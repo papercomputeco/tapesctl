@@ -43,9 +43,15 @@ break, and every breaking change is recorded here plainly.
   session on its own turns as `x-tapes-parent-harness-session-id` and
   `x-tapes-parent-harness-id`. The ingest row carries the parent session and,
   when it belongs to another harness, `parent_harness_id`.
-- The vendored ingest contract moves to tapes `40c9034` (papercomputeco/tapes#393), which adds the
-  envelope's optional `parent_harness_id`. That commit is not in a tapes
-  release yet; the pin must move to the first release that carries it.
+- A cross-harness parent is sent only to a tapes ingest whose `GET /ping`
+  lists the `parent_harness_id` capability, probed once per launch. Against an
+  older tapes the parent is left off the row, as before lineage, instead of
+  linking the child to a placeholder session in its own harness; the log and
+  the exit summary say so once.
+- The vendored ingest contract moves to tapes `91ce34e` (papercomputeco/tapes#393), which adds the
+  envelope's optional `parent_harness_id` and the capability list on
+  `GET /ping`. That commit is not in a tapes release yet; the pin must move to
+  the first release that carries it.
 
 ### Changed
 

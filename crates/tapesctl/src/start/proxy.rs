@@ -1071,6 +1071,9 @@ impl TurnCapture {
                 }
             };
 
+        // Shaped for what this server understands: a cross-harness parent
+        // reaches only an ingest that advertises it. See `ingest`'s docs.
+        let session = self.state.ingest.fit_session(self.session.clone()).await;
         let payload = TurnPayload {
             provider: self.provider,
             request: &request,
@@ -1078,7 +1081,7 @@ impl TurnCapture {
             raw_response: (!raw.is_empty()).then(|| encode_raw_response(&raw)),
             raw_response_encoding: self.meta.content_encoding.clone(),
             meta: self.meta.clone(),
-            session: self.session.clone(),
+            session,
         };
 
         // Whose turn this is: a harness id that is not the sentinel, plus a

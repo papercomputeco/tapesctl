@@ -22,17 +22,18 @@ client vendors it, and its one reader is a test in this crate.
 
 ## Pin
 
-- **Unreleased** — papercomputeco/tapes, commit `40c9034` (papercomputeco/tapes#393) ("feat(sessions):
-  resolve a fork parent in the parent's own harness"), which adds
-  `parent_harness_id` to the ingest envelope. No release carries it yet, so
-  there is no asset to vendor from: the file is the local emission
+- **Unreleased** — papercomputeco/tapes, commit `91ce34e` (papercomputeco/tapes#393) ("feat(ingest):
+  advertise capabilities on the ingest ping"). It carries `parent_harness_id`
+  on the ingest envelope (from `40c9034`) and the `capabilities` list on
+  `GET /ping` that tapesctl probes before sending it. No release carries them
+  yet, so there is no asset to vendor from: the file is the local emission
   `tapes dev openapi ingest --docs-root . --out <file>` at that commit.
 - This is a loan, like a git pin of the tapes crates. Before it lands, re-pin
-  to the first tapes release that contains `40c9034` (papercomputeco/tapes#393): restore a
+  to the first tapes release that contains `91ce34e` (papercomputeco/tapes#393): restore a
   `Release tag: **vX.Y.Z**` line with its commit and asset URL, re-vendor from
   the asset, and update the fingerprints below. Until then the release-asset
   gate has no tag to fetch, and `make contracts-check` is verified with
-  `TAPES_REPO=<tapes checkout at 40c9034>`.
+  `TAPES_REPO=<tapes checkout at 91ce34e>`.
 - Previous pin: release v0.34.0, commit `94b2ec7`.
 
 Keep this pin in step with the read contract's, in
@@ -45,18 +46,18 @@ different servers.
 
 Vendored file bytes (what `scripts/contracts-check.sh` verifies):
 
-- `tapes-ingest.yaml` sha256 `6a887c807d63abda3f9c1b3333a06dd530fad1381110caa37c7d63a10ffba16b`
+- `tapes-ingest.yaml` sha256 `873435d162b247bb84d180544994e9f6ed1de42b72bfcdc8bab15b76e56484e0`
 
 Prose-included document fingerprint (`CompiledDoc.Fingerprint()` as printed by
 `tapes dev openapi`; the ETag a server would serve for the same document):
 
-- ingest `sha256:bd7c0a623719524e2982f442e76909deab6d9ba08ed83ba92278a56702ea8c72`
+- ingest `sha256:f4e40a055c3001356cdcde64b00e56d79b13bba864aab648d41a4ba1b70d292d`
 
 Prose-stripped contract seal (the value in tapes `ingest/CONTRACT` at the pinned
 commit; this changes only when the contract *shape* changes, so it is the identity
 a doc-comment edit does not move):
 
-- ingest `sha256:0125ac324043cea54759d2ada6d7663609c4b07983e41a32a23b07e8f4f17da5`
+- ingest `sha256:5f10421256e7d2cc9c281d1ec11fde04fed744edd78cc06ee0dd699a06f468a3`
 
 ## Updating
 

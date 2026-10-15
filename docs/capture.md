@@ -373,6 +373,16 @@ as `parent_harness_session_id`, and for a parent in another harness also
 A same-harness parent omits `parent_harness_id`: absence means "the child's
 harness".
 
+A tapes that predates `parent_harness_id` ignores the field and would look a
+cross-harness parent up in the child's harness, filing the child under a
+placeholder parent there. So the first turn that would carry one asks the
+ingest's `GET /ping` which capabilities it has, once per launch. Unless the
+answer lists `parent_harness_id`, the cross-harness parent is left off the
+ingest row — the child is captured, unlinked, exactly as before lineage
+existed — and `start` says so once in its log and once on stderr at exit. A
+failed or slow probe counts as "not listed". Same-harness parents never need
+the probe and are always sent.
+
 None of this is a trust signal: the variables and the record are readable and
 forgeable by anything running as you. A forged lineage can only name a wrong
 parent; it never changes which session a turn is filed under.

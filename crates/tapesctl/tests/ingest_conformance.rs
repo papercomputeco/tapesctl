@@ -25,7 +25,8 @@ use tapes_harnesses::transcript::{
 };
 use tapesctl::api::contract::TAPES_INGEST_YAML;
 use tapesctl::start::ingest::{
-    IngestClient, SessionEnvelope, TurnMeta, TurnPayload, encode_raw_response, status_class,
+    CAPABILITY_PARENT_HARNESS_ID, IngestCapabilities, IngestClient, PING_PATH, SessionEnvelope,
+    TurnMeta, TurnPayload, encode_raw_response, status_class,
 };
 use tapesctl::transcript::client::TranscriptClient;
 use url::Url;
@@ -304,6 +305,36 @@ fn a_parent_harness_is_declared_optional_and_sent_only_across_harnesses() {
     .unwrap();
     assert_eq!(json["parent_harness_session_id"], "sid-0");
     assert!(json.get("parent_harness_id").is_none(), "got: {json}");
+}
+
+#[test]
+fn the_capability_probe_reads_the_contracts_ping() {
+    // Whether a cross-harness parent is sent at all hangs on this probe, so
+    // its route and the field it reads are held to the contract like the
+    // writes are: a GET of the documented liveness route, whose 200 body
+    // declares an optional array of strings named `capabilities`.
+    let document = contract();
+    let (route, verb, op) = operation(&document, "ingestPing");
+    assert_eq!(route, PING_PATH);
+    assert_eq!(verb, "get");
+
+    let schema_ref = op["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
+        .as_str()
+        .expect("the ping response is a named schema");
+    let component = schema_ref.rsplit('/').next().unwrap();
+    let capabilities = &document["components"]["schemas"][component]["properties"]["capabilities"];
+    assert_eq!(capabilities["type"], "array", "got: {capabilities}");
+    assert_eq!(
+        capabilities["items"]["type"], "string",
+        "got: {capabilities}"
+    );
+    // Optional, because a server from before the list omits it — which is the
+    // case the probe's fallback exists for.
+    assert!(!schema_required(&document, component).contains("capabilities"));
+
+    let body =
+        serde_json::json!({ "status": "ok", "capabilities": [CAPABILITY_PARENT_HARNESS_ID] });
+    assert!(IngestCapabilities::from_ping_body(body.to_string().as_bytes()).parent_harness_id());
 }
 
 #[test]

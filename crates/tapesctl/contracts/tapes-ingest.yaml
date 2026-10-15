@@ -393,6 +393,17 @@ components:
     pingResponse:
       description: pingResponse is the liveness probe body.
       properties:
+        capabilities:
+          description: |-
+            Capabilities names the optional envelope behaviours this server
+            implements, so a capture adapter can tell what a field will mean before
+            it sends one. An unknown field is ignored rather than refused, so an
+            adapter that sends a field to a server which predates it gets no error,
+            only a quieter misfile; asking first is how it avoids that. Absent from
+            servers that predate the list, which an adapter should read as "none".
+          items:
+            type: string
+          type: array
         status:
           description: Status is "ok" when the process is serving.
           example: ok
@@ -438,8 +449,10 @@ openapi: 3.0.3
 paths:
   /ping:
     get:
-      description: Reports that the ingest server is up. Does not check the database
-        — a 200 here means the process is serving, not that a write would succeed.
+      description: |-
+        Reports that the ingest server is up. Does not check the database — a 200 here means the process is serving, not that a write would succeed.
+
+        Also lists the optional envelope behaviours this server implements as capabilities. A server that predates the list omits it; read that as none.
       operationId: ingestPing
       responses:
         "200":

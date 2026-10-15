@@ -1362,10 +1362,13 @@ pub async fn run(args: StartArgs) -> Result<()> {
     // function drains and reads it after shutdown to decide what the exit
     // summary may say.
     let tally = Arc::new(CaptureTally::new());
+    // Kept as well as handed to the state: its clones share what the server
+    // said it understands, and the exit summary reports what that withheld.
+    let ingest_client = IngestClient::new(&config.ingest_url)?;
     let state = ProxyState {
         tally: Arc::clone(&tally),
         upstream: config.upstream.clone(),
-        ingest: IngestClient::new(&config.ingest_url)?,
+        ingest: ingest_client.clone(),
         transcript_tracker: tracker.clone(),
         attribution: Arc::new(attribution),
         attribution_config: Arc::new(AttributionConfig::new(
@@ -1489,6 +1492,12 @@ pub async fn run(args: StartArgs) -> Result<()> {
     // mid-session — the one moment printing is forbidden — so it is read back
     // off the tally here rather than announced when it resolved.
     print_exit_summary(config.web_url.as_ref(), &tally.snapshot());
+    // A nested launch against a tapes that predates cross-harness parents
+    // captured its turns, just without the link; say so where it can be seen.
+    let withheld = ingest_client.withheld_parents();
+    if withheld > 0 {
+        eprintln!("{}", ingest::withheld_parent_note(withheld));
+    }
 
     let status = status?;
     if !status.success() {
