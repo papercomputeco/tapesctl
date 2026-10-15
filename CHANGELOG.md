@@ -16,7 +16,10 @@ break, and every breaking change is recorded here plainly.
   Your `settings.json`, `keybindings.json` and user-level instruction files are
   copied in; `auth.json`, `mcp.json` and your `models.json` never are. The
   credential is `$OPENAI_API_KEY` by reference when set, otherwise a
-  placeholder. `anthropic/…` and `openai-codex/…` are refused.
+  placeholder. `anthropic/…` and `openai-codex/…` are refused. The capture
+  fronts `openai` for a declared model, so its turns are ingested as OpenAI
+  even behind an explicit `--upstream`; `--schema anthropic` with `--model` is
+  refused.
 - pi turns carry the working directory and pi's version.
 
 - `tapesctl start hermes` (alias `hermes-agent`). hermes runs in a capture

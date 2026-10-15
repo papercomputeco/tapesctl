@@ -208,9 +208,12 @@ catalog carries, and pi's `openai` provider speaks the Responses API by default.
 `tapesctl`'s own `--model` declares the model for the session:
 
 ```bash
-tapesctl start pi --ingest-url http://localhost:8082 --schema openai \
+tapesctl start pi --ingest-url http://localhost:8082 \
   --upstream http://localhost:8000/v1 --model <model-id>
 ```
+
+- The capture fronts `openai`, since the declared model speaks Chat
+  Completions; `--schema` is not needed, and `--schema anthropic` is refused.
 
 - pi runs in an agent directory of its own, `~/.tapes/pi-agent` (`0700`,
   persistent, so its sessions carry over), never your `~/.pi/agent`. A second

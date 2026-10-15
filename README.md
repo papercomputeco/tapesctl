@@ -185,7 +185,8 @@ would bypass the capture, with one line naming its provider and host;
 For a model the upstream serves that pi does not ship — a self-hosted
 OpenAI-compatible model — pass `tapesctl`'s own `--model <id>`: pi then runs in
 `~/.tapes/pi-agent` with the model declared under `openai` speaking Chat
-Completions, and your own `~/.pi/agent` is left alone.
+Completions, and your own `~/.pi/agent` is left alone. The capture then fronts
+`openai` without `--schema`, and `--schema anthropic` alongside it is an error.
 
 A plain `tapesctl start pi` routes each of pi's Anthropic, OpenAI, and OpenAI
 Codex providers to its own upstream, so all three are captured. `--schema`

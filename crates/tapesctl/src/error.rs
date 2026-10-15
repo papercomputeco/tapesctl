@@ -102,6 +102,21 @@ pub enum Error {
         model: String,
     },
 
+    /// `--model` for pi was combined with a `--schema` other than `openai`.
+    ///
+    /// A declared pi model always speaks OpenAI Chat Completions, so the
+    /// capture must front `openai`; any other schema would file its turns
+    /// under a format they are not in.
+    #[snafu(display(
+        "--schema {schema} conflicts with --model for pi: a declared model speaks \
+         OpenAI Chat Completions, so the capture fronts openai; drop --schema or pass \
+         --schema openai"
+    ))]
+    PiModelSchemaConflict {
+        /// The conflicting schema.
+        schema: &'static str,
+    },
+
     /// No home directory, so the hermes capture home cannot be placed.
     #[snafu(display("could not locate a home directory for the hermes capture home"))]
     NoHermesHome,

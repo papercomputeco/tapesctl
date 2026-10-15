@@ -437,7 +437,8 @@ pub struct StartArgs {
     /// `hermes` takes it because its provider lives in a config file this
     /// launch writes; without it hermes asks the endpoint for a default. `pi`
     /// takes it to declare a model the upstream serves that pi does not ship,
-    /// under pi's `openai` provider speaking Chat Completions. Every other
+    /// under pi's `openai` provider speaking Chat Completions, which makes the
+    /// capture front `openai` (and `--schema anthropic` an error). Every other
     /// harness picks its model with its own flag after `--`, and passing this
     /// to one is an error.
     #[arg(long)]

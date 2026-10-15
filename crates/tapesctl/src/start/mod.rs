@@ -1134,7 +1134,7 @@ impl StartConfig {
     pub fn resolve(args: StartArgs) -> Result<Self> {
         let harness = Harness::parse(&args.harness)?;
         let codex_auth = harness.codex_auth();
-        let schema = resolve_schema(harness, args.schema.as_deref())?;
+        let mut schema = resolve_schema(harness, args.schema.as_deref())?;
         snafu::ensure!(
             args.model.is_none() || harness.takes_model(),
             error::ModelNotApplicableSnafu {
@@ -1148,6 +1148,7 @@ impl StartConfig {
                 pi_gateway_model(model).is_some(),
                 error::PiModelNotDeclarableSnafu { model }
             );
+            schema = Some(pi_model_schema(args.schema.is_some(), schema)?);
         }
         let hermes_api_key = (harness == Harness::Hermes)
             .then(|| {
@@ -1216,6 +1217,25 @@ fn resolve_schema(harness: Harness, schema: Option<&str>) -> Result<Option<Upstr
         }
     );
     Ok(Some(UpstreamSchema::parse(schema)?))
+}
+
+/// The schema a pi launch that declares a model fronts.
+///
+/// A declared model is always an OpenAI Chat Completions model, so the capture
+/// fronts `openai` whatever pi's own default is. The schema is what ingest is
+/// told the turns are, and with an explicit `--upstream` there are no
+/// per-provider routes to correct it, so leaving pi's default in place would
+/// file every turn of the session under a format it is not in. An explicit
+/// `--schema anthropic` contradicts the declaration and is refused rather than
+/// silently overridden.
+fn pi_model_schema(explicit: bool, schema: Option<UpstreamSchema>) -> Result<UpstreamSchema> {
+    match schema {
+        Some(UpstreamSchema::Anthropic) if explicit => error::PiModelSchemaConflictSnafu {
+            schema: UpstreamSchema::Anthropic.as_str(),
+        }
+        .fail(),
+        _ => Ok(UpstreamSchema::OpenAi),
+    }
 }
 
 /// The local OS username, or `unknown`. Shared with `tapesctl sync`, which
@@ -2637,6 +2657,50 @@ mod tests {
                 "{model:?}: {message}"
             );
         }
+    }
+
+    /// A declared pi model speaks Chat Completions, so the capture fronts
+    /// `openai` without being told — and with an explicit `--upstream`, where
+    /// no per-provider route can correct it, ingest is still told `openai`.
+    #[test]
+    fn a_pi_model_defaults_the_schema_to_openai() {
+        let mut pi = args("pi");
+        pi.model = Some("local".to_owned());
+        pi.upstream = Some("http://localhost:8000".to_owned());
+        let config = StartConfig::resolve(pi).unwrap();
+        assert!(!config.provider_routes);
+        assert_eq!(config.schema, Some(UpstreamSchema::OpenAi));
+        assert_eq!(config.harness.provider(config.schema), "openai");
+
+        let mut routed = args("pi");
+        routed.model = Some("local".to_owned());
+        let config = StartConfig::resolve(routed).unwrap();
+        assert_eq!(config.schema, Some(UpstreamSchema::OpenAi));
+        assert_eq!(config.upstream.as_str(), "https://api.openai.com/");
+    }
+
+    #[test]
+    fn a_pi_model_accepts_an_explicit_openai_schema() {
+        let mut pi = args("pi");
+        pi.model = Some("local".to_owned());
+        pi.schema = Some("openai".to_owned());
+        pi.upstream = Some("http://localhost:8000".to_owned());
+        let config = StartConfig::resolve(pi).unwrap();
+        assert_eq!(config.schema, Some(UpstreamSchema::OpenAi));
+        assert_eq!(config.harness.provider(config.schema), "openai");
+    }
+
+    #[test]
+    fn a_pi_model_refuses_an_explicit_anthropic_schema() {
+        let mut pi = args("pi");
+        pi.model = Some("local".to_owned());
+        pi.schema = Some("anthropic".to_owned());
+        pi.upstream = Some("http://localhost:8000".to_owned());
+        let message = format!("{}", StartConfig::resolve(pi).unwrap_err());
+        assert!(
+            message.contains("--schema anthropic conflicts with --model"),
+            "got: {message}"
+        );
     }
 
     fn pi_launch(dir: &Path) -> PiLaunch {
