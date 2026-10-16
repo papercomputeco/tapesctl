@@ -284,20 +284,48 @@ pub fn available_skills(source_root: &Path) -> Result<Vec<(String, PathBuf)>> {
 }
 
 /// Copy one skill into `root/name` through a staging directory.
+///
+/// Two installs into the same directory must not interleave: the replacement
+/// is a remove followed by a rename, and a second run removing the first run's
+/// freshly renamed skill — or its staging directory — would leave the skill
+/// missing. Each run stages into its own directory, and the remove-and-rename
+/// happens under an exclusive lock on the skills directory.
 fn place(source: &Path, root: &Path, name: &str) -> Result<()> {
     std::fs::create_dir_all(root).context(error::SkillsWriteSnafu { path: root })?;
-    let staged = root.join(format!(".{name}.tapesctl-staging"));
+    let staged = tempfile::Builder::new()
+        .prefix(&format!(".{name}.tapesctl-staging-"))
+        .tempdir_in(root)
+        .context(error::SkillsWriteSnafu { path: root })?;
+    // On any error below, dropping `staged` removes the partial copy.
+    copy_tree(source, staged.path())?;
+
+    let _lock = lock_install(root)?;
     let destination = root.join(name);
-    // Residue from an interrupted earlier run is ours to clear.
-    remove_any(&staged)?;
-    if let Err(err) = copy_tree(source, &staged) {
-        let _ = remove_any(&staged);
-        return Err(err);
-    }
+    // Residue from an interrupted run that predates per-run staging.
+    remove_any(&root.join(format!(".{name}.tapesctl-staging")))?;
     remove_any(&destination)?;
-    std::fs::rename(&staged, &destination).context(error::SkillsWriteSnafu {
+    std::fs::rename(staged.path(), &destination).context(error::SkillsWriteSnafu {
         path: destination.clone(),
-    })
+    })?;
+    // The directory now lives at `destination`; nothing is left to clean up.
+    let _ = staged.keep();
+    Ok(())
+}
+
+/// Take an exclusive advisory `flock(2)` on the skills directory itself,
+/// waiting for a concurrent install to finish. Locking the directory's own
+/// descriptor rather than a lock file leaves nothing behind in a directory the
+/// harness reads skills from. The kernel releases the lock when the handle is
+/// dropped or the process exits, however it exits.
+fn lock_install(root: &Path) -> Result<std::fs::File> {
+    use std::os::fd::AsRawFd;
+
+    let dir = std::fs::File::open(root).context(error::SkillsWriteSnafu { path: root })?;
+    if unsafe { libc::flock(dir.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(std::io::Error::last_os_error())
+            .context(error::SkillsWriteSnafu { path: root });
+    }
+    Ok(dir)
 }
 
 /// Remove a file, symlink, or directory tree; absent is fine.
@@ -456,6 +484,33 @@ mod tests {
             std::fs::write(skill.join("refs").join("notes.md"), "notes").unwrap();
         }
         dir
+    }
+
+    #[test]
+    fn concurrent_installs_of_one_skill_leave_it_installed() {
+        // Each run stages separately and replaces under the lock, so no
+        // interleaving can remove the skill another run just put in place.
+        let src = source();
+        let skill = src.path().join("skills").join("search");
+        let root = tempfile::tempdir().unwrap();
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    for _ in 0..10 {
+                        place(&skill, root.path(), "search").unwrap();
+                    }
+                });
+            }
+        });
+        let installed = root.path().join("search");
+        assert!(installed.join("SKILL.md").is_file());
+        assert!(installed.join("refs").join("notes.md").is_file());
+        let residue: Vec<_> = std::fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains("staging"))
+            .collect();
+        assert!(residue.is_empty(), "staging left behind: {residue:?}");
     }
 
     #[test]
