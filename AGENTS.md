@@ -102,7 +102,11 @@ Inside `crates/tapesctl/src`:
 - `uninstall.rs` — the binary, the local state, and that block.
 - `plugin.rs`, `capture.rs`, `logging.rs`, `error.rs` — the remaining
   command entry points and cross-cutting support.
-- `ports/` — search, skills, and seed.
+- `ports/` — search, export, and seed.
+- `recall.rs` — the `--subject` (`me`) and `--since`/`--until` (`7d`)
+  grammar shared by `search` and `sessions list`.
+- `skills.rs` — `skills install`, the one verb grafted onto the cassette's
+  `skills` noun (a built-in `skills` noun would shadow the cassette).
 
 ## Conventions
 

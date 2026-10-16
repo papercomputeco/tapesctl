@@ -103,6 +103,7 @@ Anything after `--` is passed to the harness verbatim.
 | `--org-id <UUID>` | `""` — the server's local sentinel org | `TAPES_ORG_ID` |
 | `--auth-subject <S>` | `local:<username>` | `TAPES_AUTH_SUBJECT` |
 | `--no-transcripts` | off | — |
+| `--no-start-hint` | off | `TAPESCTL_NO_START_HINT` |
 
 `--schema` is `anthropic` or `openai`, and only applies to a harness that
 speaks more than one — `pi` (default `anthropic`, or `openai` when `--model`
@@ -118,6 +119,16 @@ its model from its own flag after `--`, and passing `--model` to one is an
 error.
 
 `--web-url` is used only to build the printed console link.
+
+Unless `--no-start-hint` is given, `start claude` passes Claude Code one
+`--append-system-prompt` line, ahead of your own arguments:
+
+```
+Recall across every captured session: `tapesctl search <q> [--subject ID|me] [--since 7d]` finds prior sessions by anyone; `tapesctl sessions transcript <id>` reads one.
+```
+
+It appends to Claude's instructions rather than replacing them. `codex` and
+`pi` get no hint: their launches have no additive channel for one.
 
 Endpoints: `POST {ingest-url}/v1/ingest` for the wire lane,
 `POST {ingest-url}/v1/ingest/transcript` for the transcript lane. Neither sends
@@ -331,10 +342,11 @@ still sees a field. Colour is applied only on a terminal and never when
 
 | leaf | route | flags |
 |---|---|---|
-| `list` | `GET /v1/sessions` | `--limit`, `--cursor`, `--sort`, `--direction`, `--since`, `--until`, `--harness-id`, `--harness-session-id`, `--auth-subject`, `--filter`, `--json` |
+| `list` | `GET /v1/sessions` | `--limit`, `--cursor`, `--sort`, `--direction`, `--since`, `--until`, `--harness-id`, `--harness-session-id`, `--auth-subject`, `--subject`, `--filter`, `--json` |
 | `get <ID>` | `GET /v1/sessions/{id}` | `--json` |
 | `traces <ID>` | `GET /v1/sessions/{id}/traces` | `--payload`, `--limit`, `--cursor` |
 | `raw-turns <ID>` | `GET /v1/sessions/{id}/raw_turns` | `--limit`, `--cursor` |
+| `transcript <ID>` | `GET /v1/sessions/{id}/transcript`, every page | `--role`, `--grep`, `--subagents`, `--json` |
 
 ```bash
 tapesctl sessions list --limit 20 --api-url http://localhost:8081
@@ -352,12 +364,13 @@ come as a pair — a lone half fails at parse with the missing half named.
 | `--cursor <C>` | only valid with the `--sort` and `--direction` it was minted under; changing either is a 400 |
 | `--sort <COL>` | e.g. `last_active`, `started_at`, `total_cost_usd` |
 | `--direction <D>` | `asc` or `desc` |
-| `--since`, `--until` | RFC 3339 |
+| `--since`, `--until` | RFC 3339, or a duration ago (`30m`, `24h`, `7d`, `2w`) converted to RFC 3339 before sending |
 | `--harness-id <H>` | the harness the session ran under (e.g. `claude`) — the other half of the pair |
 | `--harness-session-id <ID>` | exact match on the harness session id — the id `start` prints; pairs with `--harness-id`; see [Session ids](./capture.md#session-ids) |
 | `--auth-subject <S>` | exact match |
+| `--subject <S>` | an auth subject id, resolved client-side and sent as `auth_subject`: `me` is this machine's own subject (`TAPES_AUTH_SUBJECT`, else `local:<username>`); a bare value with no `:` such as `alice` means `alice` or `local:alice`, and `GET /v1/subjects` picks the one the server has (both existing is an error naming them). Conflicts with `--auth-subject` |
 | `--filter <KEY=VALUE>` | repeatable; each pair is passed through as `?key=value`, verbatim and in order. The key names a filter param a cassette on your deployment claims at runtime — nothing is validated or filtered client-side, and a key nothing claims is ignored by the server |
-| `--json` | print the raw pretty-printed JSON instead of the table, so the output still composes with `jq` |
+| `--json` | print `{"items": [...], "next_cursor"?: "..."}` instead of the table; the cursor appears only when there is another page, and any other key the server sends is kept |
 
 `--payload` takes `full` (the default) or `preview`, case-insensitively. An
 unknown value fails **before any request is made**:
@@ -373,8 +386,31 @@ ends with `next_cursor`, which `--cursor` passes back. `traces get` pages its
 spans the same way (200 per page) and, in the record view, names the command
 that fetches the next page.
 
+`sessions transcript` reads a session as a conversation, walking every page.
+Each row prints as `[<started_at> <role>] <text>`, then `  → name(input)` per
+tool call and `  ← first line` per tool result (`  ← ERROR …` when it
+failed). `--role` is `user`, `assistant`, or `all` (the default); `--grep`
+keeps rows whose text contains the pattern, case-insensitively (the server's
+`q`); `--subagents` includes subagent threads. `--json` prints
+`{"items": [row, ...], "session_id": "..."}`, where a row carries `seq`,
+`trace_id`, `span_id`, `thread_id`, `started_at`, `role`, `text`, and, when
+present, `tool_calls` (`id`, `name`, `input`) and `tool_results`
+(`tool_use_id`, `text`, `is_error`).
+
 The read API carries **no authentication**, and redirects are refused rather
 than followed. A base path in `--api-url` is discarded here too.
+
+## subjects
+
+| leaf | route | flags |
+|---|---|---|
+| `list` | `GET /v1/subjects` | `--q <TEXT>`, `--limit <N>`, `--json` |
+
+One row per auth subject id the server has sessions for, most recently seen
+first: subject, session count, last seen. tapes stores only these opaque ids;
+`--q` is a substring of the id. Each id works as `--subject` on `search` and
+`sessions list`. `--json` prints
+`{"items": [{"subject", "session_count", "last_seen_at"}, ...]}`.
 
 ## traces
 
@@ -393,8 +429,8 @@ than followed. A base path in `--api-url` is discarded here too.
 **`spans list` is a projection, not a route.** The API has no standalone span
 collection — spans exist only inside a trace — so the command fetches the trace
 and prints its `spans`. The server pages a trace's spans (200 per page), and
-`spans list` walks every page before printing, so the list is the whole trace. A trace with no `spans` key prints `No spans.` (`[]`
-under `--json`) rather than failing.
+`spans list` walks every page before printing, so the list is the whole trace. A trace with no `spans` key prints `No spans.` (`{"items": []}`
+under `--json`) rather than failing. `--json` prints `{"items": [span, ...]}`.
 
 `traces list` is one row per turn: status, span count, tokens in → out, cost,
 how long it took, when it started, the prompt, and the trace id last. `spans
@@ -406,23 +442,38 @@ their parent. `traces get` and `spans get` are records; a span's `input` and
 
 ## search
 
-Semantic search over captured spans. Hits are individual main-conversation LLM
-spans with their trace and turn context.
+Semantic search over **every author's** captured sessions on the server.
+Hits are individual main-conversation LLM spans with their trace, turn, and
+session context.
 
 ```bash
-tapesctl search "how to configure logging" --api-url http://localhost:8081
-tapesctl search "error handling patterns" --top 10 --api-url http://localhost:8081
+tapesctl search "how to configure logging"
+tapesctl search "billing rollout" --subject alice --since 30d
+tapesctl search "flaky test" --live
+tapesctl search "auth redirect" --json | jq '.items[]'
 ```
 
 | flag | default | notes |
 |---|---|---|
 | `<QUERY>` | required | |
-| `-k`, `--top <N>` | `5` | the server has no ceiling on this |
+| `-k`, `--top-k <N>` | `5` | the server has no ceiling on this; `--top` still parses |
+| `--subject <S>` | none | an auth subject id; `me` is this machine's own subject, and a bare `alice` is sent as both `auth_subject=alice` and `auth_subject=local:alice` (OR'd) |
+| `--cwd <PATH>` | none | sessions whose working directory starts with this |
+| `--harness <H>` | none | harness id, exact |
+| `--since <T>`, `--until <T>` | none | RFC 3339, or a duration ago (`30m`, `24h`, `7d`, `2w`) |
+| `--live` | off | only sessions with no recorded end, seen in the last five minutes |
 | `-q`, `--quiet` | off | one bare session id per line, deduplicated in score order |
-| `--json` | off | the cassette's document, for `jq`; conflicts with `--quiet` |
+| `--json` | off | `{"items": [hit, ...], "query": "...", "top_k": N}`; conflicts with `--quiet` |
+| `-v` (global) | off | print each hit's whole prompt instead of one elided line |
 
-Route: `GET /v1/cassettes/search/spans?query=&top_k=` — the search cassette's
-serving of the span-search contract. Both parameters are always sent.
+Route: `GET /v1/cassettes/search/spans` — the search cassette's span search.
+`query` and `top_k` are always sent; every filter is sent only when set, and
+`me` and relative times are resolved before sending.
+
+Each hit under `--json` carries `score`, `session_id`, `trace_id`, `span_id`,
+`started_at`, `user_prompt`, `snippet`, `model`, `auth_subject`, `cwd`,
+`harness_id`, `display_title`, `last_seen_at`, and `live`, plus any field the
+cassette adds.
 
 `--quiet` is a **pipe format, not a verbosity setting**: one bare session id
 per line, deduplicated in score order, ready for command substitution into
@@ -430,19 +481,23 @@ anything that takes session ids — for example the skills cassette's generate
 operation (`tapesctl skills --help` shows its current shape).
 
 Non-quiet output is a ranked list: the query and a hit count on the first
-line, then one hit per line with its score to two decimals, the turn's prompt, and
-when the turn ran, followed by the matched snippet on a dim `»` line and the
-session, trace, and span ids on a second dim line, so a hit leads straight to
-`sessions get`, `traces get`, or `spans get`.
+line, then per hit its score, its session's auth subject and title, `LIVE` when the session is live, and when the turn ran; the
+turn's prompt on a `›` line, the matched snippet on a dim `»` line, and the
+working directory, harness, session, and trace on a last dim line. The list
+ends by naming `tapesctl sessions transcript <id>` for the top session.
 
 ```
 "how I fixed auth"  ·  2 hits across 2 sessions
 
-0.82  Fix WorkOS redirect on staging                            Sep 17
-      » the redirect URI in the WorkOS dashboard is per-environment
-      session 01a0d365-1a2b-77a1-8473-bd2e295244a4 · trace trc_… · span sp_…
-0.77  (synthetic turn)                                          Sep 12
+0.82  local:ada · Auth fix  LIVE  Sep 17
+      › Fix OAuth redirect on staging
+      » the redirect URI is per-environment
+      /src/app · claude · session 01a0d365-1a2b-77a1-8473-bd2e295244a4 · trace t-1
+0.77  local:bob  Sep 12
+      › (synthetic turn)
       session 01a0d365-9c3d-77a1-8473-bd2e295244a4
+
+read one  tapesctl sessions transcript 01a0d365-1a2b-77a1-8473-bd2e295244a4
 ```
 
 A turn with an empty prompt renders as `(synthetic turn)`; the server sends
@@ -522,6 +577,32 @@ invocation time, exactly like every other [cassette command](#cassettes). Run
 verbs it currently vends — a new cassette capability reaches this CLI with no
 release. The retired local `skill` verb family (`generate`/`list`/`sync`,
 which authored files under `~/.tapes/skills/`) has been removed.
+
+### skills install
+
+The one `skills` verb this binary owns. It is mounted onto the cassette's
+`skills` command when the cassette is served (unless the cassette has an
+`install` method of its own), and onto a bare `skills` command otherwise, and
+it needs no server.
+
+```bash
+tapesctl skills install --source ~/src/skills
+tapesctl skills install --source https://example.com/skills.git --ref v2 --harness claude
+tapesctl skills install --source ~/src/skills --skill search --dry-run
+```
+
+| flag | default | notes |
+|---|---|---|
+| `--source <PATH\|GIT-URL>` | required (`TAPESCTL_SKILLS_SOURCE`) | a directory holding `skills/<name>/SKILL.md` or `<name>/SKILL.md`, or a git URL cloned shallowly into a temporary directory |
+| `--ref <REF>` | the remote's default branch | branch or tag, for a git source |
+| `--harness <H>` | every detected harness | repeatable: `claude` installs into `~/.claude/skills`, `codex` into `~/.agents/skills`; detected by `~/.claude` / `~/.codex` existing |
+| `--skill <NAME>` | `search`, `recall`, `digest` | repeatable |
+| `--dry-run` | off | print what would be installed, write nothing |
+
+Each skill is copied into a staging directory beside its destination and
+renamed into place; re-installing replaces the previous copy. A symbolic link
+inside a skill is refused rather than followed. There is no built-in source:
+which collection to recommend is a deployment's choice.
 
 ## plugin
 

@@ -1795,9 +1795,9 @@ dependencies = [
 
 [[package]]
 name = "tapes-client"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fcfc2bd2a921d4ed84f3af7d76b8ef7e56779b2d805776efc9b016ea8d0599c8"
+checksum = "fb2d4a0583b0fc62584802c57e329f947ef3b144eefe3b3b78fc7d6dd3f6c94d"
 dependencies = [
  "clap",
  "dirs",
@@ -1814,9 +1814,9 @@ dependencies = [
 
 [[package]]
 name = "tapes-harnesses"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a3298cd458c498c2fedce19584784b807ac1f3e06cb0b7297970d9bca1eb871"
+checksum = "c7fadf0442cba7562287b36f863fc68aef44a7f1be9198a481f30ba81ad512b6"
 dependencies = [
  "arc-swap",
  "dirs",

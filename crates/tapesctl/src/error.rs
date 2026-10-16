@@ -898,6 +898,78 @@ pub enum Error {
         source: crate::upgrade::UpgradeCliError,
     },
 
+    /// List output could not be written to standard output.
+    #[snafu(display("could not write the output"))]
+    Render {
+        /// Underlying IO failure.
+        source: std::io::Error,
+    },
+
+    /// A `--since` / `--until` value that is neither RFC 3339 nor a relative
+    /// duration.
+    #[snafu(display(
+        "invalid {flag} {value:?} (expected an RFC 3339 timestamp, or a duration \
+         ago such as 30m, 24h, 7d, 2w)"
+    ))]
+    InvalidTimeBound {
+        /// The flag the value was given to.
+        flag: &'static str,
+        /// What the user typed.
+        value: String,
+    },
+
+    /// A bare `--subject` matches more than one auth subject id, and the
+    /// listing filters on exactly one.
+    #[snafu(display(
+        "--subject {value:?} matches more than one subject ({candidates}); pass one of them exactly"
+    ))]
+    AmbiguousSubject {
+        /// What the user typed.
+        value: String,
+        /// The ids it matched, comma-separated.
+        candidates: String,
+    },
+
+    /// `tapesctl skills install` was given no source.
+    #[snafu(display(
+        "no skills source: pass --source <PATH|GIT-URL> or set TAPESCTL_SKILLS_SOURCE"
+    ))]
+    SkillsNoSource,
+
+    /// The skills source could not be read or fetched.
+    #[snafu(display("could not use the skills source {source_ref:?}: {detail}"))]
+    SkillsSource {
+        /// The source as given.
+        source_ref: String,
+        /// What went wrong.
+        detail: String,
+    },
+
+    /// A requested skill is not in the source.
+    #[snafu(display("the skills source has no skill {name:?} (it has: {available})"))]
+    SkillsUnknown {
+        /// The skill asked for.
+        name: String,
+        /// What the source does carry, comma-separated.
+        available: String,
+    },
+
+    /// No harness to install skills for was named or detected.
+    #[snafu(display(
+        "no harness to install skills for: neither ~/.claude nor ~/.codex exists; \
+         pass --harness claude or --harness codex"
+    ))]
+    SkillsNoHarness,
+
+    /// A skill could not be written into a harness's skills directory.
+    #[snafu(display("could not install the skill at {}", path.display()))]
+    SkillsWrite {
+        /// The path being written.
+        path: PathBuf,
+        /// Underlying IO failure.
+        source: std::io::Error,
+    },
+
     /// `tapesctl uninstall` could not run.
     ///
     /// Only the steps that make the command impossible to start reach here;

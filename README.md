@@ -299,21 +299,49 @@ redirecting it, which `tapesctl start claude` does.
 
 `plugin install` knows `claude`, `codex`, `codex-app`, `opencode`, and `pi`.
 
-## Searching
+## Searching and reading past sessions
+
+`search` covers **every author's** sessions on the server, not only yours.
 
 ```bash
 tapesctl search "how to configure logging"
-tapesctl search "error handling patterns" --top 10
+tapesctl search "billing rollout" --subject alice --since 30d
+tapesctl search "flaky test" --live
 tapesctl search "gum glow charm" --quiet   # session ids, one per line
+tapesctl search "auth redirect" --json | jq '.items[]'
+
+tapesctl sessions transcript <session-id>             # the whole conversation
+tapesctl sessions transcript <session-id> --role user --grep migration
+tapesctl subjects list                                # who has sessions here
+tapesctl sessions list --subject me --since 7d
 ```
 
-Hits are individual main-conversation LLM spans with their trace and turn
-context — "find the turn where X happened". This needs a server with span
-embeddings written; a deployment without them answers `503` rather than an
-empty result set.
+Hits are individual main-conversation LLM spans with their session's subject,
+title, working directory, and harness — "find the turn where X happened".
+This needs a server with span embeddings written; a deployment without them
+answers `503` rather than an empty result set.
+
+`--subject` takes an auth subject id, resolved client-side: `me` is this
+machine's own subject (`TAPES_AUTH_SUBJECT`, else `local:<username>`), and a
+bare name with no `:` such as `alice` also matches `local:alice`. tapes stores
+only these opaque ids; it knows nothing about people. `--since` / `--until` take RFC 3339 or a duration ago
+(`30m`, `24h`, `7d`, `2w`).
 
 `--quiet` prints bare session ids in score order, ready to compose into other
-commands through a shell substitution.
+commands through a shell substitution. Every list-shaped `--json` prints
+`{"items": [...], "next_cursor"?: "..."}`; `search` adds `query` and `top_k`.
+
+### Agent skills
+
+`tapesctl skills install --source <PATH|GIT-URL>` copies the `search`,
+`recall`, and `digest` skills from a skill collection into
+`~/.claude/skills` (Claude Code) and `~/.agents/skills` (Codex) for whichever
+of the two is set up on the machine, so an agent knows to search before it
+starts. Set `TAPESCTL_SKILLS_SOURCE` once instead of passing `--source`.
+
+`tapesctl start claude` also appends one line to Claude's system prompt
+naming `tapesctl search` and `tapesctl sessions transcript`; `--no-start-hint`
+or `TAPESCTL_NO_START_HINT=1` turns it off.
 
 ## Skills
 
@@ -424,7 +452,8 @@ release, so a cut never reports success while the served installer is stale.
     the spec reducer, the cache, and clap synthesis.
   - `config.rs` — `~/.tapes/config.toml`: the answers you give once.
   - `machine.rs` — the crate's one ambient read of the environment.
-  - `ports/` — search, skills, and seed.
+  - `ports/` — search, export, and seed.
+  - `recall.rs`, `skills.rs` — the shared `--subject`/`--since` grammar, and `skills install`.
 
 Shared client-side code — launch recipes, session attribution, transcript
 discovery, the capture envelope, and the tapes read client itself (its

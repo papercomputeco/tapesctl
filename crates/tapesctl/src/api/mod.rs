@@ -8,6 +8,8 @@
 //! | `sessions get <id>` | `GET /v1/sessions/{id}` |
 //! | `sessions traces <id>` | `GET /v1/sessions/{id}/traces` |
 //! | `sessions raw-turns <id>` | `GET /v1/sessions/{id}/raw_turns` |
+//! | `sessions transcript <id>` | `GET /v1/sessions/{id}/transcript`, every page |
+//! | `subjects list` | `GET /v1/subjects` |
 //! | `traces list <session-id>` | `GET /v1/traces?session_id=` |
 //! | `traces get <trace-id>` | `GET /v1/traces/{trace_id}` |
 //! | `spans list <trace-id>` | `GET /v1/traces/{trace_id}`, projected to `spans` |
@@ -22,7 +24,9 @@
 //! # Output
 //!
 //! Every command has a human view (see [`view`]) and `--json` for the raw
-//! document. `sessions traces` and `sessions raw-turns` stay JSON: they are the
+//! document — except that a list prints the shared list shape,
+//! `{"items": [...], "next_cursor"?: "..."}` ([`tapes_client::ListEnvelope`]),
+//! so a script reads every listing the same way. `sessions traces` and `sessions raw-turns` stay JSON: they are the
 //! console's own documents. See [`client`] for why responses are not decoded
 //! through the shared models: a model only carries the fields its build knew.
 //!
@@ -39,14 +43,20 @@ pub mod view;
 
 use serde_json::Value;
 use snafu::{OptionExt, ResultExt};
+use tapes_client::ListEnvelope;
 use tapes_client::core::models::params::ContractParams;
 use tapes_client::core::models::{
-    PayloadDetail, RawTurnListParams, SessionListParams, SessionTracesParams, TraceParams,
+    PayloadDetail, RawTurnListParams, SessionListParams, SessionTracesParams, SubjectListParams,
+    TraceParams, TranscriptQuery, TranscriptRole,
 };
 use url::Url;
 
-use crate::cli::{ApiArgs, SessionsCommand, SpansCommand, TracesCommand};
+use crate::cli::{
+    ApiArgs, SessionTranscriptArgs, SessionsCommand, SpansCommand, SubjectsCommand,
+    SubjectsListArgs, TracesCommand,
+};
 use crate::error::{Result, error};
+use crate::recall::{own_subject, resolve_time, subject_ids};
 use crate::render::Theme;
 use client::{ApiClient, connect, narrow};
 use contract::ops;
@@ -107,21 +117,49 @@ pub fn print_json(value: &serde_json::Value) -> Result<()> {
     Ok(())
 }
 
+/// Print a list in the shared list shape.
+pub fn print_envelope<T: serde::Serialize>(envelope: &ListEnvelope<T>) -> Result<()> {
+    envelope.print_json().context(error::RenderSnafu)
+}
+
+/// A listing document as the shared list shape: `items`, the cursor only when
+/// there is another page, and every other top-level key the server sent.
+///
+/// Decoded from the document rather than from the typed response, so a key
+/// this build predates still reaches `--json`.
+pub fn envelope_of(value: Value) -> Result<ListEnvelope<Value>> {
+    let envelope: ListEnvelope<Value> = tapes_client::decode::typed(value)?;
+    let cursor = envelope.next_cursor.clone();
+    Ok(envelope.with_next_cursor(cursor))
+}
+
 /// Dispatch `tapesctl sessions <method>`.
 pub async fn sessions(command: SessionsCommand) -> Result<()> {
     match command {
         SessionsCommand::List(args) => {
             let client = resolve_client(&args.api)?;
             let claimed = parse_filters(&args.filter)?;
+            let at = now();
+            let auth_subject = match args.auth_subject {
+                Some(exact) => Some(exact),
+                None => {
+                    one_subject(
+                        &client,
+                        args.subject.as_deref().unwrap_or_default(),
+                        subject_ids(args.subject.clone(), own_subject),
+                    )
+                    .await?
+                }
+            };
             let mut values = SessionListParams {
                 limit: args.limit.map(narrow),
                 cursor: args.cursor,
                 sort: args.sort.clone(),
-                since: args.since,
-                until: args.until,
+                since: resolve_time("--since", args.since, at)?,
+                until: resolve_time("--until", args.until, at)?,
                 harness_id: args.harness_id,
                 harness_session_id: args.harness_session_id,
-                auth_subject: args.auth_subject,
+                auth_subject,
                 ..Default::default()
             }
             .values();
@@ -141,7 +179,7 @@ pub async fn sessions(command: SessionsCommand) -> Result<()> {
                 .call_with_claimed(ops::LIST_SESSIONS, values, &claimed)
                 .await?;
             if args.json {
-                print_json(&value)
+                print_envelope(&envelope_of(value)?)
             } else {
                 print!(
                     "{}",
@@ -184,6 +222,101 @@ pub async fn sessions(command: SessionsCommand) -> Result<()> {
             let value: Value = client.call(ops::LIST_RAW_TURNS, values).await?;
             print_json(&value)
         }
+        SessionsCommand::Transcript(args) => transcript(args).await,
+    }
+}
+
+/// Narrow `--subject`'s candidate ids to the one the listing filters on.
+///
+/// The listing's `auth_subject` is a single exact id, while a bare name means
+/// two (`alice` and `local:alice`). So the candidates are checked against
+/// the subjects the server actually has: the one that exists is used; when
+/// neither does, the first is sent and the listing is honestly empty; when
+/// both do, the choice is the user's, not this client's.
+async fn one_subject(
+    client: &ApiClient,
+    typed: &str,
+    candidates: Vec<String>,
+) -> Result<Option<String>> {
+    if candidates.len() <= 1 {
+        return Ok(candidates.into_iter().next());
+    }
+    let known = client
+        .list_subjects(&SubjectListParams {
+            q: Some(typed.trim().to_owned()),
+            limit: None,
+        })
+        .await?;
+    let present: Vec<&String> = candidates
+        .iter()
+        .filter(|id| known.items.iter().any(|item| &item.subject == *id))
+        .collect();
+    match present.as_slice() {
+        [] => Ok(candidates.into_iter().next()),
+        [one] => Ok(Some((*one).clone())),
+        many => error::AmbiguousSubjectSnafu {
+            value: typed.trim().to_owned(),
+            candidates: many
+                .iter()
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+        }
+        .fail(),
+    }
+}
+
+/// The transcript query the flags describe.
+fn transcript_query(args: &SessionTranscriptArgs) -> TranscriptQuery {
+    TranscriptQuery {
+        // The flag's value parser admits only the contract's spellings.
+        role: args
+            .role
+            .as_deref()
+            .and_then(client::parse_grain::<TranscriptRole>),
+        q: args.grep.clone().filter(|grep| !grep.is_empty()),
+        subagents: args.subagents.then_some(true),
+        ..TranscriptQuery::default()
+    }
+}
+
+/// `tapesctl sessions transcript <id>` — every page, as one conversation.
+async fn transcript(args: SessionTranscriptArgs) -> Result<()> {
+    let client = resolve_client(&args.api)?;
+    let rows = client
+        .get_whole_session_transcript(&args.id, &transcript_query(&args))
+        .await?;
+    if args.json {
+        print_envelope(&ListEnvelope::new(rows).with("session_id", args.id))
+    } else {
+        print!("{}", view::transcript(&rows, &Theme::detect()));
+        Ok(())
+    }
+}
+
+/// Dispatch `tapesctl subjects <method>`.
+pub async fn subjects(command: SubjectsCommand) -> Result<()> {
+    match command {
+        SubjectsCommand::List(args) => subjects_list(args).await,
+    }
+}
+
+async fn subjects_list(args: SubjectsListArgs) -> Result<()> {
+    let client = resolve_client(&args.api)?;
+    let response = client
+        .list_subjects(&SubjectListParams {
+            q: args.q.filter(|q| !q.is_empty()),
+            limit: args.limit,
+        })
+        .await?;
+    if args.json {
+        print_envelope(&ListEnvelope::new(response.items))
+    } else {
+        print!(
+            "{}",
+            view::subjects(&response.items, &Theme::detect(), now())
+        );
+        Ok(())
     }
 }
 
@@ -348,7 +481,8 @@ pub async fn spans(command: SpansCommand) -> Result<()> {
                 .cloned()
                 .unwrap_or_else(|| Value::Array(Vec::new()));
             if args.json {
-                print_json(&spans)
+                let items = spans.as_array().cloned().unwrap_or_default();
+                print_envelope(&ListEnvelope::new(items))
             } else {
                 print!("{}", view::spans(&spans, &Theme::detect()));
                 Ok(())
@@ -396,8 +530,225 @@ mod tests {
             harness_session_id: None,
             harness_id: None,
             auth_subject: None,
+            subject: None,
             filter: Vec::new(),
             json: false,
+        }
+    }
+
+    async fn listing_server(known: &[&str]) -> MockServer {
+        let server = MockServer::start().await;
+        let items: Vec<serde_json::Value> = known
+            .iter()
+            .map(|id| serde_json::json!({"subject": id, "session_count": 1}))
+            .collect();
+        Mock::given(method("GET"))
+            .and(path("/v1/subjects"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": items})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/sessions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(r#"{"items":[{"id":"s-1"}],"next_cursor":""}"#),
+            )
+            .mount(&server)
+            .await;
+        server
+    }
+
+    async fn sent_auth_subject(server: &MockServer) -> Option<String> {
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.url.path() == "/v1/sessions")
+            .find_map(|request| {
+                request
+                    .url
+                    .query_pairs()
+                    .find(|(key, _)| key == "auth_subject")
+                    .map(|(_, value)| value.into_owned())
+            })
+    }
+
+    #[tokio::test]
+    async fn a_bare_subject_lists_the_local_id_the_server_actually_has() {
+        let server = listing_server(&["local:alice", "user_9"]).await;
+        let mut args = sessions_list_args(server.uri());
+        args.subject = Some("alice".to_owned());
+        args.since = Some("7d".to_owned());
+        args.json = true;
+        let result = sessions(SessionsCommand::List(args)).await;
+        assert!(result.is_ok(), "got: {result:?}");
+        assert_eq!(
+            sent_auth_subject(&server).await.as_deref(),
+            Some("local:alice")
+        );
+        let requests = server.received_requests().await.unwrap();
+        let since = requests
+            .iter()
+            .filter(|request| request.url.path() == "/v1/sessions")
+            .find_map(|request| {
+                request
+                    .url
+                    .query_pairs()
+                    .find(|(key, _)| key == "since")
+                    .map(|(_, value)| value.into_owned())
+            })
+            .unwrap();
+        assert!(
+            time::OffsetDateTime::parse(&since, &time::format_description::well_known::Rfc3339)
+                .is_ok(),
+            "a relative --since must travel as RFC 3339, got {since:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unknown_bare_subject_is_sent_as_typed_and_a_full_id_skips_the_lookup() {
+        let server = listing_server(&[]).await;
+        let mut args = sessions_list_args(server.uri());
+        args.subject = Some("nobody".to_owned());
+        assert!(sessions(SessionsCommand::List(args)).await.is_ok());
+        assert_eq!(sent_auth_subject(&server).await.as_deref(), Some("nobody"));
+
+        let server = listing_server(&[]).await;
+        let mut args = sessions_list_args(server.uri());
+        args.subject = Some("ci:bot".to_owned());
+        assert!(sessions(SessionsCommand::List(args)).await.is_ok());
+        assert_eq!(sent_auth_subject(&server).await.as_deref(), Some("ci:bot"));
+        let paths: Vec<String> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|request| request.url.path().to_owned())
+            .collect();
+        assert_eq!(
+            paths,
+            ["/v1/sessions"],
+            "a full id needs no subjects lookup"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bare_subject_both_ids_have_is_refused_naming_them() {
+        let server = listing_server(&["alice", "local:alice"]).await;
+        let mut args = sessions_list_args(server.uri());
+        args.subject = Some("alice".to_owned());
+        let err = sessions(SessionsCommand::List(args)).await.unwrap_err();
+        let shown = err.to_string();
+        assert!(
+            shown.contains("local:alice") && shown.contains("--subject"),
+            "{shown}"
+        );
+        assert_eq!(sent_auth_subject(&server).await, None);
+    }
+
+    #[test]
+    fn a_listing_prints_as_the_shared_envelope_keeping_unknown_keys() {
+        let last = envelope_of(serde_json::json!({
+            "items": [{"id": "s-1"}], "next_cursor": "", "from_the_future": 1
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&last).unwrap(),
+            serde_json::json!({"items": [{"id": "s-1"}], "from_the_future": 1}),
+            "an empty cursor is the end and is not printed"
+        );
+        let more = envelope_of(serde_json::json!({"items": [], "next_cursor": "p2"})).unwrap();
+        assert_eq!(more.next_cursor.as_deref(), Some("p2"));
+    }
+
+    fn transcript_args(url: String) -> SessionTranscriptArgs {
+        SessionTranscriptArgs {
+            api: api_args(Some(url)),
+            id: "s-1".to_owned(),
+            role: None,
+            grep: None,
+            subagents: false,
+            json: false,
+        }
+    }
+
+    #[test]
+    fn transcript_flags_become_the_contracts_query() {
+        let mut args = transcript_args("http://x".to_owned());
+        assert_eq!(transcript_query(&args), TranscriptQuery::default());
+        args.role = Some("user".to_owned());
+        args.grep = Some("flaky".to_owned());
+        args.subagents = true;
+        assert_eq!(
+            transcript_query(&args),
+            TranscriptQuery {
+                role: Some(TranscriptRole::User),
+                q: Some("flaky".to_owned()),
+                subagents: Some(true),
+                ..TranscriptQuery::default()
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_transcript_walks_every_page() {
+        // Two runs (human, then --json), each walking both pages once.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/sessions/s-1/transcript"))
+            .and(query_param("role", "user"))
+            .and(query_param("q", "flaky"))
+            .and(query_param_is_missing("cursor"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"session_id":"s-1","items":[{"seq":1,"role":"user","text":"fix the flaky test"}],"next_cursor":"p2"}"#,
+            ))
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/sessions/s-1/transcript"))
+            .and(query_param("cursor", "p2"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"session_id":"s-1","items":[{"seq":7,"role":"user","text":"still flaky"}]}"#,
+            ))
+            .expect(2)
+            .mount(&server)
+            .await;
+        for json in [false, true] {
+            let mut args = transcript_args(server.uri());
+            args.role = Some("user".to_owned());
+            args.grep = Some("flaky".to_owned());
+            args.json = json;
+            let result = sessions(SessionsCommand::Transcript(args)).await;
+            assert!(result.is_ok(), "got: {result:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn subjects_are_listed_with_the_query_and_limit() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/subjects"))
+            .and(query_param("q", "ada"))
+            .and(query_param("limit", "5"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"items":[{"subject":"user_01","session_count":4,"last_seen_at":"2026-10-01T00:00:00Z"}]}"#,
+            ))
+            .expect(2)
+            .mount(&server)
+            .await;
+        for json in [false, true] {
+            let result = subjects(SubjectsCommand::List(SubjectsListArgs {
+                api: api_args(Some(server.uri())),
+                q: Some("ada".to_owned()),
+                limit: Some(5),
+                json,
+            }))
+            .await;
+            assert!(result.is_ok(), "got: {result:?}");
         }
     }
 

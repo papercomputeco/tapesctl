@@ -25,7 +25,7 @@ use clap::{Args, Parser, Subcommand};
     arg_required_else_help = true
 )]
 pub struct Cli {
-    /// Increase detail (`-v` adds sync file outcomes and debug logs; `-vv`
+    /// Increase detail (`-v` adds sync file outcomes, whole prompts on search hits, and debug logs; `-vv`
     /// enables trace logs). `RUST_LOG` overrides only the log level.
     #[arg(short, long, global = true, action = clap::ArgAction::Count)]
     pub verbose: u8,
@@ -256,7 +256,7 @@ fn version_short_circuits(argv: &[String]) -> bool {
 /// it pays for no discovery either.
 #[must_use]
 pub fn gated(argv: &[String]) -> bool {
-    if version_short_circuits(argv) {
+    if version_short_circuits(argv) || is_skills_install(argv) {
         return false;
     }
     match first_noun(argv) {
@@ -264,6 +264,34 @@ pub fn gated(argv: &[String]) -> bool {
         Some(noun) if noun == crate::cassette::command::NOUN => true,
         Some(noun) => !is_static_noun(noun),
     }
+}
+
+/// Whether this command line is `tapesctl skills install …`.
+///
+/// That verb is this binary's own even though its noun is not (see
+/// [`crate::skills`]): it installs local files and needs nothing a server
+/// says, so it is gated out of discovery like any static verb. Without a
+/// discovered cassette the parser mounts the bare `skills` noun that carries
+/// it.
+fn is_skills_install(argv: &[String]) -> bool {
+    let mut arguments = argv.iter().skip(1).map(String::as_str);
+    let mut nouns = Vec::new();
+    while let Some(argument) = arguments.next() {
+        if argument == "--" {
+            break;
+        }
+        if VALUE_TAKING_GLOBALS.contains(&argument) {
+            let _ = arguments.next();
+            continue;
+        }
+        if !argument.starts_with('-') {
+            nouns.push(argument);
+            if nouns.len() == 2 {
+                break;
+            }
+        }
+    }
+    nouns == [crate::skills::NOUN, crate::skills::VERB]
 }
 
 /// Whether the noun is one of this binary's own compiled-in commands.
@@ -309,9 +337,17 @@ pub enum Command {
     /// requeues asynchronous projection; `-v` prints each file's outcome.
     Sync(SyncArgs),
 
-    /// Read sessions.
+    /// Read sessions — list, get, and `transcript <id>` to read one.
+    ///
+    /// Sessions are every author's, not only yours: `--subject` narrows a
+    /// listing to one subject, and `tapesctl subjects list` shows which
+    /// subjects the server has sessions for.
     #[command(subcommand)]
     Sessions(SessionsCommand),
+
+    /// List the auth subjects this server has sessions for.
+    #[command(subcommand)]
+    Subjects(SubjectsCommand),
 
     /// Read traces.
     #[command(subcommand)]
@@ -321,7 +357,28 @@ pub enum Command {
     #[command(subcommand)]
     Spans(SpansCommand),
 
-    /// Semantic search over captured spans.
+    /// Semantic search over EVERY author's captured sessions on this server.
+    ///
+    /// Hits are main-conversation turns from anyone whose sessions this
+    /// deployment holds — not only yours. Narrow with `--subject` (an auth
+    /// subject id, or `me`), `--cwd`, `--harness`, `--since`/`--until`, and
+    /// `--live`.
+    ///
+    /// Examples:
+    ///
+    ///   tapesctl search "billing rollout" --subject alice --since 30d
+    ///
+    ///   tapesctl search "flaky test" --live
+    ///
+    ///   tapesctl search "auth redirect" --json | jq '.items[]'
+    ///
+    /// `--json` prints `{"items": [hit, ...], "query": "...", "top_k": N}`,
+    /// where each hit carries `score`, `session_id`, `trace_id`, `span_id`,
+    /// `started_at`, `user_prompt`, `snippet`, `auth_subject`, `cwd`,
+    /// `harness_id`, `display_title`, `last_seen_at`, and `live`.
+    ///
+    /// Next step: `tapesctl sessions transcript <session_id>` reads a hit's
+    /// whole conversation.
     Search(SearchArgs),
 
     /// Write a session's export bundle to a file or stdout.
@@ -378,6 +435,52 @@ pub enum Command {
 
     /// Print version information.
     Version,
+}
+
+/// The recall skills `tapesctl skills install` installs by default.
+pub const DEFAULT_SKILLS: [&str; 3] = ["search", "recall", "digest"];
+
+/// Install the recall skills for Claude Code (`~/.claude/skills`) and Codex
+/// (`~/.agents/skills`), so an agent knows to search prior sessions with
+/// `tapesctl search` and read them with `tapesctl sessions transcript`.
+///
+/// Each skill is a `<name>/SKILL.md` directory copied from `--source`;
+/// re-running replaces the installed copies.
+// Not a variant of [`Command`]: `skills` is also the top-level spelling of a
+// deployment's skills cassette, and a built-in noun would shadow it. So the
+// `install` verb is mounted onto whichever `skills` command the parser ends up
+// with — the generated one when the cassette is served, a bare one when it is
+// not. See [`crate::skills`]. (A `//` comment, because clap prints a doc
+// comment here as the command's help.)
+#[derive(Debug, Clone, Args)]
+pub struct SkillsInstallArgs {
+    /// Where the skills come from: a local directory holding
+    /// `skills/<name>/SKILL.md` or `<name>/SKILL.md`, or a git URL to clone.
+    ///
+    /// There is no built-in default: which skill collection a deployment
+    /// recommends is its own choice. Set `TAPESCTL_SKILLS_SOURCE` once to
+    /// stop passing it.
+    #[arg(long, env = "TAPESCTL_SKILLS_SOURCE", value_name = "PATH|GIT-URL")]
+    pub source: String,
+
+    /// Branch or tag to clone, for a git source.
+    #[arg(long = "ref", value_name = "REF")]
+    pub git_ref: Option<String>,
+
+    /// Install for this harness only: `claude` (`~/.claude/skills`) or
+    /// `codex` (`~/.agents/skills`). Repeatable. Defaults to every harness
+    /// whose home directory (`~/.claude`, `~/.codex`) exists.
+    #[arg(long = "harness", value_name = "HARNESS", value_parser = ["claude", "codex"])]
+    pub harnesses: Vec<String>,
+
+    /// Install this skill only. Repeatable. Defaults to `search`, `recall`,
+    /// and `digest`.
+    #[arg(long = "skill", value_name = "NAME")]
+    pub skills: Vec<String>,
+
+    /// Report what would be installed, and where, without writing anything.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 impl Command {
@@ -466,6 +569,14 @@ pub struct StartArgs {
     /// the case where another capture client is already tailing the same tree.
     #[arg(long)]
     pub no_transcripts: bool,
+
+    /// Do not tell the launched agent that past sessions are searchable.
+    ///
+    /// By default a Claude session starts with one appended system-prompt
+    /// line pointing at `tapesctl search` and `tapesctl sessions transcript`.
+    /// Also settable as `TAPESCTL_NO_START_HINT=1`.
+    #[arg(long, env = "TAPESCTL_NO_START_HINT")]
+    pub no_start_hint: bool,
 }
 
 /// Arguments for `tapesctl capture`.
@@ -542,6 +653,68 @@ pub enum SessionsCommand {
     Traces(SessionPayloadArgs),
     /// List the raw wire turns behind a session's derivation.
     RawTurns(SessionRawTurnsArgs),
+    /// Read a session as a conversation: user and assistant turns in order,
+    /// with tool calls and results.
+    ///
+    /// Every page is fetched. `--json` prints
+    /// `{"items": [row, ...], "session_id": "..."}`, where a row carries `seq`,
+    /// `trace_id`, `span_id`, `thread_id`, `started_at`, `role`, `text`, and,
+    /// when present, `tool_calls` and `tool_results`.
+    Transcript(SessionTranscriptArgs),
+}
+
+/// Arguments for `tapesctl sessions transcript`.
+#[derive(Debug, Args)]
+pub struct SessionTranscriptArgs {
+    #[command(flatten)]
+    pub api: ApiArgs,
+
+    /// The session id (from `sessions list` or a `search` hit).
+    pub id: String,
+
+    /// Which rows: `user`, `assistant`, or `all` (the default).
+    #[arg(long, value_parser = ["user", "assistant", "all"])]
+    pub role: Option<String>,
+
+    /// Only rows whose text contains this, case-insensitively.
+    #[arg(long, value_name = "PAT")]
+    pub grep: Option<String>,
+
+    /// Include subagent threads; the root thread only by default.
+    #[arg(long)]
+    pub subagents: bool,
+
+    /// Print `{"items": [...], "session_id": "..."}` instead of the
+    /// conversation.
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// `tapesctl subjects` methods.
+#[derive(Debug, Subcommand)]
+pub enum SubjectsCommand {
+    /// List auth subjects with their session counts, most recently seen
+    /// first. Each id works as `--subject`.
+    List(SubjectsListArgs),
+}
+
+/// Arguments for `tapesctl subjects list`.
+#[derive(Debug, Args)]
+pub struct SubjectsListArgs {
+    #[command(flatten)]
+    pub api: ApiArgs,
+
+    /// Only subjects whose id contains this.
+    #[arg(long, value_name = "TEXT")]
+    pub q: Option<String>,
+
+    /// How many subjects to return.
+    #[arg(long)]
+    pub limit: Option<u32>,
+
+    /// Print `{"items": [...]}` instead of the table.
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// Arguments for `tapesctl sessions list`.
@@ -567,11 +740,13 @@ pub struct SessionsListArgs {
     #[arg(long)]
     pub direction: Option<String>,
 
-    /// Only sessions active at or after this RFC 3339 timestamp.
+    /// Only sessions active at or after this RFC 3339 timestamp, or this
+    /// long ago (`30m`, `24h`, `7d`, `2w`).
     #[arg(long)]
     pub since: Option<String>,
 
-    /// Only sessions active at or before this RFC 3339 timestamp.
+    /// Only sessions active at or before this RFC 3339 timestamp, or this
+    /// long ago.
     #[arg(long)]
     pub until: Option<String>,
 
@@ -587,9 +762,15 @@ pub struct SessionsListArgs {
     #[arg(long, requires = "harness_session_id")]
     pub harness_id: Option<String>,
 
-    /// Only sessions stamped with this acting subject.
+    /// Only sessions stamped with exactly this acting subject.
     #[arg(long)]
     pub auth_subject: Option<String>,
+
+    /// Only sessions captured for this auth subject id. `me` is this
+    /// machine's own subject (`TAPES_AUTH_SUBJECT`, else `local:<username>`);
+    /// a bare name with no `:`, such as `alice`, also matches `local:alice`.
+    #[arg(long, value_name = "S", conflicts_with = "auth_subject")]
+    pub subject: Option<String>,
 
     /// Extra filter, repeatable, as `key=value`; sent through as `?key=value`.
     ///
@@ -602,11 +783,10 @@ pub struct SessionsListArgs {
     #[arg(long = "filter", value_name = "KEY=VALUE")]
     pub filter: Vec<String>,
 
-    /// Print the raw JSON response instead of the table.
+    /// Print `{"items": [...], "next_cursor"?: "..."}` instead of the table.
     ///
-    /// `sessions list` renders a table by default; this restores the
-    /// pretty-printed JSON the read commands printed before, so the output still
-    /// composes with `jq`.
+    /// `sessions list` renders a table by default; this prints the listing in
+    /// the shared list shape, so the output still composes with `jq`.
     #[arg(long)]
     pub json: bool,
 }
@@ -740,7 +920,7 @@ pub struct SpansListArgs {
     #[arg(long)]
     pub payload: Option<String>,
 
-    /// Print the raw JSON response instead of the table.
+    /// Print `{"items": [span, ...]}` instead of the table.
     #[arg(long)]
     pub json: bool,
 }
@@ -773,12 +953,46 @@ pub struct SearchArgs {
     #[command(flatten)]
     pub api: ApiArgs,
 
-    /// What to search for.
+    /// What to search for, in natural language.
     pub query: String,
 
     /// How many hits to return. The server has no ceiling on this.
-    #[arg(long, short = 'k', default_value_t = crate::api::client::DEFAULT_SEARCH_TOP_K)]
+    #[arg(
+        long = "top-k",
+        short = 'k',
+        alias = "top",
+        value_name = "N",
+        default_value_t = crate::api::client::DEFAULT_SEARCH_TOP_K
+    )]
     pub top: u64,
+
+    /// Only sessions captured for this auth subject id. `me` is this
+    /// machine's own subject (`TAPES_AUTH_SUBJECT`, else `local:<username>`);
+    /// a bare name with no `:`, such as `alice`, also matches `local:alice`.
+    #[arg(long, value_name = "S")]
+    pub subject: Option<String>,
+
+    /// Only sessions whose working directory starts with this path.
+    #[arg(long, value_name = "PATH")]
+    pub cwd: Option<String>,
+
+    /// Only sessions captured from this harness (e.g. `claude`, `codex`).
+    #[arg(long, value_name = "H")]
+    pub harness: Option<String>,
+
+    /// Only turns at or after this RFC 3339 timestamp, or this long ago
+    /// (`30m`, `24h`, `7d`, `2w`).
+    #[arg(long, value_name = "T")]
+    pub since: Option<String>,
+
+    /// Only turns before this RFC 3339 timestamp, or this long ago.
+    #[arg(long, value_name = "T")]
+    pub until: Option<String>,
+
+    /// Only sessions that are live right now: no recorded end, seen in the
+    /// last five minutes.
+    #[arg(long)]
+    pub live: bool,
 
     /// Print only session ids, one per line, deduplicated in score order.
     ///
@@ -787,7 +1001,8 @@ pub struct SearchArgs {
     #[arg(long, short = 'q')]
     pub quiet: bool,
 
-    /// Print the search cassette's JSON response instead of the ranked list.
+    /// Print `{"items": [hit, ...], "query": "...", "top_k": N}` instead of
+    /// the ranked list. (`-v`, the global flag, prints each hit's full prompt.)
     #[arg(long, conflicts_with = "quiet")]
     pub json: bool,
 }
@@ -1160,6 +1375,102 @@ mod tests {
             }
             other => panic!("got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn skills_install_needs_no_discovery_but_other_skills_verbs_do() {
+        let argv = |words: &[&str]| words.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();
+        assert!(!gated(&argv(&["tapesctl", "skills", "install"])));
+        assert!(!gated(&argv(&[
+            "tapesctl",
+            "--api-url",
+            "http://x",
+            "skills",
+            "install",
+            "--dry-run"
+        ])));
+        // Any other `skills` verb is the skills cassette's.
+        assert!(gated(&argv(&["tapesctl", "skills", "list-skills"])));
+        assert!(gated(&argv(&["tapesctl", "skills"])));
+        // `skills` stays out of the static nouns, so the cassette can mount it.
+        assert!(!is_static_noun("skills"));
+        assert!(is_static_noun("subjects"));
+    }
+
+    #[test]
+    fn search_takes_the_recall_filters() {
+        let cli = parse(&[
+            "tapesctl",
+            "search",
+            "billing rollout",
+            "--subject",
+            "matt",
+            "--since",
+            "30d",
+            "--cwd",
+            "/src",
+            "--harness",
+            "claude",
+            "--live",
+            "-k",
+            "3",
+        ]);
+        match cli.command {
+            Command::Search(args) => {
+                assert_eq!(args.subject.as_deref(), Some("matt"));
+                assert_eq!(args.since.as_deref(), Some("30d"));
+                assert_eq!(args.cwd.as_deref(), Some("/src"));
+                assert_eq!(args.harness.as_deref(), Some("claude"));
+                assert!(args.live);
+                assert_eq!(args.top, 3);
+            }
+            other => panic!("got: {other:?}"),
+        }
+        // `--top-k` is the spelling, `--top` still parses.
+        for flag in ["--top-k", "--top"] {
+            match parse(&["tapesctl", "search", "q", flag, "9"]).command {
+                Command::Search(args) => assert_eq!(args.top, 9),
+                other => panic!("got: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn transcript_refuses_a_role_the_contract_does_not_have() {
+        assert!(
+            Cli::try_parse_from(["tapesctl", "sessions", "transcript", "s", "--role", "bot"])
+                .is_err()
+        );
+        match parse(&[
+            "tapesctl",
+            "sessions",
+            "transcript",
+            "s-1",
+            "--role",
+            "user",
+            "--grep",
+            "x",
+            "--subagents",
+            "--json",
+        ])
+        .command
+        {
+            Command::Sessions(SessionsCommand::Transcript(args)) => {
+                assert_eq!(args.id, "s-1");
+                assert_eq!(args.role.as_deref(), Some("user"));
+                assert!(args.subagents && args.json);
+            }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_sessions_help_points_at_transcript_and_subjects() {
+        let mut command = Cli::command();
+        let sessions = command.find_subcommand_mut("sessions").unwrap();
+        let help = sessions.render_long_help().to_string();
+        assert!(help.contains("transcript"), "{help}");
+        assert!(help.contains("subjects list"), "{help}");
     }
 
     #[test]
