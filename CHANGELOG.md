@@ -55,6 +55,12 @@ break, and every breaking change is recorded here plainly.
 
 ### Changed
 
+- When captured turns cannot reach the ingest server, `start` says so at exit:
+  one `tapesctl: error: could not reach the tapes ingest server at <url>; …`
+  line on stderr, naming the address it posted to and the `--ingest-url` /
+  `TAPES_INGEST_URL` remedy, after the summary line. Turns ingest rejected are
+  counted the same way, in a warning that points at the log. Both used to
+  reach only the log file, behind a bare `no turns were captured`.
 - A captured pi session refuses a model whose requests would not reach the
   capture proxy — a provider the extension does not redirect, or a
   `models.json` provider with its own `baseUrl` — with one line naming the

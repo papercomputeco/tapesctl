@@ -1491,7 +1491,11 @@ pub async fn run(args: StartArgs) -> Result<()> {
     // The id only becomes known once an attributed turn is *accepted*, which is
     // mid-session — the one moment printing is forbidden — so it is read back
     // off the tally here rather than announced when it resolved.
-    print_exit_summary(config.web_url.as_ref(), &tally.snapshot());
+    print_exit_summary(
+        config.web_url.as_ref(),
+        &config.ingest_url,
+        &tally.snapshot(),
+    );
     // A nested launch against a tapes that predates cross-harness parents
     // captured its turns, just without the link; say so where it can be seen.
     let withheld = ingest_client.withheld_parents();
@@ -1600,7 +1604,7 @@ fn announce_capture() {
 ///
 /// The mixed case gets the link *and* the warning: the link is true, and it is
 /// incomplete, because some of this session's turns are not filed under it.
-fn print_exit_summary(web_url: Option<&Url>, snapshot: &CaptureSnapshot) {
+fn print_exit_summary(web_url: Option<&Url>, ingest_url: &Url, snapshot: &CaptureSnapshot) {
     match tally::exit_summary_for(snapshot) {
         // Not an error: a harness can be launched and quit without ever calling
         // a model. Saying so beats printing nothing and leaving the user to
@@ -1617,6 +1621,23 @@ fn print_exit_summary(web_url: Option<&Url>, snapshot: &CaptureSnapshot) {
     // cannot find by name, and that is worth surfacing every time.
     if snapshot.counts.has_unattributed() {
         eprintln!("{}", tally::unattributed_warning(snapshot.counts));
+    }
+
+    // Why turns that were captured did not land. Once each, here rather than
+    // per turn: the capture tasks' own warnings went to the log file while the
+    // harness held the terminal, and "no turns were captured" alone would read
+    // as a session that never called a model.
+    if snapshot.failures.unreachable > 0 {
+        eprintln!(
+            "{}",
+            tally::unreachable_ingest_diagnosis(snapshot.failures.unreachable, ingest_url)
+        );
+    }
+    if snapshot.failures.rejected > 0 {
+        eprintln!(
+            "{}",
+            tally::rejected_ingest_warning(snapshot.failures.rejected)
+        );
     }
 
     // Only after a drain gave up. Every line above it is then a floor rather

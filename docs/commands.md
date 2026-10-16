@@ -184,6 +184,12 @@ All exit `1`.
 non-JSON request body — each is logged and the turn is skipped, because a
 telemetry failure must never take the harness down.
 
+Delivery failures are summarised at exit, though, because the log is not where
+anyone looks first: when captured turns could not reach ingest, `start` prints
+`tapesctl: error: could not reach the tapes ingest server at <url>; …` to
+stderr once, after the summary line, and a count of turns ingest rejected when
+it rejected any.
+
 ## capture
 
 Bind the address a self-launching harness was installed against, and capture

@@ -24,7 +24,7 @@ use tapes_harnesses::harness::RegistryUserAgents;
 use tapesctl::start::ingest::IngestClient;
 use tapesctl::start::lineage::{LaunchLineage, LaunchRegistry};
 use tapesctl::start::proxy::{ProxyState, forward_handler};
-use tapesctl::start::tally::{CaptureTally, ExitSummary, exit_summary_for};
+use tapesctl::start::tally::{CaptureTally, DeliveryFailures, ExitSummary, exit_summary_for};
 use tapesctl::transcript::tailer::SessionTracker;
 use url::Url;
 use wiremock::matchers::{method, path};
@@ -328,7 +328,33 @@ async fn proxy_for_server(
         .respond_with(ResponseTemplate::new(200).set_body_string(ping))
         .mount(&ingest)
         .await;
+    let ingest_url = Url::parse(&ingest.uri()).unwrap();
+    serve_proxy(
+        upstream,
+        upstream_url,
+        lane,
+        launched_pid,
+        lineage,
+        ingest,
+        ingest_url,
+    )
+    .await
+}
 
+/// The proxy itself, posting its captures to `ingest_url`.
+///
+/// Split from [`proxy_for_server`] so a test can hand the proxy an ingest
+/// address nothing answers at; `ingest` is then only the harness's record of
+/// what *was* posted, which is nothing.
+async fn serve_proxy(
+    upstream: MockServer,
+    upstream_url: Url,
+    lane: Lane,
+    launched_pid: i32,
+    lineage: Option<Arc<LaunchLineage>>,
+    ingest: MockServer,
+    ingest_url: Url,
+) -> Harness {
     // Watchers over temp dirs. Empty on every lane but one: no harness is
     // actually running, so requests land on the unattributed path. That is
     // deliberate for the byte-fidelity tests, which are about the bytes.
@@ -361,7 +387,7 @@ async fn proxy_for_server(
     let state = ProxyState {
         tally: Arc::clone(&tally),
         upstream: upstream_url,
-        ingest: IngestClient::new(&Url::parse(&ingest.uri()).unwrap()).unwrap(),
+        ingest: IngestClient::new(&ingest_url).unwrap(),
         attribution: Arc::new(attribution),
         attribution_config: Arc::new(AttributionConfig::new(
             CodexProviderFilter::new("tapesctl-openai"),
@@ -1205,10 +1231,65 @@ async fn a_rejected_turns_session_is_not_the_one_the_summary_links() {
     assert_eq!(got.counts.captured, 2, "only the accepted turns count");
     assert_eq!(got.counts.unattributed, 2);
     assert_eq!(
+        got.failures,
+        DeliveryFailures {
+            unreachable: 0,
+            rejected: 1
+        },
+        "the rejected turn is counted as refused, not as unreachable",
+    );
+    assert_eq!(
         exit_summary_for(&got),
         ExitSummary::Unattributed(got.counts),
         "the honest summary is the captured-but-unattributed one",
     );
+}
+
+#[tokio::test]
+async fn a_turn_that_cannot_reach_ingest_is_counted_as_unreachable() {
+    // The launch the exit diagnosis is for: the proxy captured a turn and had
+    // nowhere to deliver it. Without the count the summary reads exactly like a
+    // session that never called a model.
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ok_json())
+        .mount(&upstream)
+        .await;
+    let upstream_url = Url::parse(&upstream.uri()).unwrap();
+    // A port that was just free and is now closed: connection refused.
+    let dead = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap()
+    };
+    let harness = serve_proxy(
+        upstream,
+        upstream_url,
+        Lane::LaunchedClaude,
+        own_pid(),
+        None,
+        MockServer::start().await,
+        Url::parse(&format!("http://{dead}")).unwrap(),
+    )
+    .await;
+
+    let _ = post_through_proxy(harness.proxy, r#"{"model":"claude-sonnet-4"}"#)
+        .await
+        .text()
+        .await;
+    harness.tally.drain(Duration::from_secs(5)).await;
+
+    let got = harness.tally.snapshot();
+    assert_eq!(got.counts.captured, 0);
+    assert_eq!(
+        got.failures,
+        DeliveryFailures {
+            unreachable: 1,
+            rejected: 0
+        },
+        "{got:?}",
+    );
+    assert_eq!(exit_summary_for(&got), ExitSummary::NothingCaptured);
 }
 
 #[tokio::test]

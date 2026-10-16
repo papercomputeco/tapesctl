@@ -80,6 +80,13 @@ pub const CAPTURE_DRAIN_DEADLINE: Duration = Duration::from_secs(5);
 pub struct CaptureTally {
     captured: AtomicUsize,
     unattributed: AtomicUsize,
+    /// Turns whose POST never reached ingest at all (connection refused, DNS,
+    /// timeout). Kept apart from rejections because the remedy differs: an
+    /// unreachable server is a wrong address or a stopped process, a
+    /// rejection is something the server said about the turn.
+    unreachable: AtomicUsize,
+    /// Turns ingest answered with a non-success status.
+    rejected: AtomicUsize,
     /// The session the first accepted attributed turn was filed under.
     ///
     /// A `OnceLock` because the link names one session and later turns must not
@@ -132,6 +139,21 @@ impl CaptureTally {
         }
     }
 
+    /// Record one turn whose delivery to ingest failed.
+    ///
+    /// Counted so the exit summary can say *why* nothing landed. The capture
+    /// task's own warning goes to the log file, which the caller only reads
+    /// once they suspect something; without this, a launch against a stopped
+    /// or mis-addressed server ends with the same "no turns were captured" a
+    /// launch that never called a model does.
+    pub fn record_failure(&self, failure: DeliveryFailure) {
+        let counter = match failure {
+            DeliveryFailure::Unreachable => &self.unreachable,
+            DeliveryFailure::Rejected => &self.rejected,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Wait for the registered captures to finish, for at most `grace`.
     ///
     /// Returns when the last one finishes or when the deadline passes,
@@ -173,6 +195,10 @@ impl CaptureTally {
                 captured: self.captured.load(Ordering::Relaxed),
                 unattributed: self.unattributed.load(Ordering::Relaxed),
             },
+            failures: DeliveryFailures {
+                unreachable: self.unreachable.load(Ordering::Relaxed),
+                rejected: self.rejected.load(Ordering::Relaxed),
+            },
             session: self.session.get().cloned(),
         }
     }
@@ -203,6 +229,8 @@ impl Drop for CaptureInFlight {
 pub struct CaptureSnapshot {
     /// Turns ingest accepted, and how many went unattributed.
     pub counts: CaptureCounts,
+    /// Turns that were captured and did not land.
+    pub failures: DeliveryFailures,
     /// The session an accepted attributed turn was filed under, if any.
     ///
     /// The summary's only source for a link. `None` covers both "nothing was
@@ -241,6 +269,25 @@ impl CaptureCounts {
     pub fn has_unattributed(&self) -> bool {
         self.unattributed > 0
     }
+}
+
+/// Why one captured turn did not land.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeliveryFailure {
+    /// The POST never got an answer: nothing is listening at the ingest URL,
+    /// or it could not be reached.
+    Unreachable,
+    /// Ingest answered, and refused the turn.
+    Rejected,
+}
+
+/// Turns that were captured and did not land, by why.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DeliveryFailures {
+    /// See [`DeliveryFailure::Unreachable`].
+    pub unreachable: usize,
+    /// See [`DeliveryFailure::Rejected`].
+    pub rejected: usize,
 }
 
 /// Which sentence a finished launch has earned.
@@ -316,6 +363,33 @@ pub fn unattributed_warning(counts: CaptureCounts) -> String {
     )
 }
 
+/// The stderr diagnosis for a launch whose turns could not reach ingest.
+///
+/// Printed once, at exit, however many turns failed: from the spawn until the
+/// harness exits the terminal is the harness's, and a line per turn after it
+/// would bury the summary. The address is the one this launch posted to, so a
+/// wrong `--ingest-url` reads as wrong rather than as a server that is down.
+#[must_use]
+pub fn unreachable_ingest_diagnosis(unreachable: usize, ingest: &url::Url) -> String {
+    format!(
+        "tapesctl: error: could not reach the tapes ingest server at {ingest}; \
+         {unreachable} captured {} {} not delivered. Check that the server is \
+         running there, or point --ingest-url (TAPES_INGEST_URL) at it.",
+        turns(unreachable),
+        if unreachable == 1 { "was" } else { "were" },
+    )
+}
+
+/// The stderr warning for a launch some of whose turns ingest refused.
+#[must_use]
+pub fn rejected_ingest_warning(rejected: usize) -> String {
+    format!(
+        "tapesctl: warning: the tapes ingest server rejected {rejected} captured {}; \
+         the log names the reason",
+        turns(rejected),
+    )
+}
+
 /// The stderr note for a launch whose captures outlived the drain deadline.
 ///
 /// The summary above it is then a floor, not a total, and saying so is the
@@ -341,9 +415,43 @@ mod tests {
                 captured,
                 unattributed,
             },
+            failures: DeliveryFailures::default(),
             session: session.map(str::to_owned),
             in_flight: 0,
         }
+    }
+
+    #[test]
+    fn delivery_failures_are_counted_apart_from_captures() {
+        let tally = CaptureTally::new();
+        tally.record_failure(DeliveryFailure::Unreachable);
+        tally.record_failure(DeliveryFailure::Unreachable);
+        tally.record_failure(DeliveryFailure::Rejected);
+        let got = tally.snapshot();
+        assert_eq!(
+            got.failures,
+            DeliveryFailures {
+                unreachable: 2,
+                rejected: 1
+            }
+        );
+        // A turn that did not land is not a capture: the summary still says
+        // nothing landed, and the diagnosis beside it says why.
+        assert_eq!(got.counts.captured, 0);
+        assert_eq!(exit_summary_for(&got), ExitSummary::NothingCaptured);
+    }
+
+    #[test]
+    fn the_unreachable_diagnosis_names_the_address_and_the_remedy() {
+        let ingest = url::Url::parse("http://127.0.0.1:38082/v1/ingest").unwrap();
+        assert_eq!(
+            unreachable_ingest_diagnosis(1, &ingest),
+            "tapesctl: error: could not reach the tapes ingest server at \
+             http://127.0.0.1:38082/v1/ingest; 1 captured turn was not delivered. \
+             Check that the server is running there, or point --ingest-url \
+             (TAPES_INGEST_URL) at it."
+        );
+        assert!(unreachable_ingest_diagnosis(3, &ingest).contains("3 captured turns were not"));
     }
 
     #[test]

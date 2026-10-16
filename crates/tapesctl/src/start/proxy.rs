@@ -1112,11 +1112,26 @@ impl TurnCapture {
                     "turn captured",
                 );
             }
-            Err(err) => warn!(
-                error = %err,
-                request_id = %self.meta.request_id,
-                "ingest rejected the turn",
-            ),
+            Err(err) if matches!(err, crate::error::Error::IngestSend { .. }) => {
+                self.state
+                    .tally
+                    .record_failure(super::tally::DeliveryFailure::Unreachable);
+                warn!(
+                    error = %err,
+                    request_id = %self.meta.request_id,
+                    "could not deliver the turn to ingest",
+                );
+            }
+            Err(err) => {
+                self.state
+                    .tally
+                    .record_failure(super::tally::DeliveryFailure::Rejected);
+                warn!(
+                    error = %err,
+                    request_id = %self.meta.request_id,
+                    "ingest rejected the turn",
+                );
+            }
         }
     }
 }

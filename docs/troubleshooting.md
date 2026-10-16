@@ -19,7 +19,17 @@ no turns were captured
 ```
 
 That means nothing landed in the server. It is *not* the same as
-`✓ captured session …`, which means it did.
+`✓ captured session …`, which means it did. When turns were captured and could
+not be delivered, a line on stderr after it says why:
+
+```
+tapesctl: error: could not reach the tapes ingest server at http://localhost:8082/; 1 captured turn was not delivered. …
+tapesctl: warning: the tapes ingest server rejected 3 captured turns; the log names the reason
+```
+
+The first is a server that is not running at that address, or an
+`--ingest-url` that names the wrong host. The second is a server that answered
+and refused the turns.
 
 **The usual cause is the wrong port.** Ingest and reads are separate listeners
 — `8082` and `8081` on a local `tapes serve`. `start`, `capture`, and `sync`
