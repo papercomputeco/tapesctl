@@ -24,7 +24,8 @@ break, and every breaking change is recorded here plainly.
   and one with any other path is refused, since none of the declared model's
   turns could be captured through it. Without `--upstream` the declared
   model's base is the proxy's `openai` route with `/v1`, so its requests reach
-  `api.openai.com/v1/chat/completions`.
+  `api.openai.com/v1/chat/completions`. A launch whose config files cannot all
+  be written removes the ones it already wrote.
 - pi turns carry the working directory and pi's version.
 
 - `tapesctl start hermes` (alias `hermes-agent`). hermes runs in a capture

@@ -1825,19 +1825,33 @@ fn launch_lineage(harness: Harness) -> Option<Arc<LaunchLineage>> {
 /// A private file is truncated and narrowed *before* its contents are
 /// written, so a file left behind by an earlier launch with a wider mode
 /// never holds the secret at that mode, even briefly.
+///
+/// All or nothing: a failure part-way removes every file this call already
+/// wrote, and the one it was writing, before returning the error. The caller
+/// only learns the paths on success, so without this an early file — one
+/// carrying a credential, say — would outlive a launch that never started.
 fn materialise_config_files(plan: &LaunchPlan, private: bool) -> Result<Vec<PathBuf>> {
     let mut written = Vec::new();
     for file in &plan.config_files {
         let context = || error::ConfigFileSnafu {
             path: file.path.clone(),
         };
-        if let Some(parent) = file.path.parent() {
-            std::fs::create_dir_all(parent).context(context())?;
+        if let Some(parent) = file.path.parent()
+            && let Err(err) = std::fs::create_dir_all(parent)
+        {
+            remove_config_files(&written);
+            return Err(err).context(context());
         }
-        if private {
-            write_private(&file.path, file.contents.as_bytes()).context(context())?;
+        let outcome = if private {
+            write_private(&file.path, file.contents.as_bytes())
         } else {
-            std::fs::write(&file.path, &file.contents).context(context())?;
+            std::fs::write(&file.path, &file.contents)
+        };
+        if let Err(err) = outcome {
+            // Possibly created or truncated before the write failed.
+            let _ = std::fs::remove_file(&file.path);
+            remove_config_files(&written);
+            return Err(err).context(context());
         }
         written.push(file.path.clone());
     }
@@ -3133,6 +3147,36 @@ mod tests {
         );
         remove_config_files(&written);
         assert!(written.iter().all(|path| !path.exists()));
+    }
+
+    /// A write that fails part-way takes back what the call already wrote: the
+    /// caller never learns those paths, so nothing else would remove them —
+    /// including a `config.yaml` holding the key.
+    #[test]
+    fn a_failed_materialisation_leaves_no_file_behind() {
+        let root = tempfile::tempdir().unwrap();
+        let launch = hermes_launch(root.path(), Some("sk-not-real"));
+        let plan = hermes_plan(&launch, UpstreamSchema::OpenAi);
+        assert!(
+            plan.config_files.len() >= 2,
+            "needs a file before the failing one"
+        );
+        // The last file cannot be written: its path is a directory.
+        let last = &plan.config_files[plan.config_files.len() - 1].path;
+        std::fs::create_dir_all(last).unwrap();
+
+        materialise_config_files(&plan, launch.holds_secret()).unwrap_err();
+        for file in &plan.config_files[..plan.config_files.len() - 1] {
+            assert!(
+                !file.path.exists(),
+                "{} outlived the failed launch",
+                file.path.display()
+            );
+        }
+        assert!(
+            last.is_dir(),
+            "what was already there is not ours to remove"
+        );
     }
 
     #[cfg(unix)]
