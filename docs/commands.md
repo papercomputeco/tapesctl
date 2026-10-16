@@ -124,7 +124,7 @@ Unless `--no-start-hint` is given, `start claude` passes Claude Code one
 `--append-system-prompt` line, ahead of your own arguments:
 
 ```
-Org-wide recall: `tapesctl search <q> [--subject ID|me] [--since 7d]` finds prior sessions by anyone; `tapesctl sessions transcript <id>` reads one.
+Recall across every captured session: `tapesctl search <q> [--subject ID|me] [--since 7d]` finds prior sessions by anyone; `tapesctl sessions transcript <id>` reads one.
 ```
 
 It appends to Claude's instructions rather than replacing them. `codex` and

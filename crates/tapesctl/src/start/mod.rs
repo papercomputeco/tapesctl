@@ -142,7 +142,7 @@ pub const CODEX_PROVIDER_PREFIX: &str = "tapesctl-openai";
 /// This client's own wording: the shared crate decides only *where* a harness
 /// accepts such a line. It names commands that work against any tapes server,
 /// and says "anyone" because search spans every author's sessions.
-pub const START_HINT: &str = "Org-wide recall: `tapesctl search <q> [--subject ID|me] [--since 7d]` \
+pub const START_HINT: &str = "Recall across every captured session: `tapesctl search <q> [--subject ID|me] [--since 7d]` \
      finds prior sessions by anyone; `tapesctl sessions transcript <id>` reads one.";
 
 /// Default upstream for Claude traffic when the caller names none.
