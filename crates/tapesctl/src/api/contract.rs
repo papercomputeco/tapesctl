@@ -53,6 +53,11 @@ pub const EXPOSED_OPERATIONS: &[(&str, &str)] = &[
     (ops::GET_SESSION, "tapesctl sessions get"),
     (ops::GET_SESSION_TRACES, "tapesctl sessions traces"),
     (ops::LIST_RAW_TURNS, "tapesctl sessions raw-turns"),
+    (
+        ops::GET_SESSION_TRANSCRIPT,
+        "tapesctl sessions transcript, every page",
+    ),
+    (ops::LIST_SUBJECTS, "tapesctl subjects list"),
     (ops::LIST_TRACES, "tapesctl traces list"),
     (
         ops::GET_TRACE,

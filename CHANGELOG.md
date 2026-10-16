@@ -57,6 +57,19 @@ break, and every breaking change is recorded here plainly.
 - The vendored ingest contract moves to tapes v0.50.0 (papercomputeco/tapes#393), which adds
   the envelope's optional `parent_harness_id` and the capability list on
   `GET /ping`.
+- `tapesctl sessions transcript <id> [--role user|assistant|all] [--grep PAT]
+  [--subagents] [--json]`: a session as a conversation, every page.
+- `tapesctl subjects list [--q TEXT] [--limit N] [--json]`: who the server has
+  sessions for, with names, emails, and session counts.
+- `search` filters `--subject` (`me` resolves to this machine's own subject),
+  `--cwd`, `--harness`, `--since`, `--until` (RFC 3339 or `7d`-style), and
+  `--live`; hits show their owner, session title, `LIVE`, working directory,
+  and harness; `-v` prints the whole prompt. `sessions list` gains
+  `--subject`, and its `--since` / `--until` take durations too.
+- `tapesctl skills install --source <PATH|GIT-URL>` installs the `search`,
+  `recall`, and `digest` skills into `~/.claude/skills` and `~/.agents/skills`.
+- `start claude` appends one recall line to Claude's system prompt;
+  `--no-start-hint` / `TAPESCTL_NO_START_HINT=1` turns it off.
 
 ### Changed
 
@@ -77,6 +90,14 @@ break, and every breaking change is recorded here plainly.
   host, instead of sending it uncaptured. `TAPES_ALLOW_UNCAPTURED=1` lets such
   calls through.
 - `tapes-capture` 0.2 and `tapes-harnesses` 0.2.
+- **Breaking**: list-shaped `--json` output is one shape,
+  `{"items": [...], "next_cursor"?: "..."}`. `search --json` was the
+  cassette's document (`{"query", "count", "results"}`) and is now
+  `{"items": [hit, ...], "query", "top_k"}`; `spans list --json` was a bare
+  array and is now `{"items": [...]}`; `sessions list --json` drops an empty
+  `next_cursor`.
+- `search -k` is spelled `--top-k`; `--top` still parses.
+- `tapes-client` 0.7, `tapes-harnesses` 0.3, `tapes-capture` 0.2.
 
 - `tapes-client` 0.6.0, the release that follows tapes v0.49.0's paging of
   the composite, trace and raw-turn reads. `sessions traces`, `sessions

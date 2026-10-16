@@ -101,7 +101,7 @@ use tapes_harnesses::harness as registry;
 use tapes_harnesses::harness::RegistryUserAgents;
 use tapes_harnesses::launch::{
     ClaudeRecipe, CodexAuth, CodexRecipe, HermesRecipe, LaunchPlan, LaunchRecipe, PI_AGENT_DIR_ENV,
-    PI_CARRIED_FILES, PLACEHOLDER_API_KEY, PiRecipe, ProxyEndpoint, pi_gateway_model,
+    PI_CARRIED_FILES, PLACEHOLDER_API_KEY, PiRecipe, ProxyEndpoint, StartHint, pi_gateway_model,
     pi_user_agent_dir, resolve_codex_auth,
 };
 use tapes_harnesses::plugin::pi::GATEWAY_LABEL_SUFFIX_ENV;
@@ -135,6 +135,15 @@ pub const CODEX_MARKER_HEADER: &str = "X-Tapesctl-Codex-Attribution";
 /// provider id is this plus a per-process suffix, which is exactly the
 /// exact-or-suffixed shape [`CodexProviderFilter`] matches.
 pub const CODEX_PROVIDER_PREFIX: &str = "tapesctl-openai";
+
+/// The one line a launched agent is told about recall, unless
+/// `--no-start-hint` (or `TAPESCTL_NO_START_HINT`) turns it off.
+///
+/// This client's own wording: the shared crate decides only *where* a harness
+/// accepts such a line. It names commands that work against any tapes server,
+/// and says "anyone" because search spans every author's sessions.
+pub const START_HINT: &str = "Org-wide recall: `tapesctl search <q> [--subject NAME] [--since 7d]` \
+     finds prior sessions by anyone; `tapesctl sessions transcript <id>` reads one.";
 
 /// Default upstream for Claude traffic when the caller names none.
 pub const DEFAULT_ANTHROPIC_UPSTREAM: &str = "https://api.anthropic.com";
@@ -632,7 +641,11 @@ impl Harness {
     /// it; launching hermes without one is refused rather than defaulted,
     /// because the only safe default would be a path this function has no
     /// business choosing.
-    // Seven arguments because a launch plan genuinely has seven independent
+    /// `start_hint` is the line the launched agent starts with. Only Claude
+    /// takes one, through its recipe's `--append-system-prompt`: Codex's only
+    /// additive channel is a `SessionStart` hook, and `start codex` is
+    /// captured by redirection with no hook installed.
+    // Eight arguments because a launch plan genuinely has eight independent
     // inputs; bundling them into a struct would name a type with exactly one
     // constructor and one caller, which is ceremony rather than clarity.
     #[allow(clippy::too_many_arguments)]
@@ -645,9 +658,15 @@ impl Harness {
         nonce: &str,
         provider_routes: bool,
         hermes: Option<&HermesLaunch>,
+        start_hint: Option<&StartHint>,
     ) -> Result<LaunchPlan> {
         match self {
-            Self::Claude => ClaudeRecipe::new(endpoint).plan(),
+            Self::Claude => match start_hint {
+                Some(hint) => ClaudeRecipe::new(endpoint)
+                    .with_start_hint(hint.clone())
+                    .plan(),
+                None => ClaudeRecipe::new(endpoint).plan(),
+            },
             Self::Codex => {
                 CodexRecipe::new(endpoint, auth.unwrap_or(CodexAuth::ChatGpt), provider_id)
                     .with_display_name("tapesctl capture")
@@ -1164,6 +1183,8 @@ pub struct StartConfig {
     pub auth_subject: String,
     /// Whether to tail this session's transcripts alongside the wire lane.
     pub transcripts: bool,
+    /// The recall line the launched agent starts with; `None` when turned off.
+    pub start_hint: Option<StartHint>,
 }
 
 impl StartConfig {
@@ -1234,6 +1255,11 @@ impl StartConfig {
             // the lane is on unless the user explicitly says another client is
             // already tailing the same tree.
             transcripts: !args.no_transcripts,
+            start_hint: if args.no_start_hint {
+                None
+            } else {
+                StartHint::new(START_HINT)
+            },
         })
     }
 }
@@ -1378,6 +1404,7 @@ pub async fn run(args: StartArgs) -> Result<()> {
         &gateway_nonce,
         config.provider_routes,
         hermes.as_ref(),
+        config.start_hint.as_ref(),
     )?;
     // Held like the hermes claim, for the same reason: the agent directory's
     // `models.json` names this launch's proxy.
@@ -1930,6 +1957,7 @@ mod tests {
             org_id: None,
             auth_subject: None,
             no_transcripts: false,
+            no_start_hint: false,
         }
     }
 
@@ -2008,6 +2036,64 @@ mod tests {
     }
 
     #[test]
+    fn claude_starts_with_the_recall_hint_unless_it_is_turned_off() {
+        let config = StartConfig::resolve(args("claude")).unwrap();
+        let hint = config
+            .start_hint
+            .clone()
+            .expect("the hint is on by default");
+        assert!(hint.as_str().contains("tapesctl search"), "{hint}");
+        assert!(
+            hint.as_str().contains("tapesctl sessions transcript"),
+            "{hint}"
+        );
+        assert!(!hint.as_str().contains('\n'));
+        let plan = Harness::Claude
+            .plan(
+                Harness::Claude.endpoint_for(addr(), None, None),
+                "unused",
+                None,
+                None,
+                "unused-nonce",
+                false,
+                None,
+                config.start_hint.as_ref(),
+            )
+            .unwrap();
+        assert_eq!(
+            plan.args,
+            vec![
+                tapes_harnesses::launch::APPEND_SYSTEM_PROMPT_FLAG.to_owned(),
+                hint.as_str().to_owned()
+            ],
+        );
+
+        let mut off = args("claude");
+        off.no_start_hint = true;
+        assert!(StartConfig::resolve(off).unwrap().start_hint.is_none());
+    }
+
+    #[test]
+    fn the_codex_plan_takes_no_start_hint() {
+        // `start codex` installs no SessionStart hook, so there is no additive
+        // channel; the hint must not leak into argv as a config override.
+        let hint = StartHint::new(START_HINT).unwrap();
+        let plan = Harness::Codex
+            .plan(
+                Harness::Codex.endpoint_for(addr(), Some(CodexAuth::ApiKey), None),
+                "p",
+                Some(CodexAuth::ApiKey),
+                None,
+                "unused-nonce",
+                false,
+                None,
+                Some(&hint),
+            )
+            .unwrap();
+        assert!(!plan.args.join(" ").contains("tapesctl search"));
+    }
+
+    #[test]
     fn the_claude_plan_points_the_harness_at_the_proxy() {
         let plan = Harness::Claude
             .plan(
@@ -2017,6 +2103,7 @@ mod tests {
                 None,
                 "unused-nonce",
                 false,
+                None,
                 None,
             )
             .unwrap();
@@ -2045,6 +2132,7 @@ mod tests {
                 None,
                 "unused-nonce",
                 false,
+                None,
                 None,
             )
             .unwrap();
@@ -2160,6 +2248,7 @@ mod tests {
                 Some(UpstreamSchema::Anthropic),
                 "per-launch-secret",
                 false,
+                None,
                 None,
             )
             .unwrap();
@@ -2299,6 +2388,7 @@ mod tests {
                 "per-launch-secret",
                 true,
                 None,
+                None,
             )
             .unwrap();
         let env = plan_env(&plan);
@@ -2321,6 +2411,7 @@ mod tests {
                 Some(UpstreamSchema::Anthropic),
                 "per-launch-secret",
                 false,
+                None,
                 None,
             )
             .unwrap();
@@ -2470,6 +2561,7 @@ mod tests {
                 Some(UpstreamSchema::Anthropic),
                 "per-launch-secret",
                 false,
+                None,
                 None,
             )
             .unwrap();
@@ -2627,6 +2719,7 @@ mod tests {
                 "per-launch-secret",
                 false,
                 Some(launch),
+                None,
             )
             .unwrap()
     }
@@ -2904,6 +2997,7 @@ mod tests {
                 "nonce",
                 true,
                 None,
+                None,
             )
             .unwrap();
         let dir = PathBuf::from("/tmp/tapes-pi-agent");
@@ -2976,6 +3070,7 @@ mod tests {
                     Some(UpstreamSchema::OpenAi),
                     "nonce",
                     provider_routes,
+                    None,
                     None,
                 )
                 .unwrap();
@@ -3212,6 +3307,7 @@ mod tests {
                 None,
                 "n",
                 false,
+                None,
                 None,
             )
             .unwrap_err();

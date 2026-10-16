@@ -15,7 +15,9 @@ pub mod machine;
 pub mod plugin;
 pub mod ports;
 pub mod rc_block;
+pub mod recall;
 pub mod render;
+pub mod skills;
 pub mod start;
 pub mod transcript;
 pub mod uninstall;
@@ -66,6 +68,14 @@ pub fn banner() -> String {
 pub enum Invocation {
     /// A hand-written command.
     Static(Box<Cli>),
+    /// `tapesctl skills install`, which is this binary's own verb under a
+    /// noun it does not own; see [`skills`].
+    SkillsInstall {
+        /// Verbosity from the global flag.
+        verbose: u8,
+        /// The parsed arguments.
+        args: Box<cli::SkillsInstallArgs>,
+    },
     /// A generated cassette command.
     Cassette {
         /// Verbosity from the global flag, which the derive would otherwise own.
@@ -85,7 +95,7 @@ impl Invocation {
     pub fn verbose(&self) -> u8 {
         match self {
             Self::Static(cli) => cli.verbose,
-            Self::Cassette { verbose, .. } => *verbose,
+            Self::SkillsInstall { verbose, .. } | Self::Cassette { verbose, .. } => *verbose,
         }
     }
 }
@@ -118,6 +128,15 @@ where
     // shares its name (`search` on a deployment serving the search cassette
     // is still this binary's own verb).
     let verbose = matches.get_count("verbose");
+    if let Some(parsed) = skills::matched(&matches) {
+        return match parsed {
+            Ok(args) => Invocation::SkillsInstall {
+                verbose,
+                args: Box::new(args),
+            },
+            Err(error) => error.exit(),
+        };
+    }
     let generated = match matches.subcommand() {
         Some((cassette::command::NOUN, noun_matches)) => noun_matches.subcommand(),
         Some((name, cassette_matches))
@@ -210,11 +229,11 @@ fn parser(
     // via `augment` — as top-level commands, so `tapesctl search …` is the
     // cassette itself. `augment` skips any name a built-in already holds; a
     // server must not redefine what this binary's own command means.
-    let command = tapes_client::cli::augment(
+    let command = skills::mount(tapes_client::cli::augment(
         cassette::command::mount(Cli::command(), surface),
         surface,
         cassette::command::with_api_url,
-    )
+    ))
     .after_help(cassette::command::epilogue(server, surface, provenance));
 
     // The configured server enters as clap's *default* for the global flag, so
@@ -280,6 +299,7 @@ async fn discover(raw: Option<&str>) -> (Surface, Option<cassette::cache::Proven
 pub async fn dispatch(invocation: Invocation) -> Result<()> {
     match invocation {
         Invocation::Static(cli) => run(*cli).await,
+        Invocation::SkillsInstall { args, .. } => skills::run(&args),
         Invocation::Cassette {
             name,
             matches,
@@ -301,9 +321,10 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Capture(args) => capture::run(args).await,
         Command::Sync(args) => transcript::sync::run_with_verbosity(args, verbosity).await,
         Command::Sessions(command) => api::sessions(command).await,
+        Command::Subjects(command) => api::subjects(command).await,
         Command::Traces(command) => api::traces(command).await,
         Command::Spans(command) => api::spans(command).await,
-        Command::Search(args) => ports::search::run(args).await,
+        Command::Search(args) => ports::search::run(args, verbosity).await,
         Command::Export(args) => ports::export::run(args).await,
         Command::Seed(args) => ports::seed::run(args).await,
         Command::Plugin(PluginCommand::Install(args)) => plugin::run(args),

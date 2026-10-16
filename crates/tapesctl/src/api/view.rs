@@ -1,9 +1,12 @@
 //! Human views for the sessions, traces, and spans read commands.
 //!
 //! Views read the undecoded [`serde_json::Value`], so a field the server did
-//! not send renders as absent rather than failing the command.
+//! not send renders as absent rather than failing the command. The two
+//! recall views — a transcript and the subjects list — read the shared
+//! client's typed rows instead, whose every field defaults when absent.
 
 use serde_json::Value;
+use tapes_client::core::models::{SubjectItem, TranscriptRow};
 use time::OffsetDateTime;
 
 use crate::render::style::status_tone;
@@ -553,6 +556,115 @@ fn bool_at(value: &Value, path: &[&str]) -> Option<bool> {
     node.as_bool()
 }
 
+/// How much of a tool call's input a transcript line shows.
+const TOOL_INPUT_WIDTH: usize = 80;
+
+/// Render a session transcript: one block per row,
+/// `[<started_at> <role>] <text>`, then `  → name(input)` per tool call and
+/// `  ← first line` per tool result (`ERROR` first when it failed).
+#[must_use]
+pub fn transcript(rows: &[TranscriptRow], theme: &Theme) -> String {
+    if rows.is_empty() {
+        return "No transcript rows.\n".to_owned();
+    }
+    let mut out = String::new();
+    for (n, row) in rows.iter().enumerate() {
+        if n > 0 {
+            out.push('\n');
+        }
+        let header = format!("[{} {}]", sanitize(&row.started_at), sanitize(&row.role));
+        let tone = if row.role == "user" {
+            Tone::Command
+        } else {
+            Tone::Secondary
+        };
+        out.push_str(&theme.paint(tone, &header));
+        let mut lines = row.text.lines().map(sanitize);
+        if let Some(first) = lines.next().filter(|line| !line.trim().is_empty()) {
+            out.push(' ');
+            out.push_str(&first);
+        }
+        out.push('\n');
+        for line in lines {
+            out.push_str(&line);
+            out.push('\n');
+        }
+        for call in &row.tool_calls {
+            let input = match &call.input {
+                Value::Null => String::new(),
+                input => one_line(&input.to_string()),
+            };
+            out.push_str(&theme.paint(
+                Tone::Secondary,
+                &format!(
+                    "  → {}({})",
+                    sanitize(&call.name),
+                    elide(&input, TOOL_INPUT_WIDTH)
+                ),
+            ));
+            out.push('\n');
+        }
+        for result in &row.tool_results {
+            let first = result
+                .text
+                .lines()
+                .map(one_line)
+                .find(|line| !line.is_empty())
+                .unwrap_or_default();
+            let marker = if result.is_error { "ERROR " } else { "" };
+            let width = theme.width.saturating_sub(4 + marker.len()).max(20);
+            let tone = if result.is_error {
+                Tone::Command
+            } else {
+                Tone::Secondary
+            };
+            out.push_str(&theme.paint(tone, &format!("  ← {marker}{}", elide(&first, width))));
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Render `GET /v1/subjects`: who the server has sessions for.
+#[must_use]
+pub fn subjects(items: &[SubjectItem], theme: &Theme, now: OffsetDateTime) -> String {
+    if items.is_empty() {
+        return "No subjects.\n".to_owned();
+    }
+    let mut table = Table::new(vec![
+        Column::new("subject").flex(12).max(40),
+        Column::new("name").priority(1).max(32),
+        Column::new("email").priority(2).max(40),
+        Column::new("sessions").right(),
+        Column::new("last seen"),
+    ]);
+    for item in items {
+        table.row(vec![
+            Cell::or_absent(sanitize(&item.subject), Tone::Primary, theme),
+            Cell::or_absent(one_line(&item.name), Tone::Primary, theme),
+            Cell::or_absent(one_line(&item.email), Tone::Secondary, theme),
+            Cell::new(count(item.session_count), Tone::Number),
+            Cell::or_absent(relative(&item.last_seen_at, now), Tone::Secondary, theme),
+        ]);
+    }
+    let mut out = table.render(theme);
+    out.push('\n');
+    let noun = if items.len() == 1 {
+        "subject"
+    } else {
+        "subjects"
+    };
+    out.push_str(&theme.paint(
+        Tone::Secondary,
+        &format!(
+            "{} {noun} · filter sessions with --subject <subject|name|email>",
+            items.len()
+        ),
+    ));
+    out.push('\n');
+    out
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
@@ -869,5 +981,68 @@ mod tests {
         );
         assert!(rendered.contains("\nInput\n[\n"), "got:\n{rendered}");
         assert!(!rendered.contains("Output"), "got:\n{rendered}");
+    }
+
+    #[test]
+    fn the_transcript_is_one_block_per_row_with_tools_marked() {
+        let rows: Vec<TranscriptRow> = serde_json::from_value(json!([
+            {"seq": 1, "role": "user", "started_at": "2026-10-01T00:00:00Z",
+             "text": "fix the\nflaky test"},
+            {"seq": 2, "role": "assistant", "started_at": "2026-10-01T00:00:05Z",
+             "text": "",
+             "tool_calls": [{"id": "c1", "name": "Bash", "input": {"command": "cargo test"}}],
+             "tool_results": [
+                {"tool_use_id": "c1", "text": "\nok: 3 passed\nmore", "is_error": false},
+                {"tool_use_id": "c2", "text": "boom", "is_error": true}
+             ]}
+        ]))
+        .unwrap();
+        let rendered = transcript(&rows, &Theme::plain(100));
+        assert_eq!(
+            rendered,
+            "[2026-10-01T00:00:00Z user] fix the\n\
+             flaky test\n\
+             \n\
+             [2026-10-01T00:00:05Z assistant]\n\
+             \x20 → Bash({\"command\":\"cargo test\"})\n\
+             \x20 ← ok: 3 passed\n\
+             \x20 ← ERROR boom\n",
+            "got:\n{rendered}"
+        );
+        assert_eq!(transcript(&[], &Theme::plain(100)), "No transcript rows.\n");
+    }
+
+    #[test]
+    fn transcript_text_cannot_inject_terminal_escapes() {
+        let rows: Vec<TranscriptRow> = serde_json::from_value(json!([
+            {"role": "user", "started_at": "t", "text": "a\u{1b}[2Jb"}
+        ]))
+        .unwrap();
+        let rendered = transcript(&rows, &Theme::plain(100));
+        assert!(!rendered.contains('\u{1b}'), "{rendered:?}");
+    }
+
+    #[test]
+    fn the_subjects_table_names_people_and_counts_sessions() {
+        let items: Vec<SubjectItem> = serde_json::from_value(json!([
+            {"subject": "user_01", "name": "Ada Lovelace", "email": "ada@example.com",
+             "session_count": 4, "last_seen_at": "2026-09-26T11:00:00Z"},
+            {"subject": "local:bob", "session_count": 1}
+        ]))
+        .unwrap();
+        let now = time::macros::datetime!(2026-09-26 12:00 UTC);
+        let rendered = subjects(&items, &Theme::plain(120), now);
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert!(lines[0].starts_with("SUBJECT"), "{rendered}");
+        assert!(
+            lines[1].contains("user_01")
+                && lines[1].contains("Ada Lovelace")
+                && lines[1].contains("ada@example.com")
+                && lines[1].contains("1h ago"),
+            "{rendered}"
+        );
+        assert!(lines[2].contains("local:bob"), "{rendered}");
+        assert!(rendered.contains("2 subjects"), "{rendered}");
+        assert_eq!(subjects(&[], &Theme::plain(80), now), "No subjects.\n");
     }
 }
