@@ -210,6 +210,16 @@ pub struct ProxyState {
     /// from "captured turns and could not say whose they were" — and keeps it
     /// from claiming either while a capture is still running.
     pub tally: Arc<crate::start::tally::CaptureTally>,
+    /// This launch's lineage, when the proxy fronts a launched harness.
+    ///
+    /// Two jobs, both best-effort. Every attributed session is published as
+    /// this launch's live one, so a `tapesctl start` run from inside the
+    /// harness can find the session it runs inside. And when this launch is
+    /// itself nested, a turn whose own envelope names no parent gains the
+    /// outer launch's session as one. See [`super::lineage`].
+    ///
+    /// `None` under `tapesctl capture`, which launches nothing.
+    pub lineage: Option<Arc<super::lineage::LaunchLineage>>,
 }
 
 /// Axum fallback handler — every method and path forwards through here.
@@ -386,6 +396,25 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
     let envelope_attribution = desktop
         .or_else(|| trusted_inbound_envelope(&state, peer, &parts.headers))
         .or_else(|| attributed.envelope());
+
+    // Launch lineage, after attribution has decided whose turn this is and
+    // never instead of it: the session is published as this launch's live
+    // one, and a nested launch's turn that names no parent of its own gains
+    // the session the outer launch was running.
+    let (envelope_attribution, lineage_parent) = match (&state.lineage, envelope_attribution) {
+        (Some(lineage), Some(attribution)) => {
+            lineage.observe(&attribution);
+            let (attribution, added) = lineage.apply(attribution);
+            let parent = added.then(|| {
+                (
+                    attribution.parent_sid.clone().unwrap_or_default(),
+                    attribution.parent_harness_id.clone(),
+                )
+            });
+            (Some(attribution), parent)
+        }
+        (_, attribution) => (attribution, None),
+    };
     let session = envelope_attribution
         .as_ref()
         .map(|a| SessionEnvelope::from_attribution(a, &state.org_id, &state.auth_subject));
@@ -409,6 +438,9 @@ async fn try_forward(state: ProxyState, peer: SocketAddr, req: Request) -> Resul
         _ => attributed
             .stamp(&mut out_headers)
             .context(error::EnvelopeSnafu)?,
+    }
+    if let Some((parent_session, parent_harness)) = lineage_parent {
+        stamp_lineage_parent(&mut out_headers, &parent_session, parent_harness.as_deref());
     }
 
     let thread_id = envelope::thread_id(&parts.headers).map(str::to_owned);
@@ -602,7 +634,13 @@ fn trusted_inbound_envelope(
     if !state.self_attributing {
         return None;
     }
-    let claimed = inbound_envelope(headers)?;
+    // The completeness rule — a harness id that is present and not the
+    // `unknown` sentinel, plus a non-blank session id — is the crate's, and the
+    // crate applies the same rule when deciding whether to *preserve* an
+    // inbound envelope on the outbound request. Reading through it rather than
+    // restating it is what keeps a request whose headers say `pi` from filing
+    // under `unknown`.
+    let claimed = envelope::TapesAttribution::from_headers(headers)?;
     let presented_nonce = headers
         .get(GATEWAY_NONCE_HEADER)
         .and_then(|value| value.to_str().ok())
@@ -636,45 +674,26 @@ fn trusted_inbound_envelope(
     None
 }
 
-/// Read a session identity out of an envelope the harness stamped on itself.
+/// Add a launch-lineage parent to an outbound envelope that names none.
 ///
-/// The completeness rule — a harness id that is present and not the `unknown`
-/// sentinel, plus a non-blank session id — is the crate's, restated because it
-/// is private there. It has to be the same rule: the crate applies it when
-/// deciding whether to *preserve* an inbound envelope on the outbound request,
-/// and this decides whether to file the turn under one. Two different rules
-/// would produce a request whose headers say `pi` and whose ingest row says
-/// `unknown`.
-///
-/// Only the plain-text fields are read. `cwd`, session name, and metadata are
-/// percent-encoded or base64url on the wire, and decoding them here would be a
-/// second, drifting implementation of an encoder the crate owns — so a harness
-/// that sends them wants a `TapesAttribution::from_headers` in the crate rather
-/// than more parsing here. Nothing is lost today: pi's extension stamps exactly
-/// the two headers this reads.
-fn inbound_envelope(headers: &HeaderMap) -> Option<envelope::TapesAttribution> {
-    let harness_id = envelope_field(headers, envelope::X_TAPES_HARNESS_ID)
-        .filter(|id| id != envelope::HARNESS_ID_UNKNOWN)?;
-    let session_id = envelope_field(headers, envelope::X_TAPES_HARNESS_SESSION_ID)?;
-    Some(envelope::TapesAttribution {
-        harness_id,
-        session_id: Some(session_id),
-        version: envelope_field(headers, envelope::X_TAPES_HARNESS_VERSION),
-        cwd: None,
-        name: None,
-        parent_sid: envelope_field(headers, envelope::X_TAPES_PARENT_HARNESS_SESSION_ID),
-        metadata: serde_json::Map::new(),
-    })
-}
-
-/// One `X-Tapes-*` header, trimmed, absent when blank.
-fn envelope_field(headers: &HeaderMap, name: &'static str) -> Option<String> {
-    headers
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
+/// Two headers rather than a re-stamp of the whole envelope, because the
+/// envelope already on the request is the one attribution chose — the
+/// pipeline's, or a self-attributing harness's own, which carries encoded
+/// fields this process never decodes. Only the parent is new. The parent
+/// harness rides on the parent session's success, as the crate's producer
+/// does: a harness id beside no session id describes nothing.
+fn stamp_lineage_parent(
+    headers: &mut HeaderMap,
+    parent_session: &str,
+    parent_harness: Option<&str>,
+) {
+    let Ok(session) = http::HeaderValue::from_str(parent_session) else {
+        return;
+    };
+    headers.insert(envelope::X_TAPES_PARENT_HARNESS_SESSION_ID, session);
+    if let Some(harness) = parent_harness.and_then(|h| http::HeaderValue::from_str(h).ok()) {
+        headers.insert(envelope::X_TAPES_PARENT_HARNESS_ID, harness);
+    }
 }
 
 fn header_string(headers: &HeaderMap, name: http::header::HeaderName) -> Option<String> {
@@ -1052,6 +1071,9 @@ impl TurnCapture {
                 }
             };
 
+        // Shaped for what this server understands: a cross-harness parent
+        // reaches only an ingest that advertises it. See `ingest`'s docs.
+        let session = self.state.ingest.fit_session(self.session.clone()).await;
         let payload = TurnPayload {
             provider: self.provider,
             request: &request,
@@ -1059,7 +1081,7 @@ impl TurnCapture {
             raw_response: (!raw.is_empty()).then(|| encode_raw_response(&raw)),
             raw_response_encoding: self.meta.content_encoding.clone(),
             meta: self.meta.clone(),
-            session: self.session.clone(),
+            session,
         };
 
         // Whose turn this is: a harness id that is not the sentinel, plus a
@@ -1090,11 +1112,26 @@ impl TurnCapture {
                     "turn captured",
                 );
             }
-            Err(err) => warn!(
-                error = %err,
-                request_id = %self.meta.request_id,
-                "ingest rejected the turn",
-            ),
+            Err(err) if matches!(err, crate::error::Error::IngestSend { .. }) => {
+                self.state
+                    .tally
+                    .record_failure(super::tally::DeliveryFailure::Unreachable);
+                warn!(
+                    error = %err,
+                    request_id = %self.meta.request_id,
+                    "could not deliver the turn to ingest",
+                );
+            }
+            Err(err) => {
+                self.state
+                    .tally
+                    .record_failure(super::tally::DeliveryFailure::Rejected);
+                warn!(
+                    error = %err,
+                    request_id = %self.meta.request_id,
+                    "ingest rejected the turn",
+                );
+            }
         }
     }
 }

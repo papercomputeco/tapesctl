@@ -73,6 +73,79 @@ pub enum Error {
         provider: &'static str,
     },
 
+    /// `--model` was passed for a harness that chooses its own model.
+    ///
+    /// Refused rather than ignored, for `--schema`'s reason: a flag that does
+    /// nothing reads exactly like one that worked.
+    #[snafu(display(
+        "--model does not apply to {harness}; pass the harness's own model flag \
+         after `--` instead (it is for a harness whose provider config tapesctl \
+         writes: hermes, and pi for a model it does not ship)"
+    ))]
+    ModelNotApplicable {
+        /// The harness being launched.
+        harness: &'static str,
+    },
+
+    /// `--model` for pi named one of pi's own providers' models, or nothing.
+    ///
+    /// For pi, `--model` declares a model the upstream serves under pi's
+    /// `openai` provider; `anthropic/…` and `openai-codex/…` are pi's own and
+    /// are chosen with pi's flags instead.
+    #[snafu(display(
+        "--model {model:?} does not name a model to declare for pi; pass a model id the \
+         upstream serves (optionally as openai/<id>), or choose one of pi's own models \
+         with pi's flags after `--`"
+    ))]
+    PiModelNotDeclarable {
+        /// The refused value.
+        model: String,
+    },
+
+    /// `--model` for pi was combined with a `--schema` other than `openai`.
+    ///
+    /// A declared pi model always speaks OpenAI Chat Completions, so the
+    /// capture must front `openai`; any other schema would file its turns
+    /// under a format they are not in.
+    #[snafu(display(
+        "--schema {schema} conflicts with --model for pi: a declared model speaks \
+         OpenAI Chat Completions, so the capture fronts openai; drop --schema or pass \
+         --schema openai"
+    ))]
+    PiModelSchemaConflict {
+        /// The conflicting schema.
+        schema: &'static str,
+    },
+
+    /// `--model` for pi with an `--upstream` whose path the declared model's
+    /// requests cannot be captured under.
+    ///
+    /// A declared model speaks Chat Completions, so pi appends
+    /// `/chat/completions` to the upstream; only an upstream ending at `/v1`
+    /// puts that on the one Chat Completions path the capture recognises.
+    #[snafu(display(
+        "--upstream {upstream} cannot carry a captured pi --model session: pi sends the \
+         declared model's requests to {upstream}/chat/completions, and only \
+         /v1/chat/completions is captured; pass the upstream's OpenAI-compatible base, \
+         ending in /v1"
+    ))]
+    PiModelUpstreamUncapturable {
+        /// The refused upstream, as given.
+        upstream: String,
+    },
+
+    /// The planned pi `models.json` could not be re-read to place its
+    /// declared model on the versioned route.
+    #[snafu(display("could not adjust the planned pi models.json"))]
+    PiModelsDocument {
+        /// Underlying JSON failure.
+        source: serde_json::Error,
+    },
+
+    /// No home directory, so the hermes capture home cannot be placed.
+    #[snafu(display("could not locate a home directory for the hermes capture home"))]
+    NoHermesHome,
+
     /// A harness whose capture needs an in-harness plugin was launched before
     /// that plugin was installed.
     ///

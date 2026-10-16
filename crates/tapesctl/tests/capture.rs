@@ -16,13 +16,15 @@ use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use tapes_capture::launch::LaunchContext;
 use tapes_harnesses::attribution::{
     AttributionConfig, AttributionState, CodexProviderFilter, spawn_codex_watcher, spawn_watcher,
 };
 use tapes_harnesses::harness::RegistryUserAgents;
 use tapesctl::start::ingest::IngestClient;
+use tapesctl::start::lineage::{LaunchLineage, LaunchRegistry};
 use tapesctl::start::proxy::{ProxyState, forward_handler};
-use tapesctl::start::tally::{CaptureTally, ExitSummary, exit_summary_for};
+use tapesctl::start::tally::{CaptureTally, DeliveryFailures, ExitSummary, exit_summary_for};
 use tapesctl::transcript::tailer::SessionTracker;
 use url::Url;
 use wiremock::matchers::{method, path};
@@ -239,13 +241,120 @@ async fn proxy_for_with_ingest(
     launched_pid: i32,
     ingest_response: impl Respond + 'static,
 ) -> Harness {
+    proxy_for_full(
+        upstream,
+        upstream_url,
+        lane,
+        launched_pid,
+        ingest_response,
+        None,
+    )
+    .await
+}
+
+/// What a tapes ingest that resolves cross-harness parents answers on `/ping`.
+const PING_WITH_PARENT_HARNESS: &str = r#"{"status":"ok","capabilities":["parent_harness_id"]}"#;
+
+/// What a tapes ingest from before the capability list answers on `/ping`.
+const PING_BEFORE_CAPABILITIES: &str = r#"{"status":"ok"}"#;
+
+/// A proxy on `lane` that is also one launch in a launch tree.
+async fn proxy_with_lineage(lane: Lane, lineage: Arc<LaunchLineage>) -> Harness {
+    proxy_with_lineage_against(lane, lineage, PING_WITH_PARENT_HARNESS).await
+}
+
+/// [`proxy_with_lineage`], against an ingest whose `/ping` answers `ping`.
+async fn proxy_with_lineage_against(
+    lane: Lane,
+    lineage: Arc<LaunchLineage>,
+    ping: &'static str,
+) -> Harness {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ok_json())
+        .mount(&upstream)
+        .await;
+    let upstream_url = Url::parse(&upstream.uri()).unwrap();
+    proxy_for_server(
+        upstream,
+        upstream_url,
+        lane,
+        own_pid(),
+        ResponseTemplate::new(202).set_body_string(r#"{"status":"accepted"}"#),
+        Some(lineage),
+        ping,
+    )
+    .await
+}
+
+async fn proxy_for_full(
+    upstream: MockServer,
+    upstream_url: Url,
+    lane: Lane,
+    launched_pid: i32,
+    ingest_response: impl Respond + 'static,
+    lineage: Option<Arc<LaunchLineage>>,
+) -> Harness {
+    proxy_for_server(
+        upstream,
+        upstream_url,
+        lane,
+        launched_pid,
+        ingest_response,
+        lineage,
+        PING_WITH_PARENT_HARNESS,
+    )
+    .await
+}
+
+async fn proxy_for_server(
+    upstream: MockServer,
+    upstream_url: Url,
+    lane: Lane,
+    launched_pid: i32,
+    ingest_response: impl Respond + 'static,
+    lineage: Option<Arc<LaunchLineage>>,
+    ping: &'static str,
+) -> Harness {
     let ingest = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/ingest"))
         .respond_with(ingest_response)
         .mount(&ingest)
         .await;
+    Mock::given(method("GET"))
+        .and(path("/ping"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(ping))
+        .mount(&ingest)
+        .await;
+    let ingest_url = Url::parse(&ingest.uri()).unwrap();
+    serve_proxy(
+        upstream,
+        upstream_url,
+        lane,
+        launched_pid,
+        lineage,
+        ingest,
+        ingest_url,
+    )
+    .await
+}
 
+/// The proxy itself, posting its captures to `ingest_url`.
+///
+/// Split from [`proxy_for_server`] so a test can hand the proxy an ingest
+/// address nothing answers at; `ingest` is then only the harness's record of
+/// what *was* posted, which is nothing.
+async fn serve_proxy(
+    upstream: MockServer,
+    upstream_url: Url,
+    lane: Lane,
+    launched_pid: i32,
+    lineage: Option<Arc<LaunchLineage>>,
+    ingest: MockServer,
+    ingest_url: Url,
+) -> Harness {
     // Watchers over temp dirs. Empty on every lane but one: no harness is
     // actually running, so requests land on the unattributed path. That is
     // deliberate for the byte-fidelity tests, which are about the bytes.
@@ -278,7 +387,7 @@ async fn proxy_for_with_ingest(
     let state = ProxyState {
         tally: Arc::clone(&tally),
         upstream: upstream_url,
-        ingest: IngestClient::new(&Url::parse(&ingest.uri()).unwrap()).unwrap(),
+        ingest: IngestClient::new(&ingest_url).unwrap(),
         attribution: Arc::new(attribution),
         attribution_config: Arc::new(AttributionConfig::new(
             CodexProviderFilter::new("tapesctl-openai"),
@@ -295,6 +404,7 @@ async fn proxy_for_with_ingest(
         auth_subject: Arc::new("local:test".to_owned()),
         desktop_sessions: None,
         transcript_tracker: SessionTracker::new(),
+        lineage,
     };
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -328,7 +438,9 @@ async fn proxy_for_with_ingest(
 async fn await_captured_turn_bytes(ingest: &MockServer) -> Vec<u8> {
     for _ in 0..100 {
         let requests = ingest.received_requests().await.unwrap_or_default();
-        if let Some(request) = requests.first() {
+        // Turns only: a lineage test's ingest also answers the capability
+        // probe, which is a GET with no body.
+        if let Some(request) = requests.iter().find(|r| r.url.path() == "/v1/ingest") {
             return request.body.clone();
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1119,10 +1231,65 @@ async fn a_rejected_turns_session_is_not_the_one_the_summary_links() {
     assert_eq!(got.counts.captured, 2, "only the accepted turns count");
     assert_eq!(got.counts.unattributed, 2);
     assert_eq!(
+        got.failures,
+        DeliveryFailures {
+            unreachable: 0,
+            rejected: 1
+        },
+        "the rejected turn is counted as refused, not as unreachable",
+    );
+    assert_eq!(
         exit_summary_for(&got),
         ExitSummary::Unattributed(got.counts),
         "the honest summary is the captured-but-unattributed one",
     );
+}
+
+#[tokio::test]
+async fn a_turn_that_cannot_reach_ingest_is_counted_as_unreachable() {
+    // The launch the exit diagnosis is for: the proxy captured a turn and had
+    // nowhere to deliver it. Without the count the summary reads exactly like a
+    // session that never called a model.
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ok_json())
+        .mount(&upstream)
+        .await;
+    let upstream_url = Url::parse(&upstream.uri()).unwrap();
+    // A port that was just free and is now closed: connection refused.
+    let dead = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap()
+    };
+    let harness = serve_proxy(
+        upstream,
+        upstream_url,
+        Lane::LaunchedClaude,
+        own_pid(),
+        None,
+        MockServer::start().await,
+        Url::parse(&format!("http://{dead}")).unwrap(),
+    )
+    .await;
+
+    let _ = post_through_proxy(harness.proxy, r#"{"model":"claude-sonnet-4"}"#)
+        .await
+        .text()
+        .await;
+    harness.tally.drain(Duration::from_secs(5)).await;
+
+    let got = harness.tally.snapshot();
+    assert_eq!(got.counts.captured, 0);
+    assert_eq!(
+        got.failures,
+        DeliveryFailures {
+            unreachable: 1,
+            rejected: 0
+        },
+        "{got:?}",
+    );
+    assert_eq!(exit_summary_for(&got), ExitSummary::NothingCaptured);
 }
 
 #[tokio::test]
@@ -1372,4 +1539,381 @@ async fn the_nonce_echo_never_travels_upstream() {
     // And the strip must not have cost the envelope: this was a believed
     // request, so its identity still travels.
     assert_eq!(seen.headers.get("x-tapes-harness-id").unwrap(), "pi");
+}
+
+// --- hermes ------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_hermes_turn_is_filed_under_the_session_its_plugin_named() {
+    // hermes takes pi's lane: its plugin stamps the envelope and echoes the
+    // launch nonce, and the proxy believes the pair only with the peer check.
+    let harness = start_harness_as(ok_json(), true, own_pid()).await;
+    let _ = post_as_named_self_attributing_harness(
+        harness.proxy,
+        "hermes",
+        Some("hermes-session-1"),
+        Some(TEST_NONCE),
+    )
+    .await
+    .text()
+    .await;
+
+    let turn = await_captured_turn(&harness.ingest).await;
+    assert_eq!(turn["session"]["harness_id"], "hermes");
+    assert_eq!(turn["session"]["harness_session_id"], "hermes-session-1");
+
+    let seen = harness.upstream.received_requests().await.unwrap();
+    assert!(
+        seen[0].headers.get("x-tapes-gateway-nonce").is_none(),
+        "the echo is stripped before forwarding, for hermes as for pi",
+    );
+}
+
+#[tokio::test]
+async fn a_hermes_envelope_without_the_nonce_is_refused() {
+    let harness = start_harness_as(ok_json(), true, own_pid()).await;
+    let _ = post_as_named_self_attributing_harness(
+        harness.proxy,
+        "hermes",
+        Some("hermes-session-1"),
+        Some("not-this-launchs-nonce"),
+    )
+    .await
+    .text()
+    .await;
+    let turn = await_captured_turn(&harness.ingest).await;
+    assert_eq!(turn["session"]["harness_id"], "unknown");
+}
+
+// --- launch lineage ------------------------------------------------------------
+
+/// The environment a child of `ctx` inherits, as a lookup.
+fn child_env_of(ctx: &LaunchContext) -> impl Fn(&str) -> Option<String> + use<> {
+    let pairs: Vec<(String, String)> = ctx
+        .child_env()
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v))
+        .collect();
+    move |name| {
+        pairs
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.clone())
+    }
+}
+
+async fn upstream_request(harness: &Harness) -> Request {
+    harness
+        .upstream
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_launch_nested_in_a_captured_claude_session_names_it_as_parent() {
+    let registry_dir = tempfile::tempdir().unwrap();
+    let registry = LaunchRegistry::new(registry_dir.path());
+
+    // The outer launch: claude, attributed by its session file.
+    let outer = Arc::new(LaunchLineage::new(
+        LaunchContext::from_lookup("L-outer-claude", "claude", |_| None),
+        registry.clone(),
+    ));
+    let outer_proxy = proxy_with_lineage(Lane::LaunchedClaude, Arc::clone(&outer)).await;
+    let _ = post_through_proxy(outer_proxy.proxy, r#"{"model":"claude-sonnet-4"}"#)
+        .await
+        .text()
+        .await;
+    let _ = await_captured_turn(&outer_proxy.ingest).await;
+    assert_eq!(
+        registry.lookup("L-outer-claude").unwrap().session_id,
+        LAUNCHED_CLAUDE_SID,
+        "the outer launch publishes the session it is running",
+    );
+
+    // The inner launch: hermes, started from inside that session.
+    let inner = Arc::new(LaunchLineage::new(
+        LaunchContext::from_lookup("L-inner-hermes", "hermes", child_env_of(outer.context())),
+        registry.clone(),
+    ));
+    let inner_proxy = proxy_with_lineage(Lane::SelfAttributing, inner).await;
+    let _ = post_as_named_self_attributing_harness(
+        inner_proxy.proxy,
+        "hermes",
+        Some("hermes-session-1"),
+        Some(TEST_NONCE),
+    )
+    .await
+    .text()
+    .await;
+
+    let seen = upstream_request(&inner_proxy).await;
+    assert_eq!(
+        seen.headers
+            .get("x-tapes-parent-harness-session-id")
+            .unwrap(),
+        LAUNCHED_CLAUDE_SID
+    );
+    assert_eq!(
+        seen.headers.get("x-tapes-parent-harness-id").unwrap(),
+        "claude"
+    );
+    // The child's own identity is untouched.
+    assert_eq!(seen.headers.get("x-tapes-harness-id").unwrap(), "hermes");
+    assert_eq!(
+        seen.headers.get("x-tapes-harness-session-id").unwrap(),
+        "hermes-session-1"
+    );
+
+    let turn = await_captured_turn(&inner_proxy.ingest).await;
+    assert_eq!(turn["session"]["harness_id"], "hermes");
+    assert_eq!(turn["session"]["harness_session_id"], "hermes-session-1");
+    // The row carries the parent and, because it is another harness's, names
+    // that harness — without it the server would resolve the parent as a
+    // hermes session.
+    assert_eq!(
+        turn["session"]["parent_harness_session_id"], LAUNCHED_CLAUDE_SID,
+        "got: {turn}"
+    );
+    assert_eq!(
+        turn["session"]["parent_harness_id"], "claude",
+        "got: {turn}"
+    );
+    // And the inner launch published itself for anything nested inside it.
+    assert_eq!(
+        registry.lookup("L-inner-hermes").unwrap().session_id,
+        "hermes-session-1"
+    );
+}
+
+/// The outer claude launch every cross-harness lineage test nests inside:
+/// captured once, so its session is published for the inner launch to find.
+async fn captured_outer_claude(registry: &LaunchRegistry) -> Arc<LaunchLineage> {
+    let outer = Arc::new(LaunchLineage::new(
+        LaunchContext::from_lookup("L-outer-claude", "claude", |_| None),
+        registry.clone(),
+    ));
+    let outer_proxy = proxy_with_lineage(Lane::LaunchedClaude, Arc::clone(&outer)).await;
+    let _ = post_through_proxy(outer_proxy.proxy, r#"{"model":"claude-sonnet-4"}"#)
+        .await
+        .text()
+        .await;
+    let _ = await_captured_turn(&outer_proxy.ingest).await;
+    outer
+}
+
+#[tokio::test]
+async fn a_cross_harness_parent_is_withheld_from_an_ingest_that_predates_it() {
+    // An older tapes ignores `parent_harness_id` and would look the claude
+    // session up as a hermes one, filing the child under a placeholder parent.
+    // Leaving the parent off is the behaviour from before the field existed.
+    let registry_dir = tempfile::tempdir().unwrap();
+    let registry = LaunchRegistry::new(registry_dir.path());
+    let outer = captured_outer_claude(&registry).await;
+
+    let inner = Arc::new(LaunchLineage::new(
+        LaunchContext::from_lookup("L-inner-hermes", "hermes", child_env_of(outer.context())),
+        registry.clone(),
+    ));
+    let inner_proxy =
+        proxy_with_lineage_against(Lane::SelfAttributing, inner, PING_BEFORE_CAPABILITIES).await;
+    for _ in 0..2 {
+        let _ = post_as_named_self_attributing_harness(
+            inner_proxy.proxy,
+            "hermes",
+            Some("hermes-session-1"),
+            Some(TEST_NONCE),
+        )
+        .await
+        .text()
+        .await;
+    }
+
+    let turn = await_captured_turn(&inner_proxy.ingest).await;
+    assert_eq!(turn["session"]["harness_id"], "hermes");
+    assert_eq!(turn["session"]["harness_session_id"], "hermes-session-1");
+    assert!(
+        turn["session"].get("parent_harness_session_id").is_none(),
+        "got: {turn}"
+    );
+    assert!(
+        turn["session"].get("parent_harness_id").is_none(),
+        "got: {turn}"
+    );
+    // Only the ingest row is shaped for the server: the outbound envelope
+    // still names the parent for whatever reads it upstream.
+    let seen = upstream_request(&inner_proxy).await;
+    assert_eq!(
+        seen.headers
+            .get("x-tapes-parent-harness-session-id")
+            .unwrap(),
+        LAUNCHED_CLAUDE_SID
+    );
+    assert_eq!(
+        seen.headers.get("x-tapes-parent-harness-id").unwrap(),
+        "claude"
+    );
+
+    // Asked once, however many turns needed the answer.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let requests = inner_proxy.ingest.received_requests().await.unwrap();
+        let turns = requests
+            .iter()
+            .filter(|r| r.url.path() == "/v1/ingest")
+            .count();
+        if turns >= 2 {
+            let probes = requests.iter().filter(|r| r.url.path() == "/ping").count();
+            assert_eq!(probes, 1, "the capability probe is cached per client");
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "both turns land");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_same_harness_parent_never_waits_on_the_capability_probe() {
+    // A same-harness parent predates `parent_harness_id`, so every server
+    // files it correctly and there is nothing to ask.
+    let registry_dir = tempfile::tempdir().unwrap();
+    let registry = LaunchRegistry::new(registry_dir.path());
+    let outer = LaunchLineage::new(
+        LaunchContext::from_lookup("L-outer-pi", "pi", |_| None),
+        registry.clone(),
+    );
+    let outer_proxy = proxy_with_lineage_against(
+        Lane::SelfAttributing,
+        Arc::new(outer),
+        PING_BEFORE_CAPABILITIES,
+    )
+    .await;
+    let _ = post_as_named_self_attributing_harness(
+        outer_proxy.proxy,
+        "pi",
+        Some("pi-outer"),
+        Some(TEST_NONCE),
+    )
+    .await
+    .text()
+    .await;
+    let _ = await_captured_turn(&outer_proxy.ingest).await;
+
+    let inner = LaunchLineage::new(
+        LaunchContext::from_lookup(
+            "L-inner-pi",
+            "pi",
+            child_env_of(&LaunchContext::from_lookup("L-outer-pi", "pi", |_| None)),
+        ),
+        registry.clone(),
+    );
+    let inner_proxy = proxy_with_lineage_against(
+        Lane::SelfAttributing,
+        Arc::new(inner),
+        PING_BEFORE_CAPABILITIES,
+    )
+    .await;
+    let _ = post_as_named_self_attributing_harness(
+        inner_proxy.proxy,
+        "pi",
+        Some("pi-inner"),
+        Some(TEST_NONCE),
+    )
+    .await
+    .text()
+    .await;
+
+    let turn = await_captured_turn(&inner_proxy.ingest).await;
+    assert_eq!(turn["session"]["parent_harness_session_id"], "pi-outer");
+    let requests = inner_proxy.ingest.received_requests().await.unwrap();
+    assert!(
+        requests.iter().all(|r| r.url.path() != "/ping"),
+        "no probe for an envelope that needs no capability"
+    );
+}
+
+#[tokio::test]
+async fn a_launch_nested_in_the_same_harness_files_its_parent_on_the_row() {
+    let registry_dir = tempfile::tempdir().unwrap();
+    let registry = LaunchRegistry::new(registry_dir.path());
+    let outer = LaunchLineage::new(
+        LaunchContext::from_lookup("L-outer-pi", "pi", |_| None),
+        registry.clone(),
+    );
+    let outer_proxy = proxy_with_lineage(Lane::SelfAttributing, Arc::new(outer)).await;
+    let _ = post_as_named_self_attributing_harness(
+        outer_proxy.proxy,
+        "pi",
+        Some("pi-outer"),
+        Some(TEST_NONCE),
+    )
+    .await
+    .text()
+    .await;
+    let _ = await_captured_turn(&outer_proxy.ingest).await;
+
+    let inner = LaunchLineage::new(
+        LaunchContext::from_lookup("L-inner-pi", "pi", |name| {
+            Some(
+                match name {
+                    "TAPES_LAUNCH_ID" => "L-outer-pi",
+                    _ => "pi",
+                }
+                .to_owned(),
+            )
+        }),
+        registry,
+    );
+    let inner_proxy = proxy_with_lineage(Lane::SelfAttributing, Arc::new(inner)).await;
+    let _ = post_as_named_self_attributing_harness(
+        inner_proxy.proxy,
+        "pi",
+        Some("pi-inner"),
+        Some(TEST_NONCE),
+    )
+    .await
+    .text()
+    .await;
+
+    let turn = await_captured_turn(&inner_proxy.ingest).await;
+    assert_eq!(turn["session"]["harness_session_id"], "pi-inner");
+    assert_eq!(turn["session"]["parent_harness_session_id"], "pi-outer");
+    // Same harness: absence already says so.
+    assert!(
+        turn["session"].get("parent_harness_id").is_none(),
+        "got: {turn}"
+    );
+    let seen = upstream_request(&inner_proxy).await;
+    assert_eq!(seen.headers.get("x-tapes-parent-harness-id").unwrap(), "pi");
+}
+
+#[tokio::test]
+async fn a_launch_with_no_parent_is_captured_exactly_as_before() {
+    let registry_dir = tempfile::tempdir().unwrap();
+    let registry = LaunchRegistry::new(registry_dir.path());
+    let lineage = LaunchLineage::new(
+        LaunchContext::from_lookup("L-alone", "claude", |_| None),
+        registry.clone(),
+    );
+    let harness = proxy_with_lineage(Lane::LaunchedClaude, Arc::new(lineage)).await;
+    let _ = post_through_proxy(harness.proxy, r#"{"model":"claude-sonnet-4"}"#)
+        .await
+        .text()
+        .await;
+
+    let turn = await_captured_turn(&harness.ingest).await;
+    assert_eq!(turn["session"]["harness_session_id"], LAUNCHED_CLAUDE_SID);
+    assert!(turn["session"].get("parent_harness_session_id").is_none());
+    assert!(turn["session"].get("parent_harness_id").is_none());
+    let seen = upstream_request(&harness).await;
+    assert!(
+        seen.headers
+            .get("x-tapes-parent-harness-session-id")
+            .is_none()
+    );
+    assert!(seen.headers.get("x-tapes-parent-harness-id").is_none());
 }

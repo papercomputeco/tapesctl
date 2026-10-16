@@ -137,6 +137,9 @@ pub async fn run(args: CaptureArgs) -> Result<()> {
         ),
         desktop_sessions: Some(Arc::clone(&sessions)),
         transcript_tracker: SessionTracker::new(),
+        // An app that launched itself was not launched by this process, so
+        // there is no launch to publish and no environment it inherited.
+        lineage: None,
     };
 
     let app = axum::Router::new()

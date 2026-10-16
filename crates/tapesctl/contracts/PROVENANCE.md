@@ -22,15 +22,17 @@ client vendors it, and its one reader is a test in this crate.
 
 ## Pin
 
-- Release tag: **v0.34.0** — papercomputeco/tapes, commit `94b2ec7`
-  ("feat: MCP cassettes (#289)"). This is the first tapes release that
-  attaches the compiled contracts as assets.
+- Release tag: **v0.50.0** — papercomputeco/tapes, commit `8aa3294`
+  ("feat(capture): keep OpenAI-compatible reasoning, link cross-harness
+  parents, and split idle header-less sessions (#393)"). It is the first tapes
+  release that carries `parent_harness_id` on the ingest envelope and the
+  `capabilities` list on `GET /ping` that tapesctl probes before sending it.
 - Vendored from the release asset, byte-for-byte:
-  - <https://github.com/papercomputeco/tapes/releases/download/v0.34.0/tapes-ingest-v0.34.0.yaml>
+  - <https://github.com/papercomputeco/tapes/releases/download/v0.50.0/tapes-ingest-v0.50.0.yaml>
 - The asset is what `tapes dev openapi ingest --docs-root . --out <file>` emits
   at the tag — the exact command `dagger call contracts` (`make contracts` in
-  tapes) runs; a local emission at `94b2ec7` was verified byte-identical to the
-  asset.
+  tapes) runs.
+- Previous pin: release v0.34.0, commit `94b2ec7`.
 
 Keep this pin in step with the read contract's, in
 `read-contract/contracts/PROVENANCE.md` of the tapes-crates repository. The two
@@ -42,18 +44,18 @@ different servers.
 
 Vendored file bytes (what `scripts/contracts-check.sh` verifies):
 
-- `tapes-ingest.yaml` sha256 `cf911335ce8ce1b5c774d4032f68eb85ee3c35cb84e99f5246f12d2ae9b4f13e`
+- `tapes-ingest.yaml` sha256 `873435d162b247bb84d180544994e9f6ed1de42b72bfcdc8bab15b76e56484e0`
 
 Prose-included document fingerprint (`CompiledDoc.Fingerprint()` as printed by
 `tapes dev openapi`; the ETag a server would serve for the same document):
 
-- ingest `sha256:9a19d7e188442acbf111b98b67e1741262585ffb503803a7e4e693346d2837c9`
+- ingest `sha256:f4e40a055c3001356cdcde64b00e56d79b13bba864aab648d41a4ba1b70d292d`
 
 Prose-stripped contract seal (the value in tapes `ingest/CONTRACT` at the pinned
-tag; this changes only when the contract *shape* changes, so it is the identity
+commit; this changes only when the contract *shape* changes, so it is the identity
 a doc-comment edit does not move):
 
-- ingest `sha256:b51bebaecb5e0942cd2fba11d694126e36c6a4e33088a77b8171eb8c3acecfb7`
+- ingest `sha256:5f10421256e7d2cc9c281d1ec11fde04fed744edd78cc06ee0dd699a06f468a3`
 
 ## Updating
 

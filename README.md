@@ -99,7 +99,7 @@ forwarded to its own provider API by default — and the proxy dies with it.
 tapesctl start claude --ingest-url http://localhost:8082
 ```
 
-The supported harnesses are `claude`, `codex`, and `pi`. Anything after the
+The supported harnesses are `claude`, `codex`, `pi`, and `hermes`. Anything after the
 harness name is passed through verbatim, so your usual flags still work:
 
 ```bash
@@ -178,8 +178,15 @@ tapesctl start pi --ingest-url http://localhost:8082 -- --provider anthropic --m
 flags, not `tapesctl`'s, which is why they come after `--`. `pi` only honours
 them as a pair; given just one it ignores it and falls back to your saved
 default or the first provider it finds a key for — which may be a provider this
-capture does not cover, so the session runs and records nothing. `pi` warns
-inside the harness when the selected model's provider is not covered.
+capture does not cover. While captured, `pi` refuses a model whose requests
+would bypass the capture, with one line naming its provider and host;
+`TAPES_ALLOW_UNCAPTURED=1` lets them through, uncaptured.
+
+For a model the upstream serves that pi does not ship — a self-hosted
+OpenAI-compatible model — pass `tapesctl`'s own `--model <id>`: pi then runs in
+`~/.tapes/pi-agent` with the model declared under `openai` speaking Chat
+Completions, and your own `~/.pi/agent` is left alone. The capture then fronts
+`openai` without `--schema`, and `--schema anthropic` alongside it is an error.
 
 A plain `tapesctl start pi` routes each of pi's Anthropic, OpenAI, and OpenAI
 Codex providers to its own upstream, so all three are captured. `--schema`

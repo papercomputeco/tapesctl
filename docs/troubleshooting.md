@@ -19,7 +19,17 @@ no turns were captured
 ```
 
 That means nothing landed in the server. It is *not* the same as
-`✓ captured session …`, which means it did.
+`✓ captured session …`, which means it did. When turns were captured and could
+not be delivered, a line on stderr after it says why:
+
+```
+tapesctl: error: could not reach the tapes ingest server at http://localhost:8082/; 1 captured turn was not delivered. …
+tapesctl: warning: the tapes ingest server rejected 3 captured turns; the log names the reason
+```
+
+The first is a server that is not running at that address, or an
+`--ingest-url` that names the wrong host. The second is a server that answered
+and refused the turns.
 
 **The usual cause is the wrong port.** Ingest and reads are separate listeners
 — `8082` and `8081` on a local `tapes serve`. `start`, `capture`, and `sync`
@@ -137,10 +147,13 @@ binds or spawns, so nothing was half-started:
 tapesctl plugin install pi
 ```
 
-**A pi session that runs but records nothing** is a different problem: pass
-`--provider` and `--model` together or not at all. They are pi's own flags, so
-they follow `--`. Given only one, pi ignores it and falls back to a saved
-default that may be a provider this capture does not front.
+**A pi turn that fails with `This model provider bypasses capture (…)`** is the
+capture refusing a model whose requests would not reach the proxy. Pick a model
+on one of pi's Anthropic, OpenAI or OpenAI Codex providers, declare an upstream
+model with `tapesctl start pi --model <id>`, or set `TAPES_ALLOW_UNCAPTURED=1`
+to let it run uncaptured. Pass pi's `--provider` and `--model` together or not
+at all: they are pi's own flags, so they follow `--`, and given only one pi
+falls back to a saved default.
 
 ```bash
 tapesctl start pi --ingest-url http://localhost:8082 -- --provider anthropic --model <model-id>

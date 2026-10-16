@@ -105,6 +105,7 @@ async fn start_harness() -> Harness {
         auth_subject: Arc::new("local:test".to_owned()),
         desktop_sessions: Some(Arc::clone(&sessions)),
         transcript_tracker: SessionTracker::new(),
+        lineage: None,
     };
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

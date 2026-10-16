@@ -5,7 +5,78 @@ break, and every breaking change is recorded here plainly.
 
 ## Unreleased
 
+### Added
+
+- `tapesctl start pi --model <id>` declares a model the upstream serves that
+  pi does not ship. pi runs in `~/.tapes/pi-agent` (persistent; a second live
+  launch gets a private temporary directory), where each launch writes a
+  `models.json` declaring the model under `openai` with
+  `api: "openai-completions"` at the capture proxy, plus the capture
+  extension, selects it with `--model openai/<id>`, and removes both at exit.
+  Your `settings.json`, `keybindings.json` and user-level instruction files are
+  copied in; `auth.json`, `mcp.json` and your `models.json` never are. The
+  credential is `$OPENAI_API_KEY` by reference when set, otherwise a
+  placeholder. `anthropic/…` and `openai-codex/…` are refused. The capture
+  fronts `openai` for a declared model, so its turns are ingested as OpenAI
+  even behind an explicit `--upstream`; `--schema anthropic` with `--model` is
+  refused. An explicit `--upstream` given as a bare origin gains the `/v1` its
+  Chat Completions route needs (one already ending in `/v1` is left alone),
+  and one with any other path is refused, since none of the declared model's
+  turns could be captured through it. Without `--upstream` the declared
+  model's base is the proxy's `openai` route with `/v1`, so its requests reach
+  `api.openai.com/v1/chat/completions`. A launch whose config files cannot all
+  be written removes the ones it already wrote.
+- pi turns carry the working directory and pi's version.
+
+- `tapesctl start hermes` (alias `hermes-agent`). hermes runs in a capture
+  home at `~/.tapes/hermes-home` — persistent, so its sessions, memories and
+  skills survive between captured launches, and never your own `~/.hermes`,
+  from which nothing is copied. Each launch writes a `config.yaml` there whose
+  `custom` provider points at the capture proxy, plus the capture plugin, and
+  removes both at exit; a second hermes launch while one is live gets a
+  private temporary home instead. `--schema openai` (the default, chat completions) or
+  `--schema anthropic` picks the wire format; the new `--model` flag names the
+  model hermes starts on and applies to hermes only. When `OPENAI_API_KEY` (or
+  `ANTHROPIC_API_KEY` for `--schema anthropic`) is set, it is written into that
+  config, which is then created `0600`. hermes's auxiliary calls (title
+  generation, compression, and the rest) are attributed too, though in a
+  process running several sessions at once one may be filed under the most
+  recent session rather than its own.
+- Launch lineage. Every `start` exports `TAPES_LAUNCH_ID` and
+  `TAPES_LAUNCH_HARNESS_ID` to the harness and records the session that launch
+  is running in `~/.tapes/launches/<launch-id>.json` while it runs. A `start`
+  run from inside a captured session finds that record and stamps the outer
+  session on its own turns as `x-tapes-parent-harness-session-id` and
+  `x-tapes-parent-harness-id`. The ingest row carries the parent session and,
+  when it belongs to another harness, `parent_harness_id`.
+- A cross-harness parent is sent only to a tapes ingest whose `GET /ping`
+  lists the `parent_harness_id` capability, probed once per launch. Against an
+  older tapes the parent is left off the row, as before lineage, instead of
+  linking the child to a placeholder session in its own harness; the log and
+  the exit summary say so once.
+- The vendored ingest contract moves to tapes v0.50.0 (papercomputeco/tapes#393), which adds
+  the envelope's optional `parent_harness_id` and the capability list on
+  `GET /ping`.
+
 ### Changed
+
+- When captured turns cannot reach the ingest server, `start` says so at exit:
+  one `tapesctl: error: could not reach the tapes ingest server at <url>; …`
+  line on stderr, naming the address it posted to and the `--ingest-url` /
+  `TAPES_INGEST_URL` remedy, after the summary line. Turns ingest rejected are
+  counted the same way, in a warning that points at the log. Both used to
+  reach only the log file, behind a bare `no turns were captured`.
+- A captured pi session refuses a model whose requests would not reach the
+  capture proxy — a provider the extension does not redirect, or a
+  `models.json` provider with its own `baseUrl` — with one line naming the
+  provider and host, where it used to warn and send the request uncaptured.
+  `TAPES_ALLOW_UNCAPTURED=1` restores the old behaviour.
+- A captured hermes session refuses a main-loop or auxiliary model call whose
+  base URL is not the capture proxy — a provider switched to inside the
+  session, an auxiliary task on its own endpoint — with one line naming the
+  host, instead of sending it uncaptured. `TAPES_ALLOW_UNCAPTURED=1` lets such
+  calls through.
+- `tapes-capture` 0.2 and `tapes-harnesses` 0.2.
 
 - `tapes-client` 0.6.0, the release that follows tapes v0.49.0's paging of
   the composite, trace and raw-turn reads. `sessions traces`, `sessions

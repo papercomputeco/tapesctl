@@ -335,17 +335,21 @@ fn run_in(args: &PluginInstallArgs, machine: &Machine) -> Result<()> {
     // The artifact is inert until this is set, and it is set by whoever launches
     // the harness — so an install alone captures nothing, and saying so here is
     // cheaper than the user discovering it from an empty session list.
-    println!(
-        "{} is loaded by every {} session but stays inactive until \
-         {GATEWAY_URL_ENV} names a capture proxy.",
-        if artifacts.len() == 1 {
-            "it"
-        } else {
-            "they are"
-        },
-        harness.id(),
-    );
+    println!("{}", inert_note(artifacts.len(), harness.id()));
     Ok(())
+}
+
+/// What an install says after writing its artifacts: they load, and wait.
+fn inert_note(artifacts: usize, harness: &str) -> String {
+    let (subject, verb, stay) = if artifacts == 1 {
+        ("it", "is", "stays")
+    } else {
+        ("they", "are", "stay")
+    };
+    format!(
+        "{subject} {verb} loaded by every {harness} session but {stay} inactive until \
+         {GATEWAY_URL_ENV} names a capture proxy."
+    )
 }
 
 /// Run one `plugin uninstall`.
@@ -404,6 +408,22 @@ fn uninstall_in(args: &PluginUninstallArgs, machine: &Machine) -> Result<()> {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    /// One artifact is "it is … stays", several are "they are … stay" — the
+    /// note agrees with itself in both.
+    #[test]
+    fn the_inert_note_agrees_in_number() {
+        assert_eq!(
+            inert_note(1, "pi"),
+            "it is loaded by every pi session but stays inactive until \
+             TAPES_GATEWAY_URL names a capture proxy."
+        );
+        assert_eq!(
+            inert_note(2, "hermes"),
+            "they are loaded by every hermes session but stay inactive until \
+             TAPES_GATEWAY_URL names a capture proxy."
+        );
+    }
 
     /// A machine wholly contained by `home`.
     ///

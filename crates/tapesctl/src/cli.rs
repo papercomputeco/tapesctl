@@ -403,7 +403,7 @@ pub struct ApiArgs {
 /// Arguments for `tapesctl start`.
 #[derive(Debug, Args)]
 pub struct StartArgs {
-    /// The harness to launch (e.g. `claude`, `codex`, `pi`).
+    /// The harness to launch (e.g. `claude`, `codex`, `pi`, `hermes`).
     pub harness: String,
 
     /// Arguments passed through verbatim to the harness.
@@ -423,13 +423,26 @@ pub struct StartArgs {
     /// `openai`.
     ///
     /// Only meaningful for a harness that speaks several — `pi` redirects all
-    /// of its providers to one endpoint, so this is what picks the
-    /// upstream, the wire format ingest reduces, and the schema the extension
-    /// reports. A
+    /// of its providers to one endpoint, and `hermes` (whose default is
+    /// `openai`, meaning chat completions) speaks either — so this is what
+    /// picks the upstream, the wire format ingest reduces, and the schema the
+    /// harness is told to speak. A
     /// harness that speaks exactly one schema takes it from the harness instead,
     /// and passing this there is an error rather than a silent no-op.
     #[arg(long)]
     pub schema: Option<String>,
+
+    /// The model a harness whose endpoint this launch writes should start on.
+    ///
+    /// `hermes` takes it because its provider lives in a config file this
+    /// launch writes; without it hermes asks the endpoint for a default. `pi`
+    /// takes it to declare a model the upstream serves that pi does not ship,
+    /// under pi's `openai` provider speaking Chat Completions, which makes the
+    /// capture front `openai` (and `--schema anthropic` an error). Every other
+    /// harness picks its model with its own flag after `--`, and passing this
+    /// to one is an error.
+    #[arg(long)]
+    pub model: Option<String>,
 
     /// Base URL of the web console, used to print a link to the captured
     /// session. Without it the session id is printed on its own.
