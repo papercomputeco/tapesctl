@@ -200,6 +200,7 @@ pub fn render(
             (None, harness),
             (Some("session"), sanitize(&hit.session_id)),
             (Some("trace"), sanitize(&hit.trace_id)),
+            (Some("span"), sanitize(&hit.span_id)),
         ]
         .into_iter()
         .filter(|(_, value)| !value.is_empty())
@@ -408,7 +409,7 @@ mod tests {
              0.82  local:ada · Auth fix  LIVE  Sep 17\n\
              \x20     › Fix OAuth redirect on staging\n\
              \x20     » the redirect URI is per-environment\n\
-             \x20     /src/app · claude · session 01a0d365-1a2b-77a1-8473-bd2e295244a4 · trace t-1\n\
+             \x20     /src/app · claude · session 01a0d365-1a2b-77a1-8473-bd2e295244a4 · trace t-1 · span sp-1\n\
              0.77  local:bob  Sep 12\n\
              \x20     › (synthetic turn)\n\
              \x20     session 01a0d365-9c3d-77a1-8473-bd2e295244a4\n\
