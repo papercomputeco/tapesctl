@@ -177,6 +177,7 @@ All exit `1`.
 | `--model does not apply to claude; pass the harness's own model flag after `--` instead (…)` | `--model` on anything but `hermes` or `pi` |
 | `--model "anthropic/…" does not name a model to declare for pi; …` | `pi --model` naming one of pi's own providers' models |
 | `--schema anthropic conflicts with --model for pi: …` | `pi --model` with `--schema anthropic` |
+| `--upstream <url> cannot carry a captured pi --model session: …` | `pi --model` with an `--upstream` whose path is neither empty nor ends in `/v1` |
 | `pi cannot be captured until its capture plugin is installed: no plugin at <path>. Run `tapesctl plugin install pi` first.` | the pi extension is absent — checked before anything binds or spawns |
 | `could not bind the capture proxy` / `could not start <harness>` | loopback bind or spawn failure |
 

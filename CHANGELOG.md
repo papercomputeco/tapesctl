@@ -19,7 +19,10 @@ break, and every breaking change is recorded here plainly.
   placeholder. `anthropic/…` and `openai-codex/…` are refused. The capture
   fronts `openai` for a declared model, so its turns are ingested as OpenAI
   even behind an explicit `--upstream`; `--schema anthropic` with `--model` is
-  refused.
+  refused. An explicit `--upstream` given as a bare origin gains the `/v1` its
+  Chat Completions route needs (one already ending in `/v1` is left alone),
+  and one with any other path is refused, since none of the declared model's
+  turns could be captured through it.
 - pi turns carry the working directory and pi's version.
 
 - `tapesctl start hermes` (alias `hermes-agent`). hermes runs in a capture

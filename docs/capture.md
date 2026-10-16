@@ -214,6 +214,11 @@ tapesctl start pi --ingest-url http://localhost:8082 \
 
 - The capture fronts `openai`, since the declared model speaks Chat
   Completions; `--schema` is not needed, and `--schema anthropic` is refused.
+- pi sends the model's requests to `<upstream>/chat/completions`, and only
+  `/v1/chat/completions` is captured, so `--upstream` names the server's
+  OpenAI-compatible base, ending in `/v1`. A bare origin
+  (`http://localhost:8000`) gains the `/v1`; an upstream with any other path is
+  refused rather than launched into a session that captures nothing.
 
 - pi runs in an agent directory of its own, `~/.tapes/pi-agent` (`0700`,
   persistent, so its sessions carry over), never your `~/.pi/agent`. A second

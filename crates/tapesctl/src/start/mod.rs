@@ -1166,6 +1166,10 @@ impl StartConfig {
             Some(upstream) => upstream,
             None => harness.default_upstream(codex_auth, schema),
         };
+        let mut upstream = Url::parse(upstream).context(error::UpstreamUrlSnafu)?;
+        if harness == Harness::Pi && args.model.is_some() && args.upstream.is_some() {
+            upstream = pi_model_upstream(upstream)?;
+        }
         let web_url = match args.web_url.as_deref() {
             Some(raw) => Some(Url::parse(raw).context(error::WebUrlSnafu)?),
             None => None,
@@ -1179,7 +1183,7 @@ impl StartConfig {
             model: args.model,
             hermes_api_key,
             provider_routes: harness.registers_several_providers() && args.upstream.is_none(),
-            upstream: Url::parse(upstream).context(error::UpstreamUrlSnafu)?,
+            upstream,
             ingest_url,
             web_url,
             org_id: args.org_id.unwrap_or_default(),
@@ -1236,6 +1240,37 @@ fn pi_model_schema(explicit: bool, schema: Option<UpstreamSchema>) -> Result<Ups
         .fail(),
         _ => Ok(UpstreamSchema::OpenAi),
     }
+}
+
+/// The upstream a pi `--model` launch forwards the declared model's turns to.
+///
+/// pi sends a declared model's requests to `<base>/chat/completions`, and the
+/// proxy forwards that path beneath the upstream's own, so the provider sees
+/// `<upstream path>/chat/completions`. The capture recognises only
+/// `/v1/chat/completions`, which makes the upstream's path the whole question:
+///
+/// * ending at `/v1` (with or without a trailing slash) is already right and is
+///   left alone, so a `/v1` is never doubled;
+/// * a bare origin is the common way to name a self-hosted OpenAI-compatible
+///   server, and every such server serves Chat Completions under `/v1`, so it
+///   gains the `/v1` it was missing — the alternative is a session that runs,
+///   reaches the server at a path it may not serve, and captures nothing;
+/// * any other path is refused. Appending `/v1` to it would be a guess about
+///   someone else's routes, and leaving it would launch a session none of
+///   whose turns can be captured.
+fn pi_model_upstream(mut upstream: Url) -> Result<Url> {
+    let path = upstream.path().trim_end_matches('/');
+    if path.ends_with("/v1") {
+        return Ok(upstream);
+    }
+    snafu::ensure!(
+        path.is_empty(),
+        error::PiModelUpstreamUncapturableSnafu {
+            upstream: upstream.as_str().trim_end_matches('/').to_owned(),
+        }
+    );
+    upstream.set_path("/v1");
+    Ok(upstream)
 }
 
 /// The local OS username, or `unknown`. Shared with `tapesctl sync`, which
@@ -2707,6 +2742,64 @@ mod tests {
         let config = StartConfig::resolve(routed).unwrap();
         assert_eq!(config.schema, Some(UpstreamSchema::OpenAi));
         assert_eq!(config.upstream.as_str(), "https://api.openai.com/");
+    }
+
+    /// The upstream a declared pi model is captured through ends at `/v1`:
+    /// a bare origin gains it, a `/v1` is kept and never doubled, and a path
+    /// that cannot put the model's requests on a captured route is refused.
+    #[test]
+    fn a_pi_model_upstream_ends_at_v1() {
+        let resolve = |upstream: &str| {
+            let mut pi = args("pi");
+            pi.model = Some("local".to_owned());
+            pi.upstream = Some(upstream.to_owned());
+            StartConfig::resolve(pi).map(|config| config.upstream.to_string())
+        };
+        for (given, want) in [
+            ("http://localhost:8000", "http://localhost:8000/v1"),
+            ("http://localhost:8000/", "http://localhost:8000/v1"),
+            ("http://localhost:8000/v1", "http://localhost:8000/v1"),
+            ("http://localhost:8000/v1/", "http://localhost:8000/v1/"),
+            (
+                "https://llm.example/openai/v1",
+                "https://llm.example/openai/v1",
+            ),
+        ] {
+            assert_eq!(resolve(given).unwrap(), want, "{given}");
+        }
+        for refused in [
+            "http://localhost:8000/api",
+            "https://llm.example/v1beta/openai",
+        ] {
+            let message = format!("{}", resolve(refused).unwrap_err());
+            assert!(
+                message.contains("only /v1/chat/completions is captured"),
+                "{message}"
+            );
+            assert!(
+                message.contains(&format!("{refused}/chat/completions")),
+                "{message}"
+            );
+        }
+    }
+
+    /// Only a declared pi model's upstream is rewritten: every other launch
+    /// forwards to exactly the upstream it was given.
+    #[test]
+    fn only_a_pi_model_launch_has_its_upstream_rewritten() {
+        let mut pi = args("pi");
+        pi.upstream = Some("http://localhost:8000".to_owned());
+        assert_eq!(
+            StartConfig::resolve(pi).unwrap().upstream.as_str(),
+            "http://localhost:8000/"
+        );
+        let mut hermes = args("hermes");
+        hermes.model = Some("local".to_owned());
+        hermes.upstream = Some("http://localhost:8000".to_owned());
+        assert_eq!(
+            StartConfig::resolve(hermes).unwrap().upstream.as_str(),
+            "http://localhost:8000/"
+        );
     }
 
     #[test]

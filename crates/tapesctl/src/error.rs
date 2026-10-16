@@ -117,6 +117,23 @@ pub enum Error {
         schema: &'static str,
     },
 
+    /// `--model` for pi with an `--upstream` whose path the declared model's
+    /// requests cannot be captured under.
+    ///
+    /// A declared model speaks Chat Completions, so pi appends
+    /// `/chat/completions` to the upstream; only an upstream ending at `/v1`
+    /// puts that on the one Chat Completions path the capture recognises.
+    #[snafu(display(
+        "--upstream {upstream} cannot carry a captured pi --model session: pi sends the \
+         declared model's requests to {upstream}/chat/completions, and only \
+         /v1/chat/completions is captured; pass the upstream's OpenAI-compatible base, \
+         ending in /v1"
+    ))]
+    PiModelUpstreamUncapturable {
+        /// The refused upstream, as given.
+        upstream: String,
+    },
+
     /// No home directory, so the hermes capture home cannot be placed.
     #[snafu(display("could not locate a home directory for the hermes capture home"))]
     NoHermesHome,
