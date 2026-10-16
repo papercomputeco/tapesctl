@@ -22,18 +22,16 @@ client vendors it, and its one reader is a test in this crate.
 
 ## Pin
 
-- **Unreleased** — papercomputeco/tapes, commit `91ce34e` (papercomputeco/tapes#393) ("feat(ingest):
-  advertise capabilities on the ingest ping"). It carries `parent_harness_id`
-  on the ingest envelope (from `40c9034`) and the `capabilities` list on
-  `GET /ping` that tapesctl probes before sending it. No release carries them
-  yet, so there is no asset to vendor from: the file is the local emission
-  `tapes dev openapi ingest --docs-root . --out <file>` at that commit.
-- This is a loan, like a git pin of the tapes crates. Before it lands, re-pin
-  to the first tapes release that contains `91ce34e` (papercomputeco/tapes#393): restore a
-  `Release tag: **vX.Y.Z**` line with its commit and asset URL, re-vendor from
-  the asset, and update the fingerprints below. Until then the release-asset
-  gate has no tag to fetch, and `make contracts-check` is verified with
-  `TAPES_REPO=<tapes checkout at 91ce34e>`.
+- Release tag: **v0.50.0** — papercomputeco/tapes, commit `8aa3294`
+  ("feat(capture): keep OpenAI-compatible reasoning, link cross-harness
+  parents, and split idle header-less sessions (#393)"). It is the first tapes
+  release that carries `parent_harness_id` on the ingest envelope and the
+  `capabilities` list on `GET /ping` that tapesctl probes before sending it.
+- Vendored from the release asset, byte-for-byte:
+  - <https://github.com/papercomputeco/tapes/releases/download/v0.50.0/tapes-ingest-v0.50.0.yaml>
+- The asset is what `tapes dev openapi ingest --docs-root . --out <file>` emits
+  at the tag — the exact command `dagger call contracts` (`make contracts` in
+  tapes) runs.
 - Previous pin: release v0.34.0, commit `94b2ec7`.
 
 Keep this pin in step with the read contract's, in

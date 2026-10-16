@@ -51,10 +51,9 @@ break, and every breaking change is recorded here plainly.
   older tapes the parent is left off the row, as before lineage, instead of
   linking the child to a placeholder session in its own harness; the log and
   the exit summary say so once.
-- The vendored ingest contract moves to tapes `91ce34e` (papercomputeco/tapes#393), which adds the
-  envelope's optional `parent_harness_id` and the capability list on
-  `GET /ping`. That commit is not in a tapes release yet; the pin must move to
-  the first release that carries it.
+- The vendored ingest contract moves to tapes v0.50.0 (papercomputeco/tapes#393), which adds
+  the envelope's optional `parent_harness_id` and the capability list on
+  `GET /ping`.
 
 ### Changed
 

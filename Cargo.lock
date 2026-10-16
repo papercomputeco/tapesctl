@@ -1777,9 +1777,9 @@ dependencies = [
 
 [[package]]
 name = "tapes-capture"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1bf10bce2b7a014d1131b93bdc076d2a014c65fa08307f6c2c475a77e3f82498"
+checksum = "c6a1650614b88acae32a328b37fefbb93ff69aed38ae3271dbbc6660de7d8580"
 dependencies = [
  "base64",
  "http",
@@ -1814,9 +1814,9 @@ dependencies = [
 
 [[package]]
 name = "tapes-harnesses"
-version = "0.1.2"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91e9b9f541ba1447175b99df1b3a8223e6269506d6b789cb13b4227f0d67c1df"
+checksum = "0a3298cd458c498c2fedce19584784b807ac1f3e06cb0b7297970d9bca1eb871"
 dependencies = [
  "arc-swap",
  "dirs",
