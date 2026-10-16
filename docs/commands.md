@@ -124,7 +124,7 @@ Unless `--no-start-hint` is given, `start claude` passes Claude Code one
 `--append-system-prompt` line, ahead of your own arguments:
 
 ```
-Org-wide recall: `tapesctl search <q> [--subject NAME] [--since 7d]` finds prior sessions by anyone; `tapesctl sessions transcript <id>` reads one.
+Org-wide recall: `tapesctl search <q> [--subject ID|me] [--since 7d]` finds prior sessions by anyone; `tapesctl sessions transcript <id>` reads one.
 ```
 
 It appends to Claude's instructions rather than replacing them. `codex` and
@@ -368,7 +368,7 @@ come as a pair — a lone half fails at parse with the missing half named.
 | `--harness-id <H>` | the harness the session ran under (e.g. `claude`) — the other half of the pair |
 | `--harness-session-id <ID>` | exact match on the harness session id — the id `start` prints; pairs with `--harness-id`; see [Session ids](./capture.md#session-ids) |
 | `--auth-subject <S>` | exact match |
-| `--subject <S>` | case-insensitive match on the subject id, email, email local part, name, or first name; `me` is this machine's own subject (`TAPES_AUTH_SUBJECT`, else `local:<username>`), resolved before sending |
+| `--subject <S>` | an auth subject id, resolved client-side and sent as `auth_subject`: `me` is this machine's own subject (`TAPES_AUTH_SUBJECT`, else `local:<username>`); a bare value with no `:` such as `alice` means `alice` or `local:alice`, and `GET /v1/subjects` picks the one the server has (both existing is an error naming them). Conflicts with `--auth-subject` |
 | `--filter <KEY=VALUE>` | repeatable; each pair is passed through as `?key=value`, verbatim and in order. The key names a filter param a cassette on your deployment claims at runtime — nothing is validated or filtered client-side, and a key nothing claims is ignored by the server |
 | `--json` | print `{"items": [...], "next_cursor"?: "..."}` instead of the table; the cursor appears only when there is another page, and any other key the server sends is kept |
 
@@ -406,11 +406,11 @@ than followed. A base path in `--api-url` is discarded here too.
 |---|---|---|
 | `list` | `GET /v1/subjects` | `--q <TEXT>`, `--limit <N>`, `--json` |
 
-One row per acting subject the server has sessions for, most recently seen
-first: subject, name, email, session count, last seen. A subject the server
-knows no name or email for still appears. Any of those values works as
-`--subject` on `search` and `sessions list`. `--json` prints
-`{"items": [{"subject", "name", "email", "session_count", "last_seen_at"}, ...]}`.
+One row per auth subject id the server has sessions for, most recently seen
+first: subject, session count, last seen. tapes stores only these opaque ids;
+`--q` is a substring of the id. Each id works as `--subject` on `search` and
+`sessions list`. `--json` prints
+`{"items": [{"subject", "session_count", "last_seen_at"}, ...]}`.
 
 ## traces
 
@@ -448,7 +448,7 @@ session context.
 
 ```bash
 tapesctl search "how to configure logging"
-tapesctl search "billing rollout" --subject matt --since 30d
+tapesctl search "billing rollout" --subject alice --since 30d
 tapesctl search "flaky test" --live
 tapesctl search "auth redirect" --json | jq '.items[]'
 ```
@@ -457,7 +457,7 @@ tapesctl search "auth redirect" --json | jq '.items[]'
 |---|---|---|
 | `<QUERY>` | required | |
 | `-k`, `--top-k <N>` | `5` | the server has no ceiling on this; `--top` still parses |
-| `--subject <S>` | none | subject id, email, email local part, name, or first name; `me` is this machine's own subject |
+| `--subject <S>` | none | an auth subject id; `me` is this machine's own subject, and a bare `alice` is sent as both `auth_subject=alice` and `auth_subject=local:alice` (OR'd) |
 | `--cwd <PATH>` | none | sessions whose working directory starts with this |
 | `--harness <H>` | none | harness id, exact |
 | `--since <T>`, `--until <T>` | none | RFC 3339, or a duration ago (`30m`, `24h`, `7d`, `2w`) |
@@ -471,9 +471,9 @@ Route: `GET /v1/cassettes/search/spans` — the search cassette's span search.
 `me` and relative times are resolved before sending.
 
 Each hit under `--json` carries `score`, `session_id`, `trace_id`, `span_id`,
-`started_at`, `user_prompt`, `snippet`, `model`, `auth_subject`,
-`auth_subject_name`, `auth_subject_email`, `cwd`, `harness_id`,
-`display_title`, `last_seen_at`, and `live`, plus any field the cassette adds.
+`started_at`, `user_prompt`, `snippet`, `model`, `auth_subject`, `cwd`,
+`harness_id`, `display_title`, `last_seen_at`, and `live`, plus any field the
+cassette adds.
 
 `--quiet` is a **pipe format, not a verbosity setting**: one bare session id
 per line, deduplicated in score order, ready for command substitution into
@@ -481,8 +481,7 @@ anything that takes session ids — for example the skills cassette's generate
 operation (`tapesctl skills --help` shows its current shape).
 
 Non-quiet output is a ranked list: the query and a hit count on the first
-line, then per hit its score, its owner (name, else email, else subject) and
-session title, `LIVE` when the session is live, and when the turn ran; the
+line, then per hit its score, its session's auth subject and title, `LIVE` when the session is live, and when the turn ran; the
 turn's prompt on a `›` line, the matched snippet on a dim `»` line, and the
 working directory, harness, session, and trace on a last dim line. The list
 ends by naming `tapesctl sessions transcript <id>` for the top session.
@@ -490,7 +489,7 @@ ends by naming `tapesctl sessions transcript <id>` for the top session.
 ```
 "how I fixed auth"  ·  2 hits across 2 sessions
 
-0.82  Ada Lovelace · Auth fix  LIVE  Sep 17
+0.82  local:ada · Auth fix  LIVE  Sep 17
       › Fix OAuth redirect on staging
       » the redirect URI is per-environment
       /src/app · claude · session 01a0d365-1a2b-77a1-8473-bd2e295244a4 · trace t-1

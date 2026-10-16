@@ -21,7 +21,7 @@ use crate::api::client::narrow;
 use crate::api::resolve_client;
 use crate::cli::SearchArgs;
 use crate::error::{Result, error};
-use crate::recall::{own_subject, resolve_subject, resolve_time};
+use crate::recall::{own_subject, resolve_time, subject_ids};
 use crate::render::text::{elide, one_line, relative, sanitize, tilde};
 use crate::render::{Theme, Tone};
 
@@ -45,7 +45,7 @@ pub fn query_for(
         // carries the default, so this client always has a value, and one
         // request spelling is better than two.
         top_k: Some(narrow(args.top)),
-        subject: resolve_subject(args.subject.clone(), own),
+        auth_subject: subject_ids(args.subject.clone(), own),
         cwd: blank_is_none(&args.cwd),
         harness: blank_is_none(&args.harness),
         since: resolve_time("--since", args.since.clone(), now)?,
@@ -98,19 +98,10 @@ pub async fn run(args: SearchArgs, verbose: u8) -> Result<()> {
     Ok(())
 }
 
-/// Who a hit belongs to, for a person reading it: the name, else the email,
-/// else the raw subject.
+/// Who a hit belongs to: its session's auth subject id, as tapes stores it.
 #[must_use]
 pub fn owner(hit: &SpanSearchHit) -> String {
-    [
-        &hit.auth_subject_name,
-        &hit.auth_subject_email,
-        &hit.auth_subject,
-    ]
-    .into_iter()
-    .map(|value| one_line(value))
-    .find(|value| !value.is_empty())
-    .unwrap_or_default()
+    one_line(&hit.auth_subject)
 }
 
 /// The ranked list. `full_prompt` prints each hit's prompt whole instead of
@@ -346,7 +337,7 @@ mod tests {
             vec![
                 ("query".to_owned(), "charm CLI".to_owned()),
                 ("top_k".to_owned(), "3".to_owned()),
-                ("subject".to_owned(), "local:ada".to_owned()),
+                ("auth_subject".to_owned(), "local:ada".to_owned()),
                 ("cwd".to_owned(), "/src/app".to_owned()),
                 ("harness".to_owned(), "claude".to_owned()),
                 ("since".to_owned(), "2026-10-08T12:00:00Z".to_owned()),
@@ -383,9 +374,7 @@ mod tests {
                 "user_prompt": "Fix OAuth redirect\non staging",
                 "snippet": "the redirect URI is per-environment",
                 "started_at": "2026-09-17T10:00:00Z",
-                "auth_subject": "user_01",
-                "auth_subject_name": "Ada Lovelace",
-                "auth_subject_email": "ada@example.com",
+                "auth_subject": "local:ada",
                 "display_title": "Auth fix",
                 "cwd": "/src/app",
                 "harness_id": "claude",
@@ -416,7 +405,7 @@ mod tests {
             rendered,
             "\"how I fixed auth\"  ·  2 hits across 2 sessions\n\
              \n\
-             0.82  Ada Lovelace · Auth fix  LIVE  Sep 17\n\
+             0.82  local:ada · Auth fix  LIVE  Sep 17\n\
              \x20     › Fix OAuth redirect on staging\n\
              \x20     » the redirect URI is per-environment\n\
              \x20     /src/app · claude · session 01a0d365-1a2b-77a1-8473-bd2e295244a4 · trace t-1\n\
@@ -446,22 +435,6 @@ mod tests {
         assert!(full.contains("› first line\n"), "{full}");
         assert!(full.contains("  second word"), "{full}");
         assert!(!full.contains('…'), "{full}");
-    }
-
-    #[test]
-    fn the_owner_falls_back_from_name_to_email_to_subject() {
-        let [named, mailed, bare, nobody]: [SpanSearchHit; 4] = hits(json!([
-            {"auth_subject_name": "Ada", "auth_subject_email": "a@x", "auth_subject": "u"},
-            {"auth_subject_email": "a@x", "auth_subject": "u"},
-            {"auth_subject": "u"},
-            {}
-        ]))
-        .try_into()
-        .unwrap();
-        assert_eq!(owner(&named), "Ada");
-        assert_eq!(owner(&mailed), "a@x");
-        assert_eq!(owner(&bare), "u");
-        assert_eq!(owner(&nobody), "");
     }
 
     #[test]
@@ -530,7 +503,8 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/v1/cassettes/search/spans"))
             .and(query_param("top_k", "3"))
-            .and(query_param("subject", "matt"))
+            .and(query_param("auth_subject", "matt"))
+            .and(query_param("auth_subject", "local:matt"))
             .and(query_param("harness", "codex"))
             .and(query_param("live", "true"))
             .and(query_param_is_missing("cwd"))

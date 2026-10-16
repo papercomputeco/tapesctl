@@ -340,12 +340,12 @@ pub enum Command {
     /// Read sessions — list, get, and `transcript <id>` to read one.
     ///
     /// Sessions are every author's, not only yours: `--subject` narrows a
-    /// listing to one person, and `tapesctl subjects list` shows who the
-    /// server has sessions for.
+    /// listing to one subject, and `tapesctl subjects list` shows which
+    /// subjects the server has sessions for.
     #[command(subcommand)]
     Sessions(SessionsCommand),
 
-    /// List the people (auth subjects) this server has sessions for.
+    /// List the auth subjects this server has sessions for.
     #[command(subcommand)]
     Subjects(SubjectsCommand),
 
@@ -360,13 +360,13 @@ pub enum Command {
     /// Semantic search over EVERY author's captured sessions on this server.
     ///
     /// Hits are main-conversation turns from anyone whose sessions this
-    /// deployment holds — not only yours. Narrow with `--subject` (a name,
-    /// email, email local part, subject id, or `me`), `--cwd`, `--harness`,
-    /// `--since`/`--until`, and `--live`.
+    /// deployment holds — not only yours. Narrow with `--subject` (an auth
+    /// subject id, or `me`), `--cwd`, `--harness`, `--since`/`--until`, and
+    /// `--live`.
     ///
     /// Examples:
     ///
-    ///   tapesctl search "billing rollout" --subject matt --since 30d
+    ///   tapesctl search "billing rollout" --subject alice --since 30d
     ///
     ///   tapesctl search "flaky test" --live
     ///
@@ -374,9 +374,8 @@ pub enum Command {
     ///
     /// `--json` prints `{"items": [hit, ...], "query": "...", "top_k": N}`,
     /// where each hit carries `score`, `session_id`, `trace_id`, `span_id`,
-    /// `started_at`, `user_prompt`, `snippet`, `auth_subject`,
-    /// `auth_subject_name`, `auth_subject_email`, `cwd`, `harness_id`,
-    /// `display_title`, `last_seen_at`, and `live`.
+    /// `started_at`, `user_prompt`, `snippet`, `auth_subject`, `cwd`,
+    /// `harness_id`, `display_title`, `last_seen_at`, and `live`.
     ///
     /// Next step: `tapesctl sessions transcript <session_id>` reads a hit's
     /// whole conversation.
@@ -694,9 +693,8 @@ pub struct SessionTranscriptArgs {
 /// `tapesctl subjects` methods.
 #[derive(Debug, Subcommand)]
 pub enum SubjectsCommand {
-    /// List subjects with their names, emails, and session counts, most
-    /// recently seen first. Any of the four identifies a person to
-    /// `--subject`.
+    /// List auth subjects with their session counts, most recently seen
+    /// first. Each id works as `--subject`.
     List(SubjectsListArgs),
 }
 
@@ -706,7 +704,7 @@ pub struct SubjectsListArgs {
     #[command(flatten)]
     pub api: ApiArgs,
 
-    /// Only subjects whose id, name, or email contains this.
+    /// Only subjects whose id contains this.
     #[arg(long, value_name = "TEXT")]
     pub q: Option<String>,
 
@@ -768,10 +766,10 @@ pub struct SessionsListArgs {
     #[arg(long)]
     pub auth_subject: Option<String>,
 
-    /// Only sessions by this person: a subject id, email, email local part,
-    /// name, or first name, matched case-insensitively. `me` is this
-    /// machine's own subject (`TAPES_AUTH_SUBJECT`, else `local:<username>`).
-    #[arg(long, value_name = "S")]
+    /// Only sessions captured for this auth subject id. `me` is this
+    /// machine's own subject (`TAPES_AUTH_SUBJECT`, else `local:<username>`);
+    /// a bare name with no `:`, such as `alice`, also matches `local:alice`.
+    #[arg(long, value_name = "S", conflicts_with = "auth_subject")]
     pub subject: Option<String>,
 
     /// Extra filter, repeatable, as `key=value`; sent through as `?key=value`.
@@ -968,9 +966,9 @@ pub struct SearchArgs {
     )]
     pub top: u64,
 
-    /// Only sessions by this person: a subject id, email, email local part,
-    /// name, or first name, matched case-insensitively. `me` is this
-    /// machine's own subject (`TAPES_AUTH_SUBJECT`, else `local:<username>`).
+    /// Only sessions captured for this auth subject id. `me` is this
+    /// machine's own subject (`TAPES_AUTH_SUBJECT`, else `local:<username>`);
+    /// a bare name with no `:`, such as `alice`, also matches `local:alice`.
     #[arg(long, value_name = "S")]
     pub subject: Option<String>,
 

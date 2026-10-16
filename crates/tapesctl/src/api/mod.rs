@@ -56,7 +56,7 @@ use crate::cli::{
     SubjectsListArgs, TracesCommand,
 };
 use crate::error::{Result, error};
-use crate::recall::{own_subject, resolve_subject, resolve_time};
+use crate::recall::{own_subject, resolve_time, subject_ids};
 use crate::render::Theme;
 use client::{ApiClient, connect, narrow};
 use contract::ops;
@@ -140,6 +140,17 @@ pub async fn sessions(command: SessionsCommand) -> Result<()> {
             let client = resolve_client(&args.api)?;
             let claimed = parse_filters(&args.filter)?;
             let at = now();
+            let auth_subject = match args.auth_subject {
+                Some(exact) => Some(exact),
+                None => {
+                    one_subject(
+                        &client,
+                        args.subject.as_deref().unwrap_or_default(),
+                        subject_ids(args.subject.clone(), own_subject),
+                    )
+                    .await?
+                }
+            };
             let mut values = SessionListParams {
                 limit: args.limit.map(narrow),
                 cursor: args.cursor,
@@ -148,8 +159,7 @@ pub async fn sessions(command: SessionsCommand) -> Result<()> {
                 until: resolve_time("--until", args.until, at)?,
                 harness_id: args.harness_id,
                 harness_session_id: args.harness_session_id,
-                auth_subject: args.auth_subject,
-                subject: resolve_subject(args.subject, own_subject),
+                auth_subject,
                 ..Default::default()
             }
             .values();
@@ -213,6 +223,46 @@ pub async fn sessions(command: SessionsCommand) -> Result<()> {
             print_json(&value)
         }
         SessionsCommand::Transcript(args) => transcript(args).await,
+    }
+}
+
+/// Narrow `--subject`'s candidate ids to the one the listing filters on.
+///
+/// The listing's `auth_subject` is a single exact id, while a bare name means
+/// two (`alice` and `local:alice`). So the candidates are checked against
+/// the subjects the server actually has: the one that exists is used; when
+/// neither does, the first is sent and the listing is honestly empty; when
+/// both do, the choice is the user's, not this client's.
+async fn one_subject(
+    client: &ApiClient,
+    typed: &str,
+    candidates: Vec<String>,
+) -> Result<Option<String>> {
+    if candidates.len() <= 1 {
+        return Ok(candidates.into_iter().next());
+    }
+    let known = client
+        .list_subjects(&SubjectListParams {
+            q: Some(typed.trim().to_owned()),
+            limit: None,
+        })
+        .await?;
+    let present: Vec<&String> = candidates
+        .iter()
+        .filter(|id| known.items.iter().any(|item| &item.subject == *id))
+        .collect();
+    match present.as_slice() {
+        [] => Ok(candidates.into_iter().next()),
+        [one] => Ok(Some((*one).clone())),
+        many => error::AmbiguousSubjectSnafu {
+            value: typed.trim().to_owned(),
+            candidates: many
+                .iter()
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+        }
+        .fail(),
     }
 }
 
@@ -486,37 +536,117 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn the_subject_filter_reaches_the_wire_with_me_resolved_and_durations_converted() {
+    async fn listing_server(known: &[&str]) -> MockServer {
         let server = MockServer::start().await;
+        let items: Vec<serde_json::Value> = known
+            .iter()
+            .map(|id| serde_json::json!({"subject": id, "session_count": 1}))
+            .collect();
+        Mock::given(method("GET"))
+            .and(path("/v1/subjects"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": items})),
+            )
+            .mount(&server)
+            .await;
         Mock::given(method("GET"))
             .and(path("/v1/sessions"))
-            .and(query_param("subject", "Ada Lovelace"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_string(r#"{"items":[{"id":"s-1"}],"next_cursor":""}"#),
             )
-            .expect(1)
             .mount(&server)
             .await;
+        server
+    }
+
+    async fn sent_auth_subject(server: &MockServer) -> Option<String> {
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.url.path() == "/v1/sessions")
+            .find_map(|request| {
+                request
+                    .url
+                    .query_pairs()
+                    .find(|(key, _)| key == "auth_subject")
+                    .map(|(_, value)| value.into_owned())
+            })
+    }
+
+    #[tokio::test]
+    async fn a_bare_subject_lists_the_local_id_the_server_actually_has() {
+        let server = listing_server(&["local:alice", "user_9"]).await;
         let mut args = sessions_list_args(server.uri());
-        args.subject = Some("Ada Lovelace".to_owned());
+        args.subject = Some("alice".to_owned());
         args.since = Some("7d".to_owned());
         args.json = true;
         let result = sessions(SessionsCommand::List(args)).await;
         assert!(result.is_ok(), "got: {result:?}");
+        assert_eq!(
+            sent_auth_subject(&server).await.as_deref(),
+            Some("local:alice")
+        );
         let requests = server.received_requests().await.unwrap();
-        let since = requests[0]
-            .url
-            .query_pairs()
-            .find(|(key, _)| key == "since")
-            .map(|(_, value)| value.into_owned())
+        let since = requests
+            .iter()
+            .filter(|request| request.url.path() == "/v1/sessions")
+            .find_map(|request| {
+                request
+                    .url
+                    .query_pairs()
+                    .find(|(key, _)| key == "since")
+                    .map(|(_, value)| value.into_owned())
+            })
             .unwrap();
         assert!(
             time::OffsetDateTime::parse(&since, &time::format_description::well_known::Rfc3339)
                 .is_ok(),
             "a relative --since must travel as RFC 3339, got {since:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn an_unknown_bare_subject_is_sent_as_typed_and_a_full_id_skips_the_lookup() {
+        let server = listing_server(&[]).await;
+        let mut args = sessions_list_args(server.uri());
+        args.subject = Some("nobody".to_owned());
+        assert!(sessions(SessionsCommand::List(args)).await.is_ok());
+        assert_eq!(sent_auth_subject(&server).await.as_deref(), Some("nobody"));
+
+        let server = listing_server(&[]).await;
+        let mut args = sessions_list_args(server.uri());
+        args.subject = Some("ci:bot".to_owned());
+        assert!(sessions(SessionsCommand::List(args)).await.is_ok());
+        assert_eq!(sent_auth_subject(&server).await.as_deref(), Some("ci:bot"));
+        let paths: Vec<String> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|request| request.url.path().to_owned())
+            .collect();
+        assert_eq!(
+            paths,
+            ["/v1/sessions"],
+            "a full id needs no subjects lookup"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bare_subject_both_ids_have_is_refused_naming_them() {
+        let server = listing_server(&["alice", "local:alice"]).await;
+        let mut args = sessions_list_args(server.uri());
+        args.subject = Some("alice".to_owned());
+        let err = sessions(SessionsCommand::List(args)).await.unwrap_err();
+        let shown = err.to_string();
+        assert!(
+            shown.contains("local:alice") && shown.contains("--subject"),
+            "{shown}"
+        );
+        assert_eq!(sent_auth_subject(&server).await, None);
     }
 
     #[test]
@@ -605,7 +735,7 @@ mod tests {
             .and(query_param("q", "ada"))
             .and(query_param("limit", "5"))
             .respond_with(ResponseTemplate::new(200).set_body_string(
-                r#"{"items":[{"subject":"user_01","name":"Ada","email":"ada@x","session_count":4,"last_seen_at":"2026-10-01T00:00:00Z"}]}"#,
+                r#"{"items":[{"subject":"user_01","session_count":4,"last_seen_at":"2026-10-01T00:00:00Z"}]}"#,
             ))
             .expect(2)
             .mount(&server)

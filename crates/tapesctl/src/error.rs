@@ -918,6 +918,18 @@ pub enum Error {
         value: String,
     },
 
+    /// A bare `--subject` matches more than one auth subject id, and the
+    /// listing filters on exactly one.
+    #[snafu(display(
+        "--subject {value:?} matches more than one subject ({candidates}); pass one of them exactly"
+    ))]
+    AmbiguousSubject {
+        /// What the user typed.
+        value: String,
+        /// The ids it matched, comma-separated.
+        candidates: String,
+    },
+
     /// `tapesctl skills install` was given no source.
     #[snafu(display(
         "no skills source: pass --source <PATH|GIT-URL> or set TAPESCTL_SKILLS_SOURCE"

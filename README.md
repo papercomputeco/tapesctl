@@ -305,7 +305,7 @@ redirecting it, which `tapesctl start claude` does.
 
 ```bash
 tapesctl search "how to configure logging"
-tapesctl search "billing rollout" --subject matt --since 30d
+tapesctl search "billing rollout" --subject alice --since 30d
 tapesctl search "flaky test" --live
 tapesctl search "gum glow charm" --quiet   # session ids, one per line
 tapesctl search "auth redirect" --json | jq '.items[]'
@@ -316,14 +316,15 @@ tapesctl subjects list                                # who has sessions here
 tapesctl sessions list --subject me --since 7d
 ```
 
-Hits are individual main-conversation LLM spans with their session's owner,
+Hits are individual main-conversation LLM spans with their session's subject,
 title, working directory, and harness — "find the turn where X happened".
 This needs a server with span embeddings written; a deployment without them
 answers `503` rather than an empty result set.
 
-`--subject` takes a subject id, email, email local part, name, or first name;
-`me` is this machine's own subject (`TAPES_AUTH_SUBJECT`, else
-`local:<username>`). `--since` / `--until` take RFC 3339 or a duration ago
+`--subject` takes an auth subject id, resolved client-side: `me` is this
+machine's own subject (`TAPES_AUTH_SUBJECT`, else `local:<username>`), and a
+bare name with no `:` such as `alice` also matches `local:alice`. tapes stores
+only these opaque ids; it knows nothing about people. `--since` / `--until` take RFC 3339 or a duration ago
 (`30m`, `24h`, `7d`, `2w`).
 
 `--quiet` prints bare session ids in score order, ready to compose into other

@@ -59,12 +59,13 @@ break, and every breaking change is recorded here plainly.
   `GET /ping`.
 - `tapesctl sessions transcript <id> [--role user|assistant|all] [--grep PAT]
   [--subagents] [--json]`: a session as a conversation, every page.
-- `tapesctl subjects list [--q TEXT] [--limit N] [--json]`: who the server has
-  sessions for, with names, emails, and session counts.
-- `search` filters `--subject` (`me` resolves to this machine's own subject),
+- `tapesctl subjects list [--q TEXT] [--limit N] [--json]`: the auth subject
+  ids the server has sessions for, with session counts.
+- `search` filters `--subject` (an auth subject id; `me` resolves to this
+  machine's own subject, and a bare `alice` also matches `local:alice`),
   `--cwd`, `--harness`, `--since`, `--until` (RFC 3339 or `7d`-style), and
-  `--live`; hits show their owner, session title, `LIVE`, working directory,
-  and harness; `-v` prints the whole prompt. `sessions list` gains
+  `--live`; hits show their subject, session title, `LIVE`, working
+  directory, and harness; `-v` prints the whole prompt. `sessions list` gains
   `--subject`, and its `--since` / `--until` take durations too.
 - `tapesctl skills install --source <PATH|GIT-URL>` installs the `search`,
   `recall`, and `digest` skills into `~/.claude/skills` and `~/.agents/skills`.

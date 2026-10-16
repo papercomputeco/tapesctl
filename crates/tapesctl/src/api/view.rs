@@ -632,17 +632,13 @@ pub fn subjects(items: &[SubjectItem], theme: &Theme, now: OffsetDateTime) -> St
         return "No subjects.\n".to_owned();
     }
     let mut table = Table::new(vec![
-        Column::new("subject").flex(12).max(40),
-        Column::new("name").priority(1).max(32),
-        Column::new("email").priority(2).max(40),
+        Column::new("subject").flex(12).max(60),
         Column::new("sessions").right(),
         Column::new("last seen"),
     ]);
     for item in items {
         table.row(vec![
             Cell::or_absent(sanitize(&item.subject), Tone::Primary, theme),
-            Cell::or_absent(one_line(&item.name), Tone::Primary, theme),
-            Cell::or_absent(one_line(&item.email), Tone::Secondary, theme),
             Cell::new(count(item.session_count), Tone::Number),
             Cell::or_absent(relative(&item.last_seen_at, now), Tone::Secondary, theme),
         ]);
@@ -657,7 +653,7 @@ pub fn subjects(items: &[SubjectItem], theme: &Theme, now: OffsetDateTime) -> St
     out.push_str(&theme.paint(
         Tone::Secondary,
         &format!(
-            "{} {noun} · filter sessions with --subject <subject|name|email>",
+            "{} {noun} · filter sessions with --subject <subject>",
             items.len()
         ),
     ));
@@ -1023,10 +1019,9 @@ mod tests {
     }
 
     #[test]
-    fn the_subjects_table_names_people_and_counts_sessions() {
+    fn the_subjects_table_counts_sessions_per_subject() {
         let items: Vec<SubjectItem> = serde_json::from_value(json!([
-            {"subject": "user_01", "name": "Ada Lovelace", "email": "ada@example.com",
-             "session_count": 4, "last_seen_at": "2026-09-26T11:00:00Z"},
+            {"subject": "user_01", "session_count": 4, "last_seen_at": "2026-09-26T11:00:00Z"},
             {"subject": "local:bob", "session_count": 1}
         ]))
         .unwrap();
@@ -1035,10 +1030,7 @@ mod tests {
         let lines: Vec<&str> = rendered.lines().collect();
         assert!(lines[0].starts_with("SUBJECT"), "{rendered}");
         assert!(
-            lines[1].contains("user_01")
-                && lines[1].contains("Ada Lovelace")
-                && lines[1].contains("ada@example.com")
-                && lines[1].contains("1h ago"),
+            lines[1].contains("user_01") && lines[1].contains('4') && lines[1].contains("1h ago"),
             "{rendered}"
         );
         assert!(lines[2].contains("local:bob"), "{rendered}");

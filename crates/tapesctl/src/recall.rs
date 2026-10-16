@@ -1,8 +1,9 @@
 //! The flag grammar the recall commands share: who (`--subject`, with `me`)
 //! and when (`--since` / `--until`, absolute or relative).
 //!
-//! Both are resolved here, client-side, before anything is sent: the server's
-//! `subject` filter never sees `me`, and its time filters take RFC 3339 only.
+//! Both are resolved here, client-side, before anything is sent: tapes
+//! filters on exact auth subject ids and never sees `me` or a bare username,
+//! and its time filters take RFC 3339 only.
 //! `search`, `sessions list`, and anything else that grows the same flags go
 //! through these two functions, so `me` and `7d` mean one thing everywhere.
 
@@ -33,20 +34,35 @@ pub fn own_subject() -> String {
         .unwrap_or_else(|| format!("local:{}", crate::start::local_username()))
 }
 
-/// Resolve a `--subject` value, replacing `me` with `own`.
+/// The prefix this client's own default subjects carry: `local:<username>`.
+pub const LOCAL_PREFIX: &str = "local:";
+
+/// Resolve a `--subject` value into the exact auth subject ids it may mean.
 ///
-/// Blank is no filter. Anything else travels as typed: the match rule
-/// (subject, email, email local part, name, first name) is the server's.
+/// tapes knows only opaque ids, so a person is resolved here, client-side:
+///
+/// - blank is no filter (no ids);
+/// - `me` is `own` — this machine's own subject;
+/// - a value with a `:` is already a full id and means exactly that;
+/// - a bare value such as `alice` means `alice` or `local:alice`, because a
+///   standalone capture stamps `local:<username>` and a person typing a
+///   username should not have to know that.
+///
+/// Matching stays exact on the server; several ids are OR'd.
 #[must_use]
-pub fn resolve_subject(raw: Option<String>, own: impl FnOnce() -> String) -> Option<String> {
-    let raw = raw?;
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        None
-    } else if trimmed.eq_ignore_ascii_case(ME) {
-        Some(own())
+pub fn subject_ids(raw: Option<String>, own: impl FnOnce() -> String) -> Vec<String> {
+    let Some(raw) = raw else {
+        return Vec::new();
+    };
+    let value = raw.trim();
+    if value.is_empty() {
+        Vec::new()
+    } else if value.eq_ignore_ascii_case(ME) {
+        vec![own()]
+    } else if value.contains(':') {
+        vec![value.to_owned()]
     } else {
-        Some(trimmed.to_owned())
+        vec![value.to_owned(), format!("{LOCAL_PREFIX}{value}")]
     }
 }
 
@@ -105,32 +121,28 @@ mod tests {
     use time::macros::datetime;
 
     #[test]
-    fn me_is_resolved_and_everything_else_travels_as_typed() {
+    fn me_is_the_own_subject_and_a_bare_name_also_means_its_local_id() {
         let own = || "local:ada".to_owned();
+        assert_eq!(subject_ids(Some("me".into()), own), ["local:ada"]);
+        assert_eq!(subject_ids(Some(" ME ".into()), own), ["local:ada"]);
         assert_eq!(
-            resolve_subject(Some("me".into()), own),
-            Some("local:ada".into())
+            subject_ids(Some("alice".into()), own),
+            ["alice", "local:alice"]
         );
+        assert_eq!(subject_ids(Some("local:bob".into()), own), ["local:bob"]);
         assert_eq!(
-            resolve_subject(Some(" ME ".into()), own),
-            Some("local:ada".into())
+            subject_ids(Some("user_01".into()), own),
+            ["user_01", "local:user_01"]
         );
-        assert_eq!(
-            resolve_subject(Some("Ada Lovelace".into()), own),
-            Some("Ada Lovelace".into())
-        );
-        assert_eq!(resolve_subject(Some("  ".into()), own), None);
-        assert_eq!(resolve_subject(None, own), None);
+        assert!(subject_ids(Some("  ".into()), own).is_empty());
+        assert!(subject_ids(None, own).is_empty());
     }
 
     #[test]
     fn me_is_not_resolved_unless_asked_for() {
         // The ambient read must not happen for a filter that does not need it.
         let own = || panic!("own subject read for a value that was not `me`");
-        assert_eq!(
-            resolve_subject(Some("matt".into()), own),
-            Some("matt".into())
-        );
+        assert_eq!(subject_ids(Some("ci:bot".into()), own), ["ci:bot"]);
     }
 
     #[test]
