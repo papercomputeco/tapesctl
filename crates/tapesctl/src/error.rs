@@ -134,6 +134,14 @@ pub enum Error {
         upstream: String,
     },
 
+    /// The planned pi `models.json` could not be re-read to place its
+    /// declared model on the versioned route.
+    #[snafu(display("could not adjust the planned pi models.json"))]
+    PiModelsDocument {
+        /// Underlying JSON failure.
+        source: serde_json::Error,
+    },
+
     /// No home directory, so the hermes capture home cannot be placed.
     #[snafu(display("could not locate a home directory for the hermes capture home"))]
     NoHermesHome,

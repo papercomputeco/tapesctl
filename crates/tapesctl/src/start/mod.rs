@@ -895,12 +895,49 @@ impl PiLaunch {
         for (name, contents) in &self.carried {
             recipe = recipe.with_carried_file(name, contents);
         }
-        let planned = recipe.plan().context(error::LaunchPlanSnafu)?;
+        let mut planned = recipe.plan().context(error::LaunchPlanSnafu)?;
+        if provider_routes {
+            let models_path = recipe.models_path();
+            for file in &mut planned.config_files {
+                if file.path == models_path {
+                    file.contents = pi_models_on_versioned_route(&file.contents)?;
+                }
+            }
+        }
         plan.args.extend(planned.args);
         plan.env.extend(planned.env);
         plan.config_files.extend(planned.config_files);
         Ok(plan)
     }
+}
+
+/// `models.json` with each declared model's `baseUrl` ending in `/v1`.
+///
+/// pi sends a declared model's requests to `<baseUrl>/chat/completions`, as an
+/// OpenAI client does: the `/v1` belongs to the base, not the path. With
+/// per-provider routes the base is the proxy's `openai` route, which strips its
+/// label and forwards the remainder to the provider's origin — so a base
+/// without `/v1` reaches `https://api.openai.com/chat/completions`, which does
+/// not exist, and the capture, which recognises only `/v1/chat/completions`,
+/// sees nothing it can file. Without routes the base is the proxy root and the
+/// `/v1` is the explicit upstream's (see [`pi_model_upstream`]), so this
+/// applies only to the routed shape. A base that already ends in `/v1` is left
+/// alone.
+fn pi_models_on_versioned_route(contents: &str) -> Result<String> {
+    let mut document: serde_json::Value =
+        serde_json::from_str(contents).context(error::PiModelsDocumentSnafu)?;
+    let models = document
+        .pointer_mut("/providers/openai/models")
+        .and_then(serde_json::Value::as_array_mut);
+    for model in models.into_iter().flatten() {
+        if let Some(base) = model.get("baseUrl").and_then(serde_json::Value::as_str) {
+            let base = base.trim_end_matches('/');
+            if !base.ends_with("/v1") {
+                model["baseUrl"] = serde_json::Value::String(format!("{base}/v1"));
+            }
+        }
+    }
+    serde_json::to_string_pretty(&document).context(error::PiModelsDocumentSnafu)
 }
 
 /// The credential a pi `--model` launch names for the declared model.
@@ -2892,7 +2929,7 @@ mod tests {
                 "models": [{
                     "id": "self-hosted-v4", "name": "self-hosted-v4",
                     "api": "openai-completions",
-                    "baseUrl": "http://127.0.0.1:51000/_tapes/provider/openai",
+                    "baseUrl": "http://127.0.0.1:51000/_tapes/provider/openai/v1",
                 }],
             }}})
         );
@@ -2905,6 +2942,70 @@ mod tests {
             plan.config_files
                 .iter()
                 .all(|file| file.path.starts_with(&dir))
+        );
+    }
+
+    /// The routed base names `/v1`, because pi appends only
+    /// `/chat/completions` and the route forwards to the provider's origin.
+    /// Without routes the base is the proxy root and `/v1` is the explicit
+    /// upstream's, so it is not added a second time.
+    #[test]
+    fn a_declared_pi_model_reaches_chat_completions_under_v1() {
+        let endpoint = Harness::Pi.endpoint_for(addr(), None, None);
+        let dir = PathBuf::from("/tmp/tapes-pi-agent");
+        let base_url = |provider_routes: bool| {
+            let base = Harness::Pi
+                .plan(
+                    endpoint.clone(),
+                    "unused",
+                    None,
+                    Some(UpstreamSchema::OpenAi),
+                    "nonce",
+                    provider_routes,
+                    None,
+                )
+                .unwrap();
+            let plan = pi_launch(&dir)
+                .extend(base, &endpoint, provider_routes)
+                .unwrap();
+            let models = plan
+                .config_files
+                .iter()
+                .find(|file| file.path == dir.join("models.json"))
+                .unwrap();
+            let doc: serde_json::Value = serde_json::from_str(&models.contents).unwrap();
+            doc["providers"]["openai"]["models"][0]["baseUrl"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+
+        let routed = base_url(true);
+        assert_eq!(routed, "http://127.0.0.1:51000/_tapes/provider/openai/v1");
+        let routes = ProviderRoutes::defaults().unwrap();
+        let openai = routes.resolve("openai").unwrap();
+        let rest = format!("{routed}/chat/completions");
+        let rest = rest
+            .strip_prefix("http://127.0.0.1:51000/_tapes/provider/openai")
+            .unwrap();
+        assert_eq!(
+            super::proxy::build_upstream_url(&openai.upstream, rest, None)
+                .unwrap()
+                .as_str(),
+            "https://api.openai.com/v1/chat/completions",
+        );
+
+        assert_eq!(base_url(false), "http://127.0.0.1:51000");
+    }
+
+    #[test]
+    fn a_routed_base_already_ending_in_v1_is_left_alone() {
+        let doc = r#"{"providers":{"openai":{"models":[{"id":"m","baseUrl":"http://h/_tapes/provider/openai/v1"}]}}}"#;
+        let out: serde_json::Value =
+            serde_json::from_str(&pi_models_on_versioned_route(doc).unwrap()).unwrap();
+        assert_eq!(
+            out["providers"]["openai"]["models"][0]["baseUrl"],
+            "http://h/_tapes/provider/openai/v1"
         );
     }
 
